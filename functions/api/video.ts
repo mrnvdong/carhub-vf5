@@ -28,14 +28,14 @@ export async function onRequestGet(context: any) {
     .then(async (r) => (r.ok ? await r.json() : []))
     .catch(() => []);
 
-  // Phương án B: Direct Cloudflare Worker -> InnerTube Android client (Returns unthrottled direct stream URLs without ads)
+  // 1. Phương án B: Direct Cloudflare Edge to YouTube InnerTube ANDROID_VR
   try {
     const directResult = await fetchViaInnerTube(id);
     if (directResult && (directResult.videoStreams.length > 0 || directResult.audioStreams.length > 0 || directResult.hlsUrl)) {
       const sponsors = await sponsorPromise;
       const responseData = {
         success: true,
-        source: 'edge-innertube',
+        source: 'edge-innertube-android-vr',
         ...directResult,
         sponsorSegments: sponsors.map((s: any) => ({
           category: s.category,
@@ -47,7 +47,7 @@ export async function onRequestGet(context: any) {
       const resp = new Response(JSON.stringify(responseData), {
         headers: {
           'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=1800', // Cache stream info for 30 mins
+          'Cache-Control': 'public, max-age=1800',
           'Access-Control-Allow-Origin': '*',
         },
       });
@@ -55,15 +55,14 @@ export async function onRequestGet(context: any) {
       return resp;
     }
   } catch (err) {
-    console.warn('Direct InnerTube stream extraction failed, switching to Piped:', err);
+    console.warn('InnerTube extraction error:', err);
   }
 
-  // Phương án A: Fallback to Piped Instances
+  // 2. Phương án A: Fallback to high-reliability Piped Instances
   const pipedInstances = [
-    'https://pipedapi.kavin.rocks',
     'https://api.piped.private.coffee',
-    'https://piped-api.lunar.icu',
-    'https://pipedapi.leptons.xyz',
+    'https://pipedapi.ducks.party',
+    'https://pipedapi.kavin.rocks',
   ];
 
   for (const instance of pipedInstances) {
@@ -71,7 +70,7 @@ export async function onRequestGet(context: any) {
       const pipedUrl = `${instance}/streams/${id}`;
       const res = await fetch(pipedUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' },
-        signal: AbortSignal.timeout(4500),
+        signal: AbortSignal.timeout(4000),
       });
 
       if (res.ok) {
@@ -95,63 +94,81 @@ export async function onRequestGet(context: any) {
             bitrate: a.bitrate,
           }));
 
-        const sponsors = await sponsorPromise;
+        if (videoStreams.length > 0 || audioStreams.length > 0 || data.hls) {
+          const sponsors = await sponsorPromise;
+          const responseData = {
+            success: true,
+            source: 'piped-api',
+            title: data.title,
+            uploader: data.uploader,
+            uploaderAvatar: data.uploaderAvatar,
+            thumbnailUrl: data.thumbnailUrl || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+            duration: data.duration,
+            views: data.views,
+            hlsUrl: data.hls,
+            videoStreams,
+            audioStreams,
+            relatedStreams: (data.relatedStreams || []).slice(0, 15).map((r: any) => ({
+              id: (r.url || '').replace('/watch?v=', '') || r.id,
+              title: r.title,
+              uploaderName: r.uploaderName,
+              thumbnail: r.thumbnail,
+              duration: r.duration,
+            })),
+            sponsorSegments: sponsors.map((s: any) => ({
+              category: s.category,
+              start: s.segment[0],
+              end: s.segment[1],
+            })),
+          };
 
-        const responseData = {
-          success: true,
-          source: 'piped-api',
-          title: data.title,
-          uploader: data.uploader,
-          uploaderAvatar: data.uploaderAvatar,
-          thumbnailUrl: data.thumbnailUrl || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-          duration: data.duration,
-          views: data.views,
-          hlsUrl: data.hls,
-          videoStreams,
-          audioStreams,
-          relatedStreams: (data.relatedStreams || []).slice(0, 15).map((r: any) => ({
-            id: (r.url || '').replace('/watch?v=', '') || r.id,
-            title: r.title,
-            uploaderName: r.uploaderName,
-            thumbnail: r.thumbnail,
-            duration: r.duration,
-          })),
-          sponsorSegments: sponsors.map((s: any) => ({
-            category: s.category,
-            start: s.segment[0],
-            end: s.segment[1],
-          })),
-        };
-
-        const resp = new Response(JSON.stringify(responseData), {
-          headers: {
-            'Content-Type': 'application/json',
-            'Cache-Control': 'public, max-age=1800',
-            'Access-Control-Allow-Origin': '*',
-          },
-        });
-        if (cache) context.waitUntil(cache.put(cacheKey, resp.clone()));
-        return resp;
+          const resp = new Response(JSON.stringify(responseData), {
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'public, max-age=1800',
+              'Access-Control-Allow-Origin': '*',
+            },
+          });
+          if (cache) context.waitUntil(cache.put(cacheKey, resp.clone()));
+          return resp;
+        }
       }
     } catch {
       continue;
     }
   }
 
-  return new Response(JSON.stringify({ success: false, error: 'Could not extract stream. Please try another video.' }), {
-    status: 502,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+  // 3. Fallback: Clean Embed Player
+  const fallbackData = {
+    success: true,
+    source: 'embed-fallback',
+    title: 'Đang phát video',
+    uploader: 'YouTube',
+    thumbnailUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    duration: 0,
+    embedUrl: `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1`,
+    videoStreams: [],
+    audioStreams: [],
+    sponsorSegments: [],
+  };
+
+  return new Response(JSON.stringify(fallbackData), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    },
   });
 }
 
-// InnerTube Android client extraction
+// InnerTube ANDROID_VR client
 async function fetchViaInnerTube(videoId: string) {
   const payload = {
     context: {
       client: {
-        clientName: 'ANDROID',
-        clientVersion: '19.29.35',
-        androidSdkVersion: 34,
+        clientName: 'ANDROID_VR',
+        clientVersion: '1.60.19',
+        deviceMake: 'Oculus',
+        deviceModel: 'Quest 3',
         hl: 'vi',
         gl: 'VN',
       },
@@ -163,7 +180,7 @@ async function fetchViaInnerTube(videoId: string) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'com.google.android.youtube/19.29.35 (Linux; U; Android 14; vi_VN; Pixel 8 Pro Build/AP2A.240705.005) gzip',
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(5000),
@@ -171,8 +188,7 @@ async function fetchViaInnerTube(videoId: string) {
 
   if (!res.ok) return null;
   const data: any = await res.json();
-  const playability = data.playabilityStatus;
-  if (!playability || playability.status !== 'OK') return null;
+  if (data.playabilityStatus?.status !== 'OK') return null;
 
   const videoDetails = data.videoDetails || {};
   const streamingData = data.streamingData || {};
@@ -182,7 +198,7 @@ async function fetchViaInnerTube(videoId: string) {
   const audioStreams: any[] = [];
 
   for (const fmt of formats) {
-    if (!fmt.url) continue; // Direct unthrottled url exists on Android client
+    if (!fmt.url) continue;
     const mime = fmt.mimeType || '';
 
     if (mime.includes('video/mp4')) {

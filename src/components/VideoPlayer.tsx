@@ -8,17 +8,14 @@ import {
   SkipBack,
   Maximize2,
   Minimize2,
-  Volume2,
-  VolumeX,
   Headphones,
   Tv,
   Star,
   ShieldCheck,
-  Disc3,
   Loader2,
   Radio,
 } from 'lucide-react';
-import { StreamData, VideoItem, PlayerMode } from '../types';
+import { StreamData, PlayerMode } from '../types';
 import { formatSeconds } from '../services/api';
 
 interface VideoPlayerProps {
@@ -48,13 +45,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(streamData.duration || 0);
-  const [volume, setVolume] = useState<number>(1);
-  const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [playerMode, setPlayerMode] = useState<PlayerMode>('video');
   const [sponsorSkippedNotice, setSponsorSkippedNotice] = useState<string | null>(null);
-
-  // Pick suitable stream URL
   const [selectedQuality, setSelectedQuality] = useState<string>('auto');
 
   // Determine current active media source
@@ -74,11 +67,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const q360 = streamData.videoStreams.find((s) => s.quality.includes('360'));
         if (q360) return q360.url;
       }
-      // default auto/best
       return streamData.videoStreams[0].url;
     }
 
-    // fallback audio
     if (streamData.audioStreams?.length > 0) {
       return streamData.audioStreams[0].url;
     }
@@ -121,7 +112,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [streamData, onNext, onPrev]);
 
-  // Handle Play/Pause
   const togglePlay = () => {
     if (!mediaRef.current) return;
     if (isPlaying) {
@@ -184,7 +174,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     >
       {/* Video Viewport / Audio Visualizer Area */}
       <div className="relative aspect-video w-full bg-slate-950 flex items-center justify-center overflow-hidden">
-        {/* Loading Overlay */}
         {isLoading && (
           <div className="absolute inset-0 z-20 bg-black/80 flex flex-col items-center justify-center gap-3">
             <Loader2 className="w-10 h-10 text-car-accent animate-spin" />
@@ -200,7 +189,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         )}
 
-        {/* Mode: Video */}
+        {/* Mode: Video with Direct Stream */}
         {playerMode === 'video' && streamUrl && (
           <video
             ref={mediaRef as React.RefObject<HTMLVideoElement>}
@@ -224,25 +213,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           />
         )}
 
+        {/* Fallback to Embed if no direct stream */}
+        {playerMode === 'video' && !streamUrl && streamData.embedUrl && (
+          <iframe
+            src={streamData.embedUrl}
+            title={streamData.title}
+            className="w-full h-full border-0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+          />
+        )}
+
         {/* Mode: Audio Only (VF5 Eyes-Free Driving) */}
         {playerMode === 'audio' && (
           <div className="w-full h-full flex flex-col items-center justify-center p-6 bg-gradient-to-br from-car-card via-slate-900 to-black relative">
-            <audio
-              ref={mediaRef as React.RefObject<HTMLAudioElement>}
-              src={streamUrl}
-              autoPlay
-              onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
-              onTimeUpdate={handleTimeUpdate}
-              onLoadedMetadata={() => {
-                if (mediaRef.current) {
-                  setDuration(mediaRef.current.duration || streamData.duration || 0);
-                }
-              }}
-              onEnded={() => {
-                if (onNext) onNext();
-              }}
-            />
+            {streamUrl && (
+              <audio
+                ref={mediaRef as React.RefObject<HTMLAudioElement>}
+                src={streamUrl}
+                autoPlay
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={() => {
+                  if (mediaRef.current) {
+                    setDuration(mediaRef.current.duration || streamData.duration || 0);
+                  }
+                }}
+                onEnded={() => {
+                  if (onNext) onNext();
+                }}
+              />
+            )}
 
             {/* Rotating Album Art Vinyl Disc */}
             <div className="relative mb-4 group">
@@ -281,24 +283,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Car Player Controls Bar */}
       <div className="bg-car-card px-4 py-3 border-t border-car-border">
         {/* Progress scrub bar */}
-        <div className="flex items-center gap-3 mb-2">
-          <span className="text-xs font-mono text-car-textMuted shrink-0">
-            {formatSeconds(currentTime)}
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={duration || 100}
-            value={currentTime}
-            onChange={handleSeekChange}
-            className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-car-accent focus:outline-none"
-          />
-          <span className="text-xs font-mono text-car-textMuted shrink-0">
-            {formatSeconds(duration)}
-          </span>
-        </div>
+        {streamUrl && (
+          <div className="flex items-center gap-3 mb-2">
+            <span className="text-xs font-mono text-car-textMuted shrink-0">
+              {formatSeconds(currentTime)}
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={duration || 100}
+              value={currentTime}
+              onChange={handleSeekChange}
+              className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-car-accent focus:outline-none"
+            />
+            <span className="text-xs font-mono text-car-textMuted shrink-0">
+              {formatSeconds(duration)}
+            </span>
+          </div>
+        )}
 
-        {/* Buttons and controls designed specifically for finger touches on car display */}
         <div className="flex items-center justify-between gap-2">
           {/* Left: Mode Switcher & Quality */}
           <div className="flex items-center gap-2">
@@ -340,7 +343,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {/* Center: BIG Touch Controls */}
           <div className="flex items-center gap-1 sm:gap-2">
-            {/* Prev Track */}
             <button
               onClick={onPrev}
               disabled={!hasPrev}
@@ -350,7 +352,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <SkipBack className="w-5 h-5" />
             </button>
 
-            {/* Rewind 10s */}
             <button
               onClick={() => handleSeekRelative(-10)}
               className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition flex items-center justify-center relative"
@@ -360,7 +361,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <span className="absolute text-[8px] font-bold bottom-0.5">10</span>
             </button>
 
-            {/* Center Big Play / Pause Button (60px) */}
             <button
               onClick={togglePlay}
               className="w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-car-accent hover:bg-car-accentHover text-white flex items-center justify-center shadow-lg shadow-car-accent/40 active:scale-90 transition mx-1"
@@ -369,7 +369,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {isPlaying ? <Pause className="w-6 h-6 fill-white" /> : <Play className="w-6 h-6 fill-white ml-0.5" />}
             </button>
 
-            {/* Forward 10s */}
             <button
               onClick={() => handleSeekRelative(10)}
               className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition flex items-center justify-center relative"
@@ -379,7 +378,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <span className="absolute text-[8px] font-bold bottom-0.5">10</span>
             </button>
 
-            {/* Next Track */}
             <button
               onClick={onNext}
               disabled={!hasNext}

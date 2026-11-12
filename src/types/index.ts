@@ -17,6 +17,8 @@ export interface StreamData {
   duration: number;
   views?: number;
   hlsUrl?: string | null;
+  embedUrl?: string;
+  source?: string;
   videoStreams: Array<{
     url: string;
     quality: string;
