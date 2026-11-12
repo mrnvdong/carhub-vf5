@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="vi" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/car-icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0a0d14" />
+    <title>CarHub - VinFast VF5 Auto Player</title>
+    <!-- Prevent text size adjustment on orientation change in WebKit / APTV -->
+    <style>
+      html, body {
+        -webkit-text-size-adjust: 100%;
+        touch-action: manipulation;
+        overscroll-behavior: none;
+        user-select: none;
+        -webkit-user-select: none;
+        background-color: #0a0d14;
+        color: #f8fafc;
+      }
+      /* Custom scrollbar for touch in car */
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #0a0d14;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #1f293d;
+        border-radius: 9999px;
+      }
+    </style>
+  </head>
+  <body class="bg-car-bg text-slate-100 min-h-screen overflow-x-hidden antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
