@@ -75,13 +75,53 @@ export async function searchVideos(query: string, continuation?: string | null):
   return { items: [], nextContinuation: null };
 }
 
-export async function getVideoDetails(videoId: string): Promise<StreamData | null> {
+export async function getVideoDetails(videoId: string, noCache = false): Promise<StreamData> {
   // 1. Try Cloudflare Pages /api/video
   try {
-    const res = await fetch(`/api/video?id=${videoId}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.playbackType && data.playbackType !== 'unplayable') {
+    const apiUrl = `/api/video?id=${encodeURIComponent(videoId)}${noCache ? '&nocache=1' : ''}`;
+    const res = await fetch(apiUrl, {
+      cache: noCache ? 'no-store' : 'default',
+    });
+
+    const data = await res.json().catch(() => null);
+
+    if (data) {
+      if (data.playbackType === 'unplayable' || (!res.ok && res.status === 422)) {
+        return {
+          id: videoId,
+          title: data.title || '',
+          uploader: data.uploader || '',
+          thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          duration: 0,
+          playbackType: 'unplayable',
+          source: 'edge-api',
+          error: data.error || 'Video không tồn tại hoặc không thể phát.',
+          videoStreams: [],
+          audioStreams: [],
+          sponsorSegments: [],
+        };
+      }
+
+      const videoStreams = Array.isArray(data.videoStreams) ? data.videoStreams : [];
+      const audioStreams = Array.isArray(data.audioStreams) ? data.audioStreams : [];
+      const hlsUrl = data.hlsUrl || null;
+      const embedUrl = data.embedUrl || null;
+
+      // Strictly verify usable streams before accepting playbackType
+      let validatedType: PlaybackType = 'unplayable';
+      if (data.playbackType === 'direct' && (videoStreams.length > 0 || audioStreams.length > 0)) {
+        validatedType = 'direct';
+      } else if (data.playbackType === 'hls' && hlsUrl) {
+        validatedType = 'hls';
+      } else if (videoStreams.length > 0 || audioStreams.length > 0) {
+        validatedType = 'direct';
+      } else if (hlsUrl) {
+        validatedType = 'hls';
+      } else if (data.playbackType === 'embed' && embedUrl) {
+        validatedType = 'embed';
+      }
+
+      if (data.success && validatedType !== 'unplayable') {
         return {
           id: videoId,
           title: data.title || '',
@@ -90,12 +130,12 @@ export async function getVideoDetails(videoId: string): Promise<StreamData | nul
           thumbnailUrl: data.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
           duration: data.duration || 0,
           views: data.views || 0,
-          playbackType: data.playbackType as PlaybackType,
-          source: data.source || 'unknown',
-          hlsUrl: data.hlsUrl || null,
-          embedUrl: data.embedUrl || null,
-          videoStreams: data.videoStreams || [],
-          audioStreams: data.audioStreams || [],
+          playbackType: validatedType,
+          source: data.source || 'edge-api',
+          hlsUrl,
+          embedUrl,
+          videoStreams,
+          audioStreams,
           relatedStreams: data.relatedStreams || [],
           sponsorSegments: data.sponsorSegments || [],
         };
@@ -113,23 +153,37 @@ export async function getVideoDetails(videoId: string): Promise<StreamData | nul
       });
       if (res.ok) {
         const data = await res.json();
+        // Only keep muxed videoStreams (videoOnly !== true) so video has sound!
         const videoStreams = (data.videoStreams || [])
-          .filter((v: any) => v.url && v.format === 'mp4')
+          .filter(
+            (v: any) =>
+              v.url &&
+              v.videoOnly !== true &&
+              (v.format === 'MPEG_4' ||
+                v.format === 'MP4' ||
+                v.format === 'mp4' ||
+                v.mimeType?.includes('video/mp4'))
+          )
           .map((v: any) => ({
             url: v.url,
-            quality: v.quality,
-            resolution: v.resolution,
-            mimeType: v.mimeType,
-            fps: v.fps,
+            quality: v.quality || '360p',
+            resolution: v.resolution || '640x360',
+            mimeType: v.mimeType || 'video/mp4',
+            fps: v.fps || 30,
           }));
 
         const audioStreams = (data.audioStreams || [])
           .filter((a: any) => a.url)
+          .sort((a: any, b: any) => {
+            const aMp4 = (a.mimeType || '').includes('mp4') ? 0 : 1;
+            const bMp4 = (b.mimeType || '').includes('mp4') ? 0 : 1;
+            return aMp4 - bMp4;
+          })
           .map((a: any) => ({
             url: a.url,
-            quality: a.quality,
-            mimeType: a.mimeType,
-            bitrate: a.bitrate,
+            quality: a.quality || '128kbps',
+            mimeType: a.mimeType || 'audio/mp4',
+            bitrate: a.bitrate || 128000,
           }));
 
         const hlsUrl = data.hls || null;
@@ -143,16 +197,16 @@ export async function getVideoDetails(videoId: string): Promise<StreamData | nul
         if (playbackType !== 'unplayable') {
           return {
             id: videoId,
-            title: data.title,
-            uploader: data.uploader,
+            title: data.title || '',
+            uploader: data.uploader || '',
             uploaderAvatar: data.uploaderAvatar,
             thumbnailUrl: data.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-            duration: data.duration,
-            views: data.views,
+            duration: data.duration || 0,
+            views: data.views || 0,
             playbackType,
             source: 'piped-client-fallback',
             hlsUrl,
-            embedUrl: null,
+            embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1`,
             videoStreams,
             audioStreams,
             relatedStreams: (data.relatedStreams || []).slice(0, 15).map((r: any) => ({
@@ -171,16 +225,16 @@ export async function getVideoDetails(videoId: string): Promise<StreamData | nul
     }
   }
 
-  // 3. Last resort fallback to embed
+  // 3. If all extractors failed, return unplayable so UI displays clear error & options
   return {
     id: videoId,
-    title: 'Phát qua YouTube Embed (Dự phòng)',
-    uploader: 'YouTube',
+    title: '',
+    uploader: '',
     thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
     duration: 0,
-    playbackType: 'embed',
-    source: 'embed-client-fallback',
-    embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1`,
+    playbackType: 'unplayable',
+    source: 'none',
+    error: 'Không thể lấy luồng phát cho video này (có thể bị giới hạn vùng hoặc bản quyền).',
     videoStreams: [],
     audioStreams: [],
     sponsorSegments: [],

@@ -21,6 +21,7 @@ export interface StreamData {
   views?: number;
   playbackType: PlaybackType;
   source: string;
+  error?: string;
   hlsUrl?: string | null;
   embedUrl?: string | null;
   videoStreams: Array<{

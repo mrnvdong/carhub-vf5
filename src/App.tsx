@@ -1,16 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { CategoryChips } from './components/CategoryChips';
 import { VideoPlayer } from './components/VideoPlayer';
 import { VideoList } from './components/VideoList';
-import { VideoItem, StreamData } from './types';
+import { VideoItem, StreamData, PlayerMode } from './types';
 import { searchVideos, getVideoDetails } from './services/api';
-import { Car, ShieldCheck, AlertCircle } from 'lucide-react';
+import { Car, ShieldCheck, AlertCircle, RefreshCw, SkipForward } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'explore' | 'history' | 'favorites'>('explore');
   const [selectedCategory, setSelectedCategory] = useState<string>('remix');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [playerMode, setPlayerMode] = useState<PlayerMode>('video');
 
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [nextContinuation, setNextContinuation] = useState<string | null>(null);
@@ -21,6 +22,8 @@ export const App: React.FC = () => {
   const [streamData, setStreamData] = useState<StreamData | null>(null);
   const [isLoadingStream, setIsLoadingStream] = useState<boolean>(false);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
+
+  const requestCounterRef = useRef<number>(0);
 
   // Local storage for history & favorites
   const [history, setHistory] = useState<VideoItem[]>(() => {
@@ -135,8 +138,10 @@ export const App: React.FC = () => {
   };
 
   const playVideo = useCallback(
-    async (video: VideoItem) => {
-      // 1. Immediately reset current stream data and errors to clear old video/audio playback!
+    async (video: VideoItem, noCache = false) => {
+      const reqId = ++requestCounterRef.current;
+
+      // Immediately unmount previous player and clear errors so old video never stays on screen
       setStreamData(null);
       setStreamErrorMessage(null);
       setCurrentVideo(video);
@@ -149,21 +154,32 @@ export const App: React.FC = () => {
       });
 
       try {
-        const details = await getVideoDetails(video.id);
+        const details = await getVideoDetails(video.id, noCache);
+        // Ignore stale response if user clicked another video in the meantime
+        if (reqId !== requestCounterRef.current) return;
+
         if (details && details.playbackType !== 'unplayable') {
-          setStreamData(details);
+          setStreamData({
+            ...details,
+            title: details.title || video.title,
+            uploader: details.uploader || video.uploaderName,
+          });
         } else {
-          setStreamErrorMessage('Không tìm thấy luồng phát hợp lệ cho video này.');
+          setStreamErrorMessage(
+            details?.error || 'Không tìm thấy luồng phát hợp lệ cho video này.'
+          );
         }
       } catch (err) {
+        if (reqId !== requestCounterRef.current) return;
         console.error('Failed to fetch stream details', err);
-        setStreamErrorMessage('Lỗi kết nối khi tải luồng phát.');
+        setStreamErrorMessage('Lỗi kết nối mạng khi tải luồng phát.');
       } finally {
-        setIsLoadingStream(false);
+        if (reqId === requestCounterRef.current) {
+          setIsLoadingStream(false);
+        }
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [videos, currentVideo]
+    []
   );
 
   const getCurrentIndex = () => {
@@ -205,7 +221,10 @@ export const App: React.FC = () => {
 
   const currentIndex = getCurrentIndex();
   const currentList = activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
-  const hasNext = currentIndex < currentList.length - 1 || (streamData?.relatedStreams?.length ?? 0) > 0 || !!nextContinuation;
+  const hasNext =
+    currentIndex < currentList.length - 1 ||
+    (streamData?.relatedStreams?.length ?? 0) > 0 ||
+    Boolean(nextContinuation);
   const hasPrev = currentIndex > 0;
 
   return (
@@ -222,11 +241,13 @@ export const App: React.FC = () => {
       <div className="bg-slate-900 border-b border-car-border px-3 py-1.5 flex items-center justify-between text-[11px] text-car-textMuted">
         <div className="flex items-center gap-1.5 mx-auto text-amber-300">
           <Car className="w-3.5 h-3.5 shrink-0" />
-          <span>Lái xe an toàn • Bật chế độ <strong>Chỉ nghe nhạc</strong> khi xe đang di chuyển</span>
+          <span>
+            Lái xe an toàn • Bật chế độ <strong>Chỉ nghe nhạc</strong> khi xe đang di chuyển
+          </span>
         </div>
         <div className="hidden sm:flex items-center gap-1 text-slate-400 font-medium">
           <ShieldCheck className="w-3.5 h-3.5 text-car-accent" />
-          <span>Chặn quảng cáo cho luồng trực tiếp</span>
+          <span>Chặn quảng cáo & SponsorBlock trên luồng trực tiếp (Direct/HLS)</span>
         </div>
       </div>
 
@@ -238,52 +259,63 @@ export const App: React.FC = () => {
       )}
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-2 sm:px-6 pt-3">
-        {/* Loading state before stream is ready */}
-        {isLoadingStream && !streamData && currentVideo && (
-          <div className="w-full aspect-video bg-car-card rounded-2xl border border-car-border flex flex-col items-center justify-center gap-3 mb-6 p-4 text-center">
-            <div className="w-8 h-8 border-3 border-car-accent border-t-transparent rounded-full animate-spin"></div>
-            <div>
-              <p className="text-sm font-semibold text-white line-clamp-1">{currentVideo.title}</p>
-              <p className="text-xs text-car-textMuted mt-1">Đang bóc tách luồng phát sạch không quảng cáo...</p>
+        {/* Loading state when switching video (old player is immediately cleared) */}
+        {isLoadingStream && currentVideo && (
+          <div className="w-full aspect-video bg-car-card rounded-2xl border border-car-border flex flex-col items-center justify-center gap-3 mb-6 p-4 text-center shadow-2xl">
+            <div className="w-10 h-10 border-3 border-car-accent border-t-transparent rounded-full animate-spin"></div>
+            <div className="max-w-md">
+              <p className="text-sm sm:text-base font-bold text-white line-clamp-1">
+                {currentVideo.title}
+              </p>
+              <p className="text-xs text-car-textMuted mt-1">
+                Đang tải luồng phát cho video mới...
+              </p>
             </div>
           </div>
         )}
 
-        {/* Error state if stream failed */}
+        {/* Error state if video is unplayable or stream extraction failed */}
         {streamErrorMessage && currentVideo && !isLoadingStream && (
-          <div className="w-full bg-car-card rounded-2xl border border-rose-500/30 p-6 flex flex-col items-center justify-center text-center gap-3 mb-6">
-            <AlertCircle className="w-8 h-8 text-rose-500" />
-            <div>
-              <h4 className="text-sm font-bold text-white">{currentVideo.title}</h4>
+          <div className="w-full aspect-video bg-car-card rounded-2xl border border-rose-500/30 p-6 flex flex-col items-center justify-center text-center gap-3 mb-6 shadow-2xl">
+            <AlertCircle className="w-10 h-10 text-rose-500" />
+            <div className="max-w-md">
+              <h4 className="text-sm sm:text-base font-bold text-white line-clamp-1">
+                {currentVideo.title}
+              </h4>
               <p className="text-xs text-rose-400 mt-1">{streamErrorMessage}</p>
             </div>
-            <div className="flex gap-2 mt-2">
+            <div className="flex flex-wrap items-center justify-center gap-3 mt-2">
               <button
-                onClick={() => playVideo(currentVideo)}
-                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-xl text-white border border-car-border"
+                onClick={() => playVideo(currentVideo, true)}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-xl text-white border border-car-border flex items-center gap-1.5"
               >
-                Thử lại
+                <RefreshCw className="w-4 h-4" />
+                <span>Thử tải lại (Bỏ cache)</span>
               </button>
               {hasNext && (
                 <button
                   onClick={handleNext}
-                  className="px-3.5 py-2 bg-car-accent hover:bg-car-accentHover text-xs font-semibold rounded-xl text-white"
+                  className="px-4 py-2.5 bg-car-accent hover:bg-car-accentHover text-xs font-semibold rounded-xl text-white flex items-center gap-1.5"
                 >
-                  Chuyển sang bài khác
+                  <SkipForward className="w-4 h-4" />
+                  <span>Chuyển sang bài tiếp theo</span>
                 </button>
               )}
             </div>
           </div>
         )}
 
-        {/* Active Player */}
-        {streamData && currentVideo && !isLoadingStream && (
+        {/* Active Player - Keyed by streamData.id so old player DOM is always destroyed on track change */}
+        {streamData && currentVideo && !isLoadingStream && !streamErrorMessage && (
           <VideoPlayer
+            key={streamData.id}
             streamData={streamData}
             isLoading={isLoadingStream}
+            playerMode={playerMode}
+            onPlayerModeChange={setPlayerMode}
             onNext={handleNext}
             onPrev={handlePrev}
-            onRetry={() => playVideo(currentVideo)}
+            onRetry={() => playVideo(currentVideo, true)}
             hasNext={hasNext}
             hasPrev={hasPrev}
             isFavorite={isFavorite}
@@ -295,12 +327,16 @@ export const App: React.FC = () => {
           <VideoList
             videos={videos}
             currentVideoId={currentVideo?.id}
-            onSelectVideo={playVideo}
+            onSelectVideo={(v) => playVideo(v)}
             isLoading={isLoadingVideos}
-            hasMore={!!nextContinuation}
+            hasMore={Boolean(nextContinuation)}
             isLoadingMore={isLoadingMore}
             onLoadMore={handleLoadMore}
-            title={selectedCategory ? 'Danh sách phát đề xuất' : `Kết quả tìm kiếm cho "${searchQuery}"`}
+            title={
+              selectedCategory
+                ? 'Danh sách phát đề xuất'
+                : `Kết quả tìm kiếm cho "${searchQuery}"`
+            }
           />
         )}
 
@@ -308,7 +344,7 @@ export const App: React.FC = () => {
           <VideoList
             videos={history}
             currentVideoId={currentVideo?.id}
-            onSelectVideo={playVideo}
+            onSelectVideo={(v) => playVideo(v)}
             title="Lịch sử bài hát vừa nghe trên xe"
           />
         )}
@@ -317,7 +353,7 @@ export const App: React.FC = () => {
           <VideoList
             videos={favorites}
             currentVideoId={currentVideo?.id}
-            onSelectVideo={playVideo}
+            onSelectVideo={(v) => playVideo(v)}
             title="Danh sách bài hát yêu thích"
           />
         )}
