@@ -5,37 +5,75 @@ export async function onRequestGet(context: any) {
   const id = url.searchParams.get('id');
 
   if (!id || id.length !== 11) {
-    return new Response(JSON.stringify({ success: false, error: 'Invalid video ID' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-    });
+    return new Response(
+      JSON.stringify({
+        success: false,
+        playbackType: 'unplayable',
+        error: 'ID video không hợp lệ',
+      }),
+      {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+        },
+      }
+    );
   }
 
+  // 1. Check cache: Only use cache if it contains valid streams
   const cache = (caches as any).default;
   const cacheKey = new Request(url.toString(), request);
   if (cache) {
-    const cachedResponse = await cache.match(cacheKey);
-    if (cachedResponse) {
-      return cachedResponse;
+    try {
+      const cachedResponse = await cache.match(cacheKey);
+      if (cachedResponse) {
+        const cachedData = await cachedResponse.clone().json();
+        // Only return cached response if it has valid direct or HLS streams
+        if (
+          cachedData &&
+          cachedData.success &&
+          (cachedData.playbackType === 'direct' || cachedData.playbackType === 'hls') &&
+          ((cachedData.videoStreams && cachedData.videoStreams.length > 0) ||
+            (cachedData.audioStreams && cachedData.audioStreams.length > 0) ||
+            cachedData.hlsUrl)
+        ) {
+          return cachedResponse;
+        }
+      }
+    } catch {
+      // Ignore cache read errors
     }
   }
 
   // Fetch SponsorBlock segments concurrently
   const sponsorPromise = fetch(
     `https://sponsor.ajay.app/api/skipSegments?videoID=${id}&categories=["sponsor","selfpromo","interaction","intro","outro"]`,
-    { signal: AbortSignal.timeout(3000) }
+    { signal: AbortSignal.timeout(2500) }
   )
     .then(async (r) => (r.ok ? await r.json() : []))
     .catch(() => []);
 
-  // 1. Phương án B: Direct Cloudflare Edge to YouTube InnerTube ANDROID_VR
+  // 2. Phương án B: Direct Cloudflare Edge to YouTube InnerTube ANDROID_VR
   try {
     const directResult = await fetchViaInnerTube(id);
-    if (directResult && (directResult.videoStreams.length > 0 || directResult.audioStreams.length > 0 || directResult.hlsUrl)) {
+    if (
+      directResult &&
+      (directResult.videoStreams.length > 0 ||
+        directResult.audioStreams.length > 0 ||
+        directResult.hlsUrl)
+    ) {
       const sponsors = await sponsorPromise;
+      const playbackType = directResult.hlsUrl && directResult.videoStreams.length === 0
+        ? 'hls'
+        : 'direct';
+
       const responseData = {
         success: true,
+        playbackType,
         source: 'edge-innertube-android-vr',
+        id,
         ...directResult,
         sponsorSegments: sponsors.map((s: any) => ({
           category: s.category,
@@ -44,10 +82,11 @@ export async function onRequestGet(context: any) {
         })),
       };
 
+      // Shorter TTL (180s) to prevent expired googlevideo tokens
       const resp = new Response(JSON.stringify(responseData), {
         headers: {
           'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=1800',
+          'Cache-Control': 'public, max-age=180',
           'Access-Control-Allow-Origin': '*',
         },
       });
@@ -58,7 +97,7 @@ export async function onRequestGet(context: any) {
     console.warn('InnerTube extraction error:', err);
   }
 
-  // 2. Phương án A: Fallback to high-reliability Piped Instances
+  // 3. Phương án A: Fallback to high-reliability Piped Instances
   const pipedInstances = [
     'https://api.piped.private.coffee',
     'https://pipedapi.ducks.party',
@@ -70,13 +109,13 @@ export async function onRequestGet(context: any) {
       const pipedUrl = `${instance}/streams/${id}`;
       const res = await fetch(pipedUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' },
-        signal: AbortSignal.timeout(4000),
+        signal: AbortSignal.timeout(3500),
       });
 
       if (res.ok) {
         const data: any = await res.json();
         const videoStreams = (data.videoStreams || [])
-          .filter((v: any) => v.url && v.format === 'mp4')
+          .filter((v: any) => v.url && (v.format === 'mp4' || v.mimeType?.includes('video/mp4')))
           .map((v: any) => ({
             url: v.url,
             quality: v.quality,
@@ -96,16 +135,20 @@ export async function onRequestGet(context: any) {
 
         if (videoStreams.length > 0 || audioStreams.length > 0 || data.hls) {
           const sponsors = await sponsorPromise;
+          const playbackType = data.hls && videoStreams.length === 0 ? 'hls' : 'direct';
+
           const responseData = {
             success: true,
+            playbackType,
             source: 'piped-api',
-            title: data.title,
-            uploader: data.uploader,
-            uploaderAvatar: data.uploaderAvatar,
+            id,
+            title: data.title || '',
+            uploader: data.uploader || '',
+            uploaderAvatar: data.uploaderAvatar || null,
             thumbnailUrl: data.thumbnailUrl || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-            duration: data.duration,
-            views: data.views,
-            hlsUrl: data.hls,
+            duration: data.duration || 0,
+            views: data.views || 0,
+            hlsUrl: data.hls || null,
             videoStreams,
             audioStreams,
             relatedStreams: (data.relatedStreams || []).slice(0, 15).map((r: any) => ({
@@ -125,7 +168,7 @@ export async function onRequestGet(context: any) {
           const resp = new Response(JSON.stringify(responseData), {
             headers: {
               'Content-Type': 'application/json',
-              'Cache-Control': 'public, max-age=1800',
+              'Cache-Control': 'public, max-age=180',
               'Access-Control-Allow-Origin': '*',
             },
           });
@@ -138,11 +181,14 @@ export async function onRequestGet(context: any) {
     }
   }
 
-  // 3. Fallback: Clean Embed Player
-  const fallbackData = {
+  // 4. Fallback: YouTube Embed
+  // Clearly tagged as 'embed'. DO NOT cache embed fallback in edge cache so subsequent tries can grab streams!
+  const embedData = {
     success: true,
+    playbackType: 'embed',
     source: 'embed-fallback',
-    title: 'Đang phát video',
+    id,
+    title: 'Phát qua YouTube Embed (Dự phòng)',
     uploader: 'YouTube',
     thumbnailUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
     duration: 0,
@@ -152,10 +198,11 @@ export async function onRequestGet(context: any) {
     sponsorSegments: [],
   };
 
-  return new Response(JSON.stringify(fallbackData), {
+  return new Response(JSON.stringify(embedData), {
     headers: {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
     },
   });
 }
@@ -183,7 +230,7 @@ async function fetchViaInnerTube(videoId: string) {
       'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout(4500),
   });
 
   if (!res.ok) return null;

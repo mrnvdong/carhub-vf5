@@ -5,7 +5,7 @@ import { VideoPlayer } from './components/VideoPlayer';
 import { VideoList } from './components/VideoList';
 import { VideoItem, StreamData } from './types';
 import { searchVideos, getVideoDetails } from './services/api';
-import { Car, ShieldCheck } from 'lucide-react';
+import { Car, ShieldCheck, AlertCircle } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'explore' | 'history' | 'favorites'>('explore');
@@ -20,6 +20,7 @@ export const App: React.FC = () => {
   const [currentVideo, setCurrentVideo] = useState<VideoItem | null>(null);
   const [streamData, setStreamData] = useState<StreamData | null>(null);
   const [isLoadingStream, setIsLoadingStream] = useState<boolean>(false);
+  const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
 
   // Local storage for history & favorites
   const [history, setHistory] = useState<VideoItem[]>(() => {
@@ -71,7 +72,6 @@ export const App: React.FC = () => {
       const result = await searchVideos(query);
       setVideos(result.items);
       setNextContinuation(result.nextContinuation);
-      // Auto pick first video if no video is playing yet
       if (!currentVideo && result.items.length > 0) {
         playVideo(result.items[0]);
       }
@@ -108,7 +108,6 @@ export const App: React.FC = () => {
 
     try {
       const result = await searchVideos(activeQuery, nextContinuation);
-      // Filter out duplicate IDs
       setVideos((prev) => {
         const existingIds = new Set(prev.map((v) => v.id));
         const newUnique = result.items.filter((item) => !existingIds.has(item.id));
@@ -137,6 +136,9 @@ export const App: React.FC = () => {
 
   const playVideo = useCallback(
     async (video: VideoItem) => {
+      // 1. Immediately reset current stream data and errors to clear old video/audio playback!
+      setStreamData(null);
+      setStreamErrorMessage(null);
       setCurrentVideo(video);
       setIsLoadingStream(true);
 
@@ -148,14 +150,14 @@ export const App: React.FC = () => {
 
       try {
         const details = await getVideoDetails(video.id);
-        if (details) {
+        if (details && details.playbackType !== 'unplayable') {
           setStreamData(details);
         } else {
-          alert('Không thể tải luồng video này. Đang chuyển sang bài tiếp theo...');
-          handleNext();
+          setStreamErrorMessage('Không tìm thấy luồng phát hợp lệ cho video này.');
         }
       } catch (err) {
         console.error('Failed to fetch stream details', err);
+        setStreamErrorMessage('Lỗi kết nối khi tải luồng phát.');
       } finally {
         setIsLoadingStream(false);
       }
@@ -216,14 +218,15 @@ export const App: React.FC = () => {
         setSearchQuery={setSearchQuery}
       />
 
-      <div className="bg-amber-500/10 border-b border-amber-500/20 px-3 py-1.5 flex items-center justify-between text-[11px] text-amber-300">
-        <div className="flex items-center gap-1.5 mx-auto">
+      {/* Safety Notice Banner */}
+      <div className="bg-slate-900 border-b border-car-border px-3 py-1.5 flex items-center justify-between text-[11px] text-car-textMuted">
+        <div className="flex items-center gap-1.5 mx-auto text-amber-300">
           <Car className="w-3.5 h-3.5 shrink-0" />
-          <span>Lái xe an toàn • Nên dùng chế độ <strong>Chỉ nghe nhạc</strong> khi xe đang di chuyển</span>
+          <span>Lái xe an toàn • Bật chế độ <strong>Chỉ nghe nhạc</strong> khi xe đang di chuyển</span>
         </div>
-        <div className="hidden sm:flex items-center gap-1 text-emerald-400 font-medium">
-          <ShieldCheck className="w-3.5 h-3.5" />
-          <span>100% Chặn quảng cáo</span>
+        <div className="hidden sm:flex items-center gap-1 text-slate-400 font-medium">
+          <ShieldCheck className="w-3.5 h-3.5 text-car-accent" />
+          <span>Chặn quảng cáo cho luồng trực tiếp</span>
         </div>
       </div>
 
@@ -235,12 +238,52 @@ export const App: React.FC = () => {
       )}
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-2 sm:px-6 pt-3">
-        {streamData && currentVideo && (
+        {/* Loading state before stream is ready */}
+        {isLoadingStream && !streamData && currentVideo && (
+          <div className="w-full aspect-video bg-car-card rounded-2xl border border-car-border flex flex-col items-center justify-center gap-3 mb-6 p-4 text-center">
+            <div className="w-8 h-8 border-3 border-car-accent border-t-transparent rounded-full animate-spin"></div>
+            <div>
+              <p className="text-sm font-semibold text-white line-clamp-1">{currentVideo.title}</p>
+              <p className="text-xs text-car-textMuted mt-1">Đang bóc tách luồng phát sạch không quảng cáo...</p>
+            </div>
+          </div>
+        )}
+
+        {/* Error state if stream failed */}
+        {streamErrorMessage && currentVideo && !isLoadingStream && (
+          <div className="w-full bg-car-card rounded-2xl border border-rose-500/30 p-6 flex flex-col items-center justify-center text-center gap-3 mb-6">
+            <AlertCircle className="w-8 h-8 text-rose-500" />
+            <div>
+              <h4 className="text-sm font-bold text-white">{currentVideo.title}</h4>
+              <p className="text-xs text-rose-400 mt-1">{streamErrorMessage}</p>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={() => playVideo(currentVideo)}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-xl text-white border border-car-border"
+              >
+                Thử lại
+              </button>
+              {hasNext && (
+                <button
+                  onClick={handleNext}
+                  className="px-3.5 py-2 bg-car-accent hover:bg-car-accentHover text-xs font-semibold rounded-xl text-white"
+                >
+                  Chuyển sang bài khác
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Active Player */}
+        {streamData && currentVideo && !isLoadingStream && (
           <VideoPlayer
             streamData={streamData}
             isLoading={isLoadingStream}
             onNext={handleNext}
             onPrev={handlePrev}
+            onRetry={() => playVideo(currentVideo)}
             hasNext={hasNext}
             hasPrev={hasPrev}
             isFavorite={isFavorite}

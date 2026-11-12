@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import Hls from 'hls.js';
 import {
   Play,
   Pause,
@@ -14,6 +15,9 @@ import {
   ShieldCheck,
   Loader2,
   Radio,
+  AlertCircle,
+  ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 import { StreamData, PlayerMode } from '../types';
 import { formatSeconds } from '../services/api';
@@ -23,6 +27,7 @@ interface VideoPlayerProps {
   isLoading: boolean;
   onNext?: () => void;
   onPrev?: () => void;
+  onRetry?: () => void;
   hasNext?: boolean;
   hasPrev?: boolean;
   isFavorite: boolean;
@@ -34,13 +39,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   isLoading,
   onNext,
   onPrev,
+  onRetry,
   hasNext,
   hasPrev,
   isFavorite,
   onToggleFavorite,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const hlsRef = useRef<Hls | null>(null);
 
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -49,11 +57,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [playerMode, setPlayerMode] = useState<PlayerMode>('video');
   const [sponsorSkippedNotice, setSponsorSkippedNotice] = useState<string | null>(null);
   const [selectedQuality, setSelectedQuality] = useState<string>('auto');
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
 
-  // Determine current active media source
+  const hasAudioStream = (streamData.audioStreams?.length ?? 0) > 0;
+  const isEmbed = streamData.playbackType === 'embed';
+  const isHls = streamData.playbackType === 'hls' || (selectedQuality === 'hls' && !!streamData.hlsUrl);
+
+  // If in audio mode but current video doesn't have an audio stream, force switch to video mode
+  useEffect(() => {
+    if (playerMode === 'audio' && !hasAudioStream) {
+      setPlayerMode('video');
+    }
+    setPlaybackError(null);
+  }, [streamData.id, hasAudioStream, playerMode]);
+
+  // Determine current active direct stream URL
   const getActiveStreamUrl = () => {
-    if (playerMode === 'audio' && streamData.audioStreams?.length > 0) {
-      return streamData.audioStreams[0].url;
+    if (isEmbed) return '';
+
+    if (playerMode === 'audio') {
+      return hasAudioStream ? streamData.audioStreams[0].url : '';
+    }
+
+    if (selectedQuality === 'hls' && streamData.hlsUrl) {
+      return streamData.hlsUrl;
     }
 
     if (streamData.videoStreams?.length > 0) {
@@ -70,8 +97,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return streamData.videoStreams[0].url;
     }
 
-    if (streamData.audioStreams?.length > 0) {
-      return streamData.audioStreams[0].url;
+    if (streamData.hlsUrl) {
+      return streamData.hlsUrl;
     }
 
     return '';
@@ -79,65 +106,130 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const streamUrl = getActiveStreamUrl();
 
-  // MediaSession API for CarPlay & VinFast Steering Wheel Controls
+  // Setup HLS when streamUrl is an m3u8 playlist
   useEffect(() => {
-    if ('mediaSession' in navigator && streamData) {
+    const video = videoRef.current;
+    if (!video || isEmbed || playerMode === 'audio') return;
+
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    const isM3U8 = streamUrl && (streamUrl.includes('.m3u8') || isHls);
+
+    if (isM3U8 && streamUrl) {
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        // Native HLS for Safari on Apple CarPlay / APTV WebKit
+        video.src = streamUrl;
+      } else if (Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+        });
+        hlsRef.current = hls;
+        hls.loadSource(streamUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) {
+            setPlaybackError('Lỗi tải luồng HLS');
+          }
+        });
+      }
+    } else if (video && streamUrl) {
+      video.src = streamUrl;
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [streamUrl, isEmbed, playerMode, isHls]);
+
+  // MediaSession API - Only active for direct/HLS streams (Cannot track sandboxed YouTube Embed iframe)
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+
+    if (isEmbed) {
+      // Clear actions for embed
       navigator.mediaSession.metadata = new MediaMetadata({
         title: streamData.title,
-        artist: streamData.uploader,
+        artist: 'YouTube Embed (Dự phòng)',
         album: 'CarHub VinFast VF5',
-        artwork: [
-          { src: streamData.thumbnailUrl, sizes: '512x512', type: 'image/jpeg' },
-        ],
       });
-
-      navigator.mediaSession.setActionHandler('play', () => {
-        mediaRef.current?.play();
-      });
-      navigator.mediaSession.setActionHandler('pause', () => {
-        mediaRef.current?.pause();
-      });
-      navigator.mediaSession.setActionHandler('seekbackward', () => {
-        handleSeekRelative(-10);
-      });
-      navigator.mediaSession.setActionHandler('seekforward', () => {
-        handleSeekRelative(10);
-      });
-      if (onNext) {
-        navigator.mediaSession.setActionHandler('nexttrack', onNext);
-      }
-      if (onPrev) {
-        navigator.mediaSession.setActionHandler('previoustrack', onPrev);
-      }
+      navigator.mediaSession.setActionHandler('play', null);
+      navigator.mediaSession.setActionHandler('pause', null);
+      navigator.mediaSession.setActionHandler('seekbackward', null);
+      navigator.mediaSession.setActionHandler('seekforward', null);
+      if (onNext) navigator.mediaSession.setActionHandler('nexttrack', onNext);
+      if (onPrev) navigator.mediaSession.setActionHandler('previoustrack', onPrev);
+      return;
     }
-  }, [streamData, onNext, onPrev]);
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: streamData.title,
+      artist: streamData.uploader,
+      album: 'CarHub VinFast VF5',
+      artwork: [
+        { src: streamData.thumbnailUrl, sizes: '512x512', type: 'image/jpeg' },
+      ],
+    });
+
+    navigator.mediaSession.setActionHandler('play', () => {
+      const el = playerMode === 'audio' ? audioRef.current : videoRef.current;
+      el?.play().catch(console.error);
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      const el = playerMode === 'audio' ? audioRef.current : videoRef.current;
+      el?.pause();
+    });
+    navigator.mediaSession.setActionHandler('seekbackward', () => {
+      handleSeekRelative(-10);
+    });
+    navigator.mediaSession.setActionHandler('seekforward', () => {
+      handleSeekRelative(10);
+    });
+    if (onNext) navigator.mediaSession.setActionHandler('nexttrack', onNext);
+    if (onPrev) navigator.mediaSession.setActionHandler('previoustrack', onPrev);
+  }, [streamData, onNext, onPrev, isEmbed, playerMode]);
+
+  const getActiveMediaElement = () => {
+    return playerMode === 'audio' ? audioRef.current : videoRef.current;
+  };
 
   const togglePlay = () => {
-    if (!mediaRef.current) return;
+    const el = getActiveMediaElement();
+    if (!el) return;
     if (isPlaying) {
-      mediaRef.current.pause();
+      el.pause();
     } else {
-      mediaRef.current.play().catch(console.error);
+      el.play().catch((err) => {
+        console.warn('Play interrupted:', err);
+      });
     }
   };
 
   const handleSeekRelative = (seconds: number) => {
-    if (!mediaRef.current) return;
-    const newTime = Math.max(0, Math.min(mediaRef.current.currentTime + seconds, duration));
-    mediaRef.current.currentTime = newTime;
+    const el = getActiveMediaElement();
+    if (!el) return;
+    const newTime = Math.max(0, Math.min(el.currentTime + seconds, duration));
+    el.currentTime = newTime;
     setCurrentTime(newTime);
   };
 
   const handleTimeUpdate = () => {
-    if (!mediaRef.current) return;
-    const curr = mediaRef.current.currentTime;
+    const el = getActiveMediaElement();
+    if (!el) return;
+    const curr = el.currentTime;
     setCurrentTime(curr);
 
-    // SponsorBlock: Check if current time falls in a sponsor segment
-    if (streamData.sponsorSegments && streamData.sponsorSegments.length > 0) {
+    // SponsorBlock: Only available on direct streams
+    if (!isEmbed && streamData.sponsorSegments && streamData.sponsorSegments.length > 0) {
       for (const segment of streamData.sponsorSegments) {
         if (curr >= segment.start && curr < segment.end) {
-          mediaRef.current.currentTime = segment.end;
+          el.currentTime = segment.end;
           setSponsorSkippedNotice('Đã bỏ qua đoạn tài trợ');
           setTimeout(() => setSponsorSkippedNotice(null), 3000);
           break;
@@ -149,8 +241,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setCurrentTime(val);
-    if (mediaRef.current) {
-      mediaRef.current.currentTime = val;
+    const el = getActiveMediaElement();
+    if (el) {
+      el.currentTime = val;
     }
   };
 
@@ -174,10 +267,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     >
       {/* Video Viewport / Audio Visualizer Area */}
       <div className="relative aspect-video w-full bg-slate-950 flex items-center justify-center overflow-hidden">
+        {/* Loading Overlay */}
         {isLoading && (
-          <div className="absolute inset-0 z-20 bg-black/80 flex flex-col items-center justify-center gap-3">
+          <div className="absolute inset-0 z-20 bg-black/90 flex flex-col items-center justify-center gap-3">
             <Loader2 className="w-10 h-10 text-car-accent animate-spin" />
-            <p className="text-sm font-medium text-slate-300">Đang tải luồng không quảng cáo...</p>
+            <p className="text-sm font-medium text-slate-300">Đang chuẩn bị luồng phát...</p>
+          </div>
+        )}
+
+        {/* Playback Error Overlay */}
+        {playbackError && (
+          <div className="absolute inset-0 z-20 bg-black/95 flex flex-col items-center justify-center p-6 text-center gap-3">
+            <AlertCircle className="w-10 h-10 text-rose-500" />
+            <h4 className="text-base font-bold text-white">Không thể phát luồng này</h4>
+            <p className="text-xs text-car-textMuted max-w-md">
+              {playbackError}. Luồng có thể đã hết hạn hoặc bị hạn chế bản quyền.
+            </p>
+            <div className="flex items-center gap-3 mt-2">
+              {onRetry && (
+                <button
+                  onClick={onRetry}
+                  className="px-4 py-2 bg-car-card hover:bg-slate-800 border border-car-border text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Thử lại</span>
+                </button>
+              )}
+              {hasNext && onNext && (
+                <button
+                  onClick={onNext}
+                  className="px-4 py-2 bg-car-accent hover:bg-car-accentHover text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <SkipForward className="w-4 h-4" />
+                  <span>Chuyển bài kế tiếp</span>
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -189,11 +314,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         )}
 
-        {/* Mode: Video with Direct Stream */}
-        {playerMode === 'video' && streamUrl && (
+        {/* Mode 1: Video with Direct / HLS Stream */}
+        {!isEmbed && playerMode === 'video' && streamUrl && (
           <video
-            ref={mediaRef as React.RefObject<HTMLVideoElement>}
-            src={streamUrl}
+            ref={videoRef}
             className="w-full h-full object-contain cursor-pointer"
             autoPlay
             playsInline
@@ -201,9 +325,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             onTimeUpdate={handleTimeUpdate}
+            onError={() => setPlaybackError('Link stream trực tiếp không phản hồi')}
             onLoadedMetadata={() => {
-              if (mediaRef.current) {
-                setDuration(mediaRef.current.duration || streamData.duration || 0);
+              if (videoRef.current) {
+                setDuration(videoRef.current.duration || streamData.duration || 0);
               }
             }}
             onEnded={() => {
@@ -213,38 +338,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           />
         )}
 
-        {/* Fallback to Embed if no direct stream */}
-        {playerMode === 'video' && !streamUrl && streamData.embedUrl && (
-          <iframe
-            src={streamData.embedUrl}
-            title={streamData.title}
-            className="w-full h-full border-0"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
+        {/* Mode 2: YouTube Embed Fallback */}
+        {isEmbed && streamData.embedUrl && (
+          <div className="relative w-full h-full flex flex-col">
+            <iframe
+              src={streamData.embedUrl}
+              title={streamData.title}
+              className="w-full h-full border-0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+            <div className="absolute top-2 left-2 z-10 bg-amber-500/90 text-black px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 shadow">
+              <ExternalLink className="w-3 h-3" />
+              <span>Nguồn YouTube Embed (Dự phòng)</span>
+            </div>
+          </div>
         )}
 
-        {/* Mode: Audio Only (VF5 Eyes-Free Driving) */}
-        {playerMode === 'audio' && (
+        {/* Mode 3: Audio Only (VF5 Eyes-Free Driving) */}
+        {!isEmbed && playerMode === 'audio' && hasAudioStream && (
           <div className="w-full h-full flex flex-col items-center justify-center p-6 bg-gradient-to-br from-car-card via-slate-900 to-black relative">
-            {streamUrl && (
-              <audio
-                ref={mediaRef as React.RefObject<HTMLAudioElement>}
-                src={streamUrl}
-                autoPlay
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={() => {
-                  if (mediaRef.current) {
-                    setDuration(mediaRef.current.duration || streamData.duration || 0);
-                  }
-                }}
-                onEnded={() => {
-                  if (onNext) onNext();
-                }}
-              />
-            )}
+            <audio
+              ref={audioRef}
+              src={streamUrl}
+              autoPlay
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onTimeUpdate={handleTimeUpdate}
+              onError={() => setPlaybackError('Link audio không phản hồi')}
+              onLoadedMetadata={() => {
+                if (audioRef.current) {
+                  setDuration(audioRef.current.duration || streamData.duration || 0);
+                }
+              }}
+              onEnded={() => {
+                if (onNext) onNext();
+              }}
+            />
 
             {/* Rotating Album Art Vinyl Disc */}
             <div className="relative mb-4 group">
@@ -263,7 +393,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   <div className="w-8 h-8 rounded-full bg-slate-900 border-2 border-slate-400"></div>
                 </div>
               </div>
-              <div className="absolute -bottom-2 -right-2 bg-car-accent p-2 rounded-full text-white shadow-lg">
+              <div className="absolute -bottom-2 -right-2 bg-emerald-500 p-2 rounded-full text-white shadow-lg">
                 <Radio className="w-4 h-4 animate-pulse" />
               </div>
             </div>
@@ -282,8 +412,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Car Player Controls Bar */}
       <div className="bg-car-card px-4 py-3 border-t border-car-border">
-        {/* Progress scrub bar */}
-        {streamUrl && (
+        {/* Progress scrub bar - Only for direct/HLS streams */}
+        {!isEmbed && (
           <div className="flex items-center gap-3 mb-2">
             <span className="text-xs font-mono text-car-textMuted shrink-0">
               {formatSeconds(currentTime)}
@@ -302,47 +432,79 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         )}
 
+        {isEmbed && (
+          <div className="text-[11px] text-amber-300/90 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20 mb-2">
+            ⚠️ Đang phát qua YouTube Embed dự phòng: Vui lòng chạm trực tiếp trên video để Play/Pause và tua. Các nút chuyển bài bên dưới vẫn hoạt động.
+          </div>
+        )}
+
         <div className="flex items-center justify-between gap-2">
           {/* Left: Mode Switcher & Quality */}
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPlayerMode(playerMode === 'video' ? 'audio' : 'video')}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition ${
-                playerMode === 'audio'
-                  ? 'bg-emerald-600 text-white shadow-md'
-                  : 'bg-slate-800 text-slate-300 hover:text-white'
-              }`}
-              title="Chuyển chế độ chỉ nghe nhạc để tiết kiệm 4G và tập trung lái xe"
-            >
-              {playerMode === 'audio' ? (
-                <>
-                  <Headphones className="w-4 h-4 text-emerald-200" />
-                  <span className="hidden sm:inline">Chỉ nghe nhạc</span>
-                </>
-              ) : (
-                <>
-                  <Tv className="w-4 h-4" />
-                  <span className="hidden sm:inline">Xem video</span>
-                </>
-              )}
-            </button>
+            {/* Audio Mode Toggle: Only active if audio stream is available and not in embed */}
+            {!isEmbed && (
+              <button
+                onClick={() => {
+                  if (hasAudioStream) {
+                    setPlayerMode(playerMode === 'video' ? 'audio' : 'video');
+                  }
+                }}
+                disabled={!hasAudioStream}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                  playerMode === 'audio'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+                title={
+                  hasAudioStream
+                    ? 'Chuyển chế độ chỉ nghe nhạc (tiết kiệm 4G)'
+                    : 'Video này không có luồng âm thanh riêng biệt'
+                }
+              >
+                {playerMode === 'audio' ? (
+                  <>
+                    <Headphones className="w-4 h-4 text-emerald-200" />
+                    <span className="hidden sm:inline">Chỉ nghe nhạc</span>
+                  </>
+                ) : (
+                  <>
+                    <Tv className="w-4 h-4" />
+                    <span className="hidden sm:inline">
+                      {hasAudioStream ? 'Xem video' : 'Không có audio riêng'}
+                    </span>
+                  </>
+                )}
+              </button>
+            )}
 
-            {playerMode === 'video' && streamData.videoStreams?.length > 1 && (
+            {/* Quality Picker: Only for direct streams */}
+            {!isEmbed && playerMode === 'video' && streamData.videoStreams?.length > 1 && (
               <select
                 value={selectedQuality}
                 onChange={(e) => setSelectedQuality(e.target.value)}
                 className="bg-slate-800 text-slate-200 text-xs px-2.5 py-2 rounded-xl border border-car-border font-medium focus:outline-none"
               >
-                <option value="auto">Auto</option>
+                <option value="auto">Tự động</option>
+                {streamData.hlsUrl && <option value="hls">HLS (Mượt)</option>}
                 <option value="720p">720p HD</option>
                 <option value="480p">480p</option>
-                <option value="360p">360p (Mượt)</option>
+                <option value="360p">360p</option>
               </select>
             )}
+
+            {/* Source Status Pill */}
+            <span className="hidden md:inline-flex items-center text-[10px] font-mono px-2 py-1 rounded bg-slate-800 text-car-textMuted border border-slate-700">
+              {streamData.playbackType === 'direct'
+                ? 'Direct Stream'
+                : streamData.playbackType === 'hls'
+                ? 'HLS Stream'
+                : 'Embed'}
+            </span>
           </div>
 
-          {/* Center: BIG Touch Controls */}
+          {/* Center: Transport Controls */}
           <div className="flex items-center gap-1 sm:gap-2">
+            {/* Prev Track */}
             <button
               onClick={onPrev}
               disabled={!hasPrev}
@@ -352,32 +514,46 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <SkipBack className="w-5 h-5" />
             </button>
 
-            <button
-              onClick={() => handleSeekRelative(-10)}
-              className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition flex items-center justify-center relative"
-              title="Tua lùi 10 giây"
-            >
-              <RotateCcw className="w-5 h-5" />
-              <span className="absolute text-[8px] font-bold bottom-0.5">10</span>
-            </button>
+            {/* Rewind 10s - Only for direct/HLS */}
+            {!isEmbed && (
+              <button
+                onClick={() => handleSeekRelative(-10)}
+                className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition flex items-center justify-center relative"
+                title="Tua lùi 10 giây"
+              >
+                <RotateCcw className="w-5 h-5" />
+                <span className="absolute text-[8px] font-bold bottom-0.5">10</span>
+              </button>
+            )}
 
-            <button
-              onClick={togglePlay}
-              className="w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-car-accent hover:bg-car-accentHover text-white flex items-center justify-center shadow-lg shadow-car-accent/40 active:scale-90 transition mx-1"
-              title={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
-            >
-              {isPlaying ? <Pause className="w-6 h-6 fill-white" /> : <Play className="w-6 h-6 fill-white ml-0.5" />}
-            </button>
+            {/* Play/Pause Button - Only active for direct/HLS */}
+            {!isEmbed ? (
+              <button
+                onClick={togglePlay}
+                className="w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-car-accent hover:bg-car-accentHover text-white flex items-center justify-center shadow-lg shadow-car-accent/40 active:scale-90 transition mx-1"
+                title={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
+              >
+                {isPlaying ? <Pause className="w-6 h-6 fill-white" /> : <Play className="w-6 h-6 fill-white ml-0.5" />}
+              </button>
+            ) : (
+              <div className="text-xs text-car-textMuted px-2 font-medium">
+                (Chạm trên video)
+              </div>
+            )}
 
-            <button
-              onClick={() => handleSeekRelative(10)}
-              className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition flex items-center justify-center relative"
-              title="Tua tới 10 giây"
-            >
-              <RotateCw className="w-5 h-5" />
-              <span className="absolute text-[8px] font-bold bottom-0.5">10</span>
-            </button>
+            {/* Forward 10s - Only for direct/HLS */}
+            {!isEmbed && (
+              <button
+                onClick={() => handleSeekRelative(10)}
+                className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 active:scale-95 transition flex items-center justify-center relative"
+                title="Tua tới 10 giây"
+              >
+                <RotateCw className="w-5 h-5" />
+                <span className="absolute text-[8px] font-bold bottom-0.5">10</span>
+              </button>
+            )}
 
+            {/* Next Track */}
             <button
               onClick={onNext}
               disabled={!hasNext}

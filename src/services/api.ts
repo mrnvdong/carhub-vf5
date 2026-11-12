@@ -1,4 +1,4 @@
-import { VideoItem, StreamData } from '../types';
+import { VideoItem, StreamData, PlaybackType } from '../types';
 
 const PIPED_FALLBACK_INSTANCES = [
   'https://api.piped.private.coffee',
@@ -81,8 +81,24 @@ export async function getVideoDetails(videoId: string): Promise<StreamData | nul
     const res = await fetch(`/api/video?id=${videoId}`);
     if (res.ok) {
       const data = await res.json();
-      if (data.success) {
-        return data as StreamData;
+      if (data.success && data.playbackType && data.playbackType !== 'unplayable') {
+        return {
+          id: videoId,
+          title: data.title || '',
+          uploader: data.uploader || '',
+          uploaderAvatar: data.uploaderAvatar || null,
+          thumbnailUrl: data.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          duration: data.duration || 0,
+          views: data.views || 0,
+          playbackType: data.playbackType as PlaybackType,
+          source: data.source || 'unknown',
+          hlsUrl: data.hlsUrl || null,
+          embedUrl: data.embedUrl || null,
+          videoStreams: data.videoStreams || [],
+          audioStreams: data.audioStreams || [],
+          relatedStreams: data.relatedStreams || [],
+          sponsorSegments: data.sponsorSegments || [],
+        };
       }
     }
   } catch (err) {
@@ -97,47 +113,78 @@ export async function getVideoDetails(videoId: string): Promise<StreamData | nul
       });
       if (res.ok) {
         const data = await res.json();
-        return {
-          title: data.title,
-          uploader: data.uploader,
-          uploaderAvatar: data.uploaderAvatar,
-          thumbnailUrl: data.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-          duration: data.duration,
-          views: data.views,
-          hlsUrl: data.hls,
-          videoStreams: (data.videoStreams || [])
-            .filter((v: any) => v.url && v.format === 'mp4')
-            .map((v: any) => ({
-              url: v.url,
-              quality: v.quality,
-              resolution: v.resolution,
-              mimeType: v.mimeType,
-              fps: v.fps,
+        const videoStreams = (data.videoStreams || [])
+          .filter((v: any) => v.url && v.format === 'mp4')
+          .map((v: any) => ({
+            url: v.url,
+            quality: v.quality,
+            resolution: v.resolution,
+            mimeType: v.mimeType,
+            fps: v.fps,
+          }));
+
+        const audioStreams = (data.audioStreams || [])
+          .filter((a: any) => a.url)
+          .map((a: any) => ({
+            url: a.url,
+            quality: a.quality,
+            mimeType: a.mimeType,
+            bitrate: a.bitrate,
+          }));
+
+        const hlsUrl = data.hls || null;
+        let playbackType: PlaybackType = 'unplayable';
+        if (videoStreams.length > 0 || audioStreams.length > 0) {
+          playbackType = 'direct';
+        } else if (hlsUrl) {
+          playbackType = 'hls';
+        }
+
+        if (playbackType !== 'unplayable') {
+          return {
+            id: videoId,
+            title: data.title,
+            uploader: data.uploader,
+            uploaderAvatar: data.uploaderAvatar,
+            thumbnailUrl: data.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+            duration: data.duration,
+            views: data.views,
+            playbackType,
+            source: 'piped-client-fallback',
+            hlsUrl,
+            embedUrl: null,
+            videoStreams,
+            audioStreams,
+            relatedStreams: (data.relatedStreams || []).slice(0, 15).map((r: any) => ({
+              id: (r.url || '').replace('/watch?v=', '') || r.id,
+              title: r.title,
+              uploaderName: r.uploaderName,
+              thumbnail: r.thumbnail,
+              duration: r.duration,
             })),
-          audioStreams: (data.audioStreams || [])
-            .filter((a: any) => a.url)
-            .map((a: any) => ({
-              url: a.url,
-              quality: a.quality,
-              mimeType: a.mimeType,
-              bitrate: a.bitrate,
-            })),
-          relatedStreams: (data.relatedStreams || []).slice(0, 15).map((r: any) => ({
-            id: (r.url || '').replace('/watch?v=', '') || r.id,
-            title: r.title,
-            uploaderName: r.uploaderName,
-            thumbnail: r.thumbnail,
-            duration: r.duration,
-          })),
-          sponsorSegments: [],
-        };
+            sponsorSegments: [],
+          };
+        }
       }
     } catch {
       continue;
     }
   }
 
-  return null;
+  // 3. Last resort fallback to embed
+  return {
+    id: videoId,
+    title: 'Phát qua YouTube Embed (Dự phòng)',
+    uploader: 'YouTube',
+    thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    duration: 0,
+    playbackType: 'embed',
+    source: 'embed-client-fallback',
+    embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1`,
+    videoStreams: [],
+    audioStreams: [],
+    sponsorSegments: [],
+  };
 }
 
 export function formatSeconds(secs?: number): string {

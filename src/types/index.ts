@@ -9,16 +9,20 @@ export interface VideoItem {
   uploadedDate?: string;
 }
 
+export type PlaybackType = 'direct' | 'hls' | 'embed' | 'unplayable';
+
 export interface StreamData {
+  id: string;
   title: string;
   uploader: string;
   uploaderAvatar?: string | null;
   thumbnailUrl: string;
   duration: number;
   views?: number;
+  playbackType: PlaybackType;
+  source: string;
   hlsUrl?: string | null;
-  embedUrl?: string;
-  source?: string;
+  embedUrl?: string | null;
   videoStreams: Array<{
     url: string;
     quality: string;
