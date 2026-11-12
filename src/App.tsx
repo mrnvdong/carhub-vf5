@@ -5,7 +5,7 @@ import { VideoPlayer } from './components/VideoPlayer';
 import { VideoList } from './components/VideoList';
 import { VideoItem, StreamData } from './types';
 import { searchVideos, getVideoDetails } from './services/api';
-import { AlertTriangle, Car, ShieldCheck } from 'lucide-react';
+import { Car, ShieldCheck } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'explore' | 'history' | 'favorites'>('explore');
@@ -13,7 +13,9 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const [videos, setVideos] = useState<VideoItem[]>([]);
+  const [nextContinuation, setNextContinuation] = useState<string | null>(null);
   const [isLoadingVideos, setIsLoadingVideos] = useState<boolean>(true);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
 
   const [currentVideo, setCurrentVideo] = useState<VideoItem | null>(null);
   const [streamData, setStreamData] = useState<StreamData | null>(null);
@@ -64,12 +66,14 @@ export const App: React.FC = () => {
     setSelectedCategory(catId);
     setActiveTab('explore');
     setIsLoadingVideos(true);
+    setNextContinuation(null);
     try {
-      const results = await searchVideos(query);
-      setVideos(results);
+      const result = await searchVideos(query);
+      setVideos(result.items);
+      setNextContinuation(result.nextContinuation);
       // Auto pick first video if no video is playing yet
-      if (!currentVideo && results.length > 0) {
-        playVideo(results[0]);
+      if (!currentVideo && result.items.length > 0) {
+        playVideo(result.items[0]);
       }
     } catch (err) {
       console.error('Failed to load category', err);
@@ -83,14 +87,52 @@ export const App: React.FC = () => {
     setActiveTab('explore');
     setSelectedCategory('');
     setIsLoadingVideos(true);
+    setNextContinuation(null);
     try {
-      const results = await searchVideos(query);
-      setVideos(results);
+      const result = await searchVideos(query);
+      setVideos(result.items);
+      setNextContinuation(result.nextContinuation);
     } catch (err) {
       console.error('Search failed', err);
     } finally {
       setIsLoadingVideos(false);
     }
+  };
+
+  const handleLoadMore = async () => {
+    if (!nextContinuation || isLoadingMore) return;
+    setIsLoadingMore(true);
+    const activeQuery = selectedCategory
+      ? getCategoryQuery(selectedCategory)
+      : searchQuery || 'nhạc hay trên ô tô';
+
+    try {
+      const result = await searchVideos(activeQuery, nextContinuation);
+      // Filter out duplicate IDs
+      setVideos((prev) => {
+        const existingIds = new Set(prev.map((v) => v.id));
+        const newUnique = result.items.filter((item) => !existingIds.has(item.id));
+        return [...prev, ...newUnique];
+      });
+      setNextContinuation(result.nextContinuation);
+    } catch (err) {
+      console.error('Load more failed', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  const getCategoryQuery = (catId: string) => {
+    const map: Record<string, string> = {
+      remix: 'nhạc trẻ remix bass cực căng lái xe',
+      driving: 'nhạc lái xe đường dài hay nhất',
+      vinahouse: 'vinahouse nonstop căng đét',
+      chill: 'nhạc lofi chill tiếng mưa lái xe',
+      bolero: 'bolero trữ tình hay nhất trên ô tô',
+      podcast: 'hieu tv podcast hay nhất',
+      kids: 'ca nhạc thiếu nhi vui nhộn cho bé',
+    };
+    return map[catId] || 'nhạc hay';
   };
 
   const playVideo = useCallback(
@@ -101,7 +143,7 @@ export const App: React.FC = () => {
       // Add to history
       setHistory((prev) => {
         const filtered = prev.filter((item) => item.id !== video.id);
-        return [video, ...filtered].slice(0, 40);
+        return [video, ...filtered].slice(0, 50);
       });
 
       try {
@@ -135,6 +177,8 @@ export const App: React.FC = () => {
       playVideo(list[currentIndex + 1]);
     } else if (streamData?.relatedStreams && streamData.relatedStreams.length > 0) {
       playVideo(streamData.relatedStreams[0]);
+    } else if (nextContinuation) {
+      handleLoadMore();
     }
   };
 
@@ -159,12 +203,11 @@ export const App: React.FC = () => {
 
   const currentIndex = getCurrentIndex();
   const currentList = activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
-  const hasNext = currentIndex < currentList.length - 1 || (streamData?.relatedStreams?.length ?? 0) > 0;
+  const hasNext = currentIndex < currentList.length - 1 || (streamData?.relatedStreams?.length ?? 0) > 0 || !!nextContinuation;
   const hasPrev = currentIndex > 0;
 
   return (
     <div className="min-h-screen bg-car-bg text-slate-100 flex flex-col pb-16">
-      {/* Top Header with clock & search */}
       <Header
         onSearch={handleSearch}
         activeTab={activeTab}
@@ -173,7 +216,6 @@ export const App: React.FC = () => {
         setSearchQuery={setSearchQuery}
       />
 
-      {/* Safety Notice Banner for In-Car Screens */}
       <div className="bg-amber-500/10 border-b border-amber-500/20 px-3 py-1.5 flex items-center justify-between text-[11px] text-amber-300">
         <div className="flex items-center gap-1.5 mx-auto">
           <Car className="w-3.5 h-3.5 shrink-0" />
@@ -185,7 +227,6 @@ export const App: React.FC = () => {
         </div>
       </div>
 
-      {/* Quick Category Chips for Driver Touch */}
       {activeTab === 'explore' && (
         <CategoryChips
           selectedCategory={selectedCategory}
@@ -193,9 +234,7 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Main Content Area */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-2 sm:px-6 pt-3">
-        {/* Active Player */}
         {streamData && currentVideo && (
           <VideoPlayer
             streamData={streamData}
@@ -209,13 +248,15 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Video Lists based on Active Tab */}
         {activeTab === 'explore' && (
           <VideoList
             videos={videos}
             currentVideoId={currentVideo?.id}
             onSelectVideo={playVideo}
             isLoading={isLoadingVideos}
+            hasMore={!!nextContinuation}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={handleLoadMore}
             title={selectedCategory ? 'Danh sách phát đề xuất' : `Kết quả tìm kiếm cho "${searchQuery}"`}
           />
         )}

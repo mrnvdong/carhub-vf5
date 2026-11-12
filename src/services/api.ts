@@ -1,20 +1,32 @@
 import { VideoItem, StreamData } from '../types';
 
 const PIPED_FALLBACK_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
   'https://api.piped.private.coffee',
-  'https://piped-api.lunar.icu',
-  'https://pipedapi.leptons.xyz',
+  'https://pipedapi.ducks.party',
+  'https://pipedapi.kavin.rocks',
 ];
 
-export async function searchVideos(query: string): Promise<VideoItem[]> {
+export interface SearchResult {
+  items: VideoItem[];
+  nextContinuation: string | null;
+}
+
+export async function searchVideos(query: string, continuation?: string | null): Promise<SearchResult> {
   // 1. Try our Cloudflare Pages API endpoint first
   try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    let url = `/api/search?q=${encodeURIComponent(query)}`;
+    if (continuation) {
+      url += `&continuation=${encodeURIComponent(continuation)}`;
+    }
+
+    const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
       if (data.items && data.items.length > 0) {
-        return data.items;
+        return {
+          items: data.items,
+          nextContinuation: data.nextContinuation || null,
+        };
       }
     }
   } catch (err) {
@@ -24,7 +36,12 @@ export async function searchVideos(query: string): Promise<VideoItem[]> {
   // 2. Client-side fallback to public Piped instances directly
   for (const instance of PIPED_FALLBACK_INSTANCES) {
     try {
-      const res = await fetch(`${instance}/search?q=${encodeURIComponent(query)}&filter=videos`, {
+      let pipedUrl = `${instance}/search?q=${encodeURIComponent(query)}&filter=videos`;
+      if (continuation) {
+        pipedUrl = `${instance}/nextpage/search?nextpage=${encodeURIComponent(continuation)}&q=${encodeURIComponent(query)}&filter=videos`;
+      }
+
+      const res = await fetch(pipedUrl, {
         signal: AbortSignal.timeout(4000),
       });
       if (res.ok) {
@@ -43,14 +60,19 @@ export async function searchVideos(query: string): Promise<VideoItem[]> {
           }))
           .filter((v: VideoItem) => v.id && v.id.length === 11);
 
-        if (items.length > 0) return items;
+        if (items.length > 0) {
+          return {
+            items,
+            nextContinuation: data.nextpage || null,
+          };
+        }
       }
     } catch {
       continue;
     }
   }
 
-  return [];
+  return { items: [], nextContinuation: null };
 }
 
 export async function getVideoDetails(videoId: string): Promise<StreamData | null> {
