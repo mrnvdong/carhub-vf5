@@ -7,7 +7,7 @@ import { SuggestedList } from './components/SuggestedList';
 import { CarSearchModal } from './components/CarSearchModal';
 import { VideoItem, StreamData, PlayerMode, UiScale } from './types';
 import { searchVideos, getVideoDetails } from './services/api';
-import { Car, ShieldCheck, AlertCircle, RefreshCw, SkipForward } from 'lucide-react';
+import { AlertCircle, RefreshCw, SkipForward } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'explore' | 'history' | 'favorites'>('explore');
@@ -313,20 +313,6 @@ export const App: React.FC = () => {
         onChangeUiScale={setUiScale}
         onOpenSearchModal={() => setIsSearchModalOpen(true)}
       />
-
-      {/* Driver Safety Notice Banner */}
-      <div className="bg-slate-900 border-b border-car-border px-4 py-2 flex items-center justify-between text-xs sm:text-sm text-car-textMuted">
-        <div className="flex items-center gap-2 mx-auto text-amber-300 font-bold">
-          <Car className="w-4 h-4 shrink-0" />
-          <span>
-            VinFast VF5 • Bật chế độ <strong>Chỉ nghe nhạc</strong> khi xe đang di chuyển
-          </span>
-        </div>
-        <div className="hidden sm:flex items-center gap-1.5 text-slate-300 font-semibold">
-          <ShieldCheck className="w-4 h-4 text-car-accent" />
-          <span>Chặn quảng cáo (Direct/HLS)</span>
-        </div>
-      </div>
 
       {activeTab === 'explore' && (
         <CategoryChips

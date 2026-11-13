@@ -106,15 +106,14 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </div>
 
-          {/* DEDICATED GIANT VOICE SEARCH BUTTON ("NÓI ĐỂ TÌM") */}
+          {/* Quick Voice Search Mic Button */}
           <button
             type="button"
             onClick={() => onOpenSearchModal(true)}
-            className="h-14 px-4 sm:px-5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-sm sm:text-base flex items-center gap-2 shadow-lg shadow-blue-600/40 border-2 border-blue-400 active:scale-95 transition shrink-0"
-            title="Tìm kiếm bằng giọng nói tiếng Việt"
+            className="w-14 h-14 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white flex items-center justify-center shadow-lg shadow-blue-600/40 border-2 border-blue-400 active:scale-95 transition shrink-0"
+            title="Tìm kiếm bằng giọng nói"
           >
-            <Mic className="w-6 h-6 animate-pulse" />
-            <span className="hidden sm:inline uppercase tracking-wide">NÓI ĐỂ TÌM</span>
+            <Mic className="w-7 h-7 text-white animate-pulse" />
           </button>
         </div>
 
