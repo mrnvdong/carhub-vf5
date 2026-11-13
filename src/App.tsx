@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { CategoryChips } from './components/CategoryChips';
 import { VideoPlayer } from './components/VideoPlayer';
 import { VideoList } from './components/VideoList';
+import { SuggestedList } from './components/SuggestedList';
 import { VideoItem, StreamData, PlayerMode, UiScale } from './types';
 import { searchVideos, getVideoDetails } from './services/api';
 import { Car, ShieldCheck, AlertCircle, RefreshCw, SkipForward } from 'lucide-react';
@@ -246,10 +247,23 @@ export const App: React.FC = () => {
   // Compute zoom style for in-car CarPlay screens
   const zoomFactor = uiScale === 'normal' ? 1.0 : uiScale === 'large' ? 1.2 : 1.38;
 
+  // Active list to display in Suggested Column
+  const activeSuggestedList =
+    activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
+
+  const activeColumnTitle =
+    activeTab === 'favorites'
+      ? 'Danh sách yêu thích'
+      : activeTab === 'history'
+      ? 'Lịch sử vừa nghe'
+      : selectedCategory
+      ? 'Danh sách tiếp theo'
+      : 'Kết quả tìm kiếm';
+
   return (
     <div
       style={{ zoom: zoomFactor }}
-      className="min-h-screen bg-car-bg text-slate-100 flex flex-col pb-20 transition-all duration-200"
+      className="min-h-screen bg-car-bg text-slate-100 flex flex-col pb-16 transition-all duration-200"
     >
       <Header
         onSearch={handleSearch}
@@ -261,7 +275,7 @@ export const App: React.FC = () => {
         onChangeUiScale={setUiScale}
       />
 
-      {/* Driver Safety Notice Banner (Clearer, larger text) */}
+      {/* Driver Safety Notice Banner */}
       <div className="bg-slate-900 border-b border-car-border px-4 py-2 flex items-center justify-between text-xs sm:text-sm text-car-textMuted">
         <div className="flex items-center gap-2 mx-auto text-amber-300 font-bold">
           <Car className="w-4 h-4 shrink-0" />
@@ -282,104 +296,129 @@ export const App: React.FC = () => {
         />
       )}
 
-      <main className="flex-1 max-w-7xl mx-auto w-full px-3 sm:px-6 pt-3">
-        {/* Loading state when switching video */}
-        {isLoadingStream && currentVideo && (
-          <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-car-border flex flex-col items-center justify-center gap-4 mb-6 p-6 text-center shadow-2xl">
-            <div className="w-12 h-12 border-4 border-car-accent border-t-transparent rounded-full animate-spin"></div>
-            <div className="max-w-md">
-              <p className="text-base sm:text-xl font-bold text-white line-clamp-1">
-                {currentVideo.title}
-              </p>
-              <p className="text-sm text-slate-300 font-semibold mt-1">
-                Đang chuẩn bị luồng phát mới...
-              </p>
-            </div>
-          </div>
-        )}
+      {/* Main Container */}
+      <main className="flex-1 max-w-[1600px] mx-auto w-full px-3 sm:px-6 pt-2">
+        {/* YOUTUBE SPLIT LAYOUT: Left is Player (60-65%), Right is Suggested Playlist (35-40%) */}
+        {currentVideo ? (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            {/* LEFT COLUMN: Player & Car Controls (lg:col-span-7 xl:col-span-8) */}
+            <div className="lg:col-span-7 xl:col-span-8 space-y-4">
+              {/* Loading state when switching video */}
+              {isLoadingStream && (
+                <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-car-border flex flex-col items-center justify-center gap-4 p-6 text-center shadow-2xl">
+                  <div className="w-12 h-12 border-4 border-car-accent border-t-transparent rounded-full animate-spin"></div>
+                  <div className="max-w-md">
+                    <p className="text-base sm:text-xl font-bold text-white line-clamp-1">
+                      {currentVideo.title}
+                    </p>
+                    <p className="text-sm text-slate-300 font-semibold mt-1">
+                      Đang chuẩn bị luồng phát mới...
+                    </p>
+                  </div>
+                </div>
+              )}
 
-        {/* Error state if video is unplayable or stream extraction failed */}
-        {streamErrorMessage && currentVideo && !isLoadingStream && (
-          <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-rose-500/40 p-6 flex flex-col items-center justify-center text-center gap-4 mb-6 shadow-2xl">
-            <AlertCircle className="w-14 h-14 text-rose-500" />
-            <div className="max-w-md">
-              <h4 className="text-base sm:text-xl font-bold text-white line-clamp-1">
-                {currentVideo.title}
-              </h4>
-              <p className="text-sm text-rose-300 font-semibold mt-1">{streamErrorMessage}</p>
-            </div>
-            <div className="flex flex-wrap items-center justify-center gap-3 mt-3">
-              <button
-                onClick={() => playVideo(currentVideo, true)}
-                className="h-13 px-5 bg-slate-800 hover:bg-slate-700 text-sm sm:text-base font-bold rounded-2xl text-white border-2 border-car-border flex items-center gap-2 active:scale-95"
-              >
-                <RefreshCw className="w-5 h-5" />
-                <span>Thử tải lại</span>
-              </button>
-              {hasNext && (
-                <button
-                  onClick={handleNext}
-                  className="h-13 px-5 bg-car-accent hover:bg-car-accentHover text-sm sm:text-base font-bold rounded-2xl text-white flex items-center gap-2 active:scale-95"
-                >
-                  <SkipForward className="w-5 h-5" />
-                  <span>Bài tiếp theo</span>
-                </button>
+              {/* Error state if video failed */}
+              {streamErrorMessage && !isLoadingStream && (
+                <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-rose-500/40 p-6 flex flex-col items-center justify-center text-center gap-4 shadow-2xl">
+                  <AlertCircle className="w-14 h-14 text-rose-500" />
+                  <div className="max-w-md">
+                    <h4 className="text-base sm:text-xl font-bold text-white line-clamp-1">
+                      {currentVideo.title}
+                    </h4>
+                    <p className="text-sm text-rose-300 font-semibold mt-1">
+                      {streamErrorMessage}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-3 mt-3">
+                    <button
+                      onClick={() => playVideo(currentVideo, true)}
+                      className="h-13 px-5 bg-slate-800 hover:bg-slate-700 text-sm sm:text-base font-bold rounded-2xl text-white border-2 border-car-border flex items-center gap-2 active:scale-95"
+                    >
+                      <RefreshCw className="w-5 h-5" />
+                      <span>Thử tải lại</span>
+                    </button>
+                    {hasNext && (
+                      <button
+                        onClick={handleNext}
+                        className="h-13 px-5 bg-car-accent hover:bg-car-accentHover text-sm sm:text-base font-bold rounded-2xl text-white flex items-center gap-2 active:scale-95"
+                      >
+                        <SkipForward className="w-5 h-5" />
+                        <span>Bài tiếp theo</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Active Player */}
+              {streamData && !isLoadingStream && !streamErrorMessage && (
+                <VideoPlayer
+                  key={streamData.id}
+                  streamData={streamData}
+                  isLoading={isLoadingStream}
+                  playerMode={playerMode}
+                  onPlayerModeChange={setPlayerMode}
+                  onNext={handleNext}
+                  onPrev={handlePrev}
+                  onRetry={() => playVideo(currentVideo, true)}
+                  hasNext={hasNext}
+                  hasPrev={hasPrev}
+                  isFavorite={isFavorite}
+                  onToggleFavorite={toggleFavorite}
+                />
               )}
             </div>
+
+            {/* RIGHT COLUMN: YouTube Suggested Playlist Column (lg:col-span-5 xl:col-span-4) */}
+            <div className="lg:col-span-5 xl:col-span-4 min-h-0 sticky top-24">
+              <SuggestedList
+                videos={activeSuggestedList}
+                currentVideoId={currentVideo?.id}
+                onSelectVideo={(v) => playVideo(v)}
+                isLoading={isLoadingVideos}
+                hasMore={Boolean(nextContinuation)}
+                isLoadingMore={isLoadingMore}
+                onLoadMore={handleLoadMore}
+                title={activeColumnTitle}
+              />
+            </div>
           </div>
-        )}
+        ) : (
+          /* When NO video is selected yet: Full-width Grid */
+          <div>
+            {activeTab === 'explore' && (
+              <VideoList
+                videos={videos}
+                onSelectVideo={(v) => playVideo(v)}
+                isLoading={isLoadingVideos}
+                hasMore={Boolean(nextContinuation)}
+                isLoadingMore={isLoadingMore}
+                onLoadMore={handleLoadMore}
+                title={
+                  selectedCategory
+                    ? 'Danh sách phát đề xuất'
+                    : `Kết quả tìm kiếm cho "${searchQuery}"`
+                }
+              />
+            )}
 
-        {/* Active Player */}
-        {streamData && currentVideo && !isLoadingStream && !streamErrorMessage && (
-          <VideoPlayer
-            key={streamData.id}
-            streamData={streamData}
-            isLoading={isLoadingStream}
-            playerMode={playerMode}
-            onPlayerModeChange={setPlayerMode}
-            onNext={handleNext}
-            onPrev={handlePrev}
-            onRetry={() => playVideo(currentVideo, true)}
-            hasNext={hasNext}
-            hasPrev={hasPrev}
-            isFavorite={isFavorite}
-            onToggleFavorite={toggleFavorite}
-          />
-        )}
+            {activeTab === 'history' && (
+              <VideoList
+                videos={history}
+                onSelectVideo={(v) => playVideo(v)}
+                title="Lịch sử bài hát vừa nghe trên xe"
+              />
+            )}
 
-        {activeTab === 'explore' && (
-          <VideoList
-            videos={videos}
-            currentVideoId={currentVideo?.id}
-            onSelectVideo={(v) => playVideo(v)}
-            isLoading={isLoadingVideos}
-            hasMore={Boolean(nextContinuation)}
-            isLoadingMore={isLoadingMore}
-            onLoadMore={handleLoadMore}
-            title={
-              selectedCategory
-                ? 'Danh sách phát đề xuất'
-                : `Kết quả tìm kiếm cho "${searchQuery}"`
-            }
-          />
-        )}
-
-        {activeTab === 'history' && (
-          <VideoList
-            videos={history}
-            currentVideoId={currentVideo?.id}
-            onSelectVideo={(v) => playVideo(v)}
-            title="Lịch sử bài hát vừa nghe trên xe"
-          />
-        )}
-
-        {activeTab === 'favorites' && (
-          <VideoList
-            videos={favorites}
-            currentVideoId={currentVideo?.id}
-            onSelectVideo={(v) => playVideo(v)}
-            title="Danh sách bài hát yêu thích"
-          />
+            {activeTab === 'favorites' && (
+              <VideoList
+                videos={favorites}
+                onSelectVideo={(v) => playVideo(v)}
+                title="Danh sách bài hát yêu thích"
+              />
+            )}
+          </div>
         )}
       </main>
     </div>
