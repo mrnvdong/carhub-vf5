@@ -24,7 +24,7 @@ import {
   Server,
   Layers,
 } from 'lucide-react';
-import { StreamData, PlayerMode } from '../types';
+import { StreamData, PlayerMode, ActiveSource } from '../types';
 import { formatSeconds } from '../services/api';
 
 interface VideoPlayerProps {
@@ -58,6 +58,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const syncAudioRef = useRef<HTMLAudioElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const prevTimeRef = useRef<number>(0);
 
@@ -68,23 +69,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [sponsorSkippedNotice, setSponsorSkippedNotice] = useState<string | null>(null);
   const [modeNotice, setModeNotice] = useState<string | null>(null);
-
-  const initialQuality = (streamData.videoStreams || [])[0]?.quality || '1080p';
-  const [selectedQuality, setSelectedQuality] = useState<string>(initialQuality);
-  const [useProxy, setUseProxy] = useState<boolean>(false);
-  const [forceEmbed, setForceEmbed] = useState<boolean>(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   const hasAudioStream = (streamData.audioStreams?.length ?? 0) > 0;
   const hasDirectVideo = (streamData.videoStreams?.length ?? 0) > 0;
   const hasHls = Boolean(streamData.hlsUrl);
-  const isEmbed = streamData.playbackType === 'embed' || forceEmbed;
-  const isHlsActive =
-    !isEmbed &&
-    playerMode === 'video' &&
-    (streamData.playbackType === 'hls' ||
-      selectedQuality === 'hls' ||
-      (!hasDirectVideo && hasHls));
+
+  const initialQuality = (streamData.videoStreams || [])[0]?.quality || '1080p';
+  const [selectedQuality, setSelectedQuality] = useState<string>(initialQuality);
+
+  // Determine starting source: checks localStorage preference first, then heuristic
+  const determineInitialSource = (): ActiveSource => {
+    try {
+      const pref = localStorage.getItem('carhub_source_pref') as ActiveSource | null;
+      if (pref === 'embed') return 'embed';
+      if (pref === 'direct' && hasDirectVideo) return 'direct';
+      if (pref === 'proxy' && hasDirectVideo) return 'proxy';
+      if (pref === 'hls' && hasHls) return 'hls';
+    } catch {}
+
+    if (streamData.playbackType === 'direct' && hasDirectVideo) {
+      return 'direct';
+    }
+    if (hasHls) {
+      return 'hls';
+    }
+    return 'embed';
+  };
+
+  const [activeSource, setActiveSource] = useState<ActiveSource>(determineInitialSource);
+
+  const isEmbed = activeSource === 'embed';
+  const useProxy = activeSource === 'proxy';
+  const isHlsActive = activeSource === 'hls';
 
   const activeVideoStream =
     hasDirectVideo && !isHlsActive && !isEmbed
@@ -119,14 +136,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Reset states when video ID changes
   useEffect(() => {
     setPlaybackError(null);
-    setUseProxy(false);
-    setForceEmbed(false);
     setCurrentTime(0);
     setDuration(streamData.duration || 0);
-    setIsBuffering(!isEmbed);
+    setIsBuffering(true);
     setIsPlaying(false);
+    setActiveSource(determineInitialSource());
     setSelectedQuality((streamData.videoStreams || [])[0]?.quality || '1080p');
-  }, [streamData.id, streamData.duration, isEmbed]);
+  }, [streamData.id, streamData.duration]);
+
+  // Handle explicit manual source switching from in-car UI
+  const handleSelectSource = (src: ActiveSource) => {
+    setPlaybackError(null);
+    setActiveSource(src);
+    try {
+      localStorage.setItem('carhub_source_pref', src);
+    } catch {}
+
+    if (src === 'embed') {
+      setModeNotice('Đã chuyển sang YouTube Embed (100% Ổn định)');
+    } else if (src === 'direct') {
+      setModeNotice('Đã chuyển sang Direct MP4 (Full HD & Chặn quảng cáo)');
+    } else if (src === 'proxy') {
+      setModeNotice('Đã chuyển sang Cloudflare Edge Proxy (Chống chặn 4G)');
+    } else if (src === 'hls') {
+      setModeNotice('Đã chuyển sang HLS Stream (Tự thích ứng)');
+    }
+    setTimeout(() => setModeNotice(null), 3500);
+  };
 
   // Synchronized Audio Attachment for dual-element 1080p/720p Direct Video
   useEffect(() => {
@@ -204,7 +240,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
 
     if (!finalStreamUrl) {
-      setPlaybackError('Không tìm thấy URL phát video hợp lệ');
+      handleMediaError('no-stream-url');
       return;
     }
 
@@ -231,7 +267,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
               hls.recoverMediaError();
             } else {
-              handleMediaError('hls');
+              handleMediaError('hls-network-error');
             }
           }
         });
@@ -278,35 +314,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const reason = typeof reasonOrEvent === 'string' ? reasonOrEvent : 'media-event-error';
     console.warn(`[Auto-Heal] Stream failed (${reason}). Initiating fallback...`);
 
-    // Level 1: If Direct MP4 failed, try Cloudflare Edge Proxy
-    if (!useProxy && rawStreamUrl && rawStreamUrl.includes('googlevideo.com')) {
+    // Level 1: If in Direct mode, try Edge Proxy
+    if (activeSource === 'direct' && hasDirectVideo) {
       setModeNotice('Direct MP4 bị hạn chế mạng — Đang tự động đổi sang Edge Proxy...');
       setTimeout(() => setModeNotice(null), 3000);
-      setUseProxy(true);
+      setActiveSource('proxy');
       setPlaybackError(null);
       return;
     }
 
-    // Level 2: If Edge Proxy failed and HLS is available, try HLS
-    if (!isHlsActive && hasHls && streamData.hlsUrl) {
-      setModeNotice('Edge Proxy lỗi — Đang tự động chuyển sang HLS Stream...');
+    // Level 2: If in Proxy mode and HLS available, try HLS
+    if ((activeSource === 'proxy' || activeSource === 'direct') && hasHls) {
+      setModeNotice('Đang tự động chuyển sang HLS Stream...');
       setTimeout(() => setModeNotice(null), 3000);
-      setUseProxy(false);
-      setSelectedQuality('hls');
+      setActiveSource('hls');
       setPlaybackError(null);
       return;
     }
 
-    // Level 3: Seamlessly fallback to YouTube Embed without stopping or showing error
-    if (streamData.embedUrl && !forceEmbed) {
-      setModeNotice('Tự động chuyển sang YouTube Embed để nhạc trên xe không bị ngắt');
+    // Level 3: Seamlessly fallback to YouTube Embed without stopping
+    if (streamData.embedUrl && activeSource !== 'embed') {
+      setModeNotice('Luồng MP4 bị YouTube chặn IP (403) — Tự động chuyển YouTube Embed');
       setTimeout(() => setModeNotice(null), 4000);
-      setForceEmbed(true);
+      setActiveSource('embed');
       setPlaybackError(null);
       return;
     }
 
-    // Level 4: Final fallback only if everything is exhausted
+    // Level 4: Only show error if even embed is impossible
     setIsPlaying(false);
     setIsBuffering(false);
     setPlaybackError('Không thể phát video này trên mọi nguồn.');
@@ -326,56 +361,77 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => clearTimeout(timer);
   }, [isBuffering, isPlaying, isEmbed, playbackError, finalStreamUrl]);
 
-  // MediaSession API for CarPlay & VinFast VF5 Steering Wheel Controls
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
-
-    if (isEmbed) {
-      navigator.mediaSession.playbackState = 'none';
-      navigator.mediaSession.setActionHandler('play', null);
-      navigator.mediaSession.setActionHandler('pause', null);
-      navigator.mediaSession.setActionHandler('seekbackward', null);
-      navigator.mediaSession.setActionHandler('seekforward', null);
-      navigator.mediaSession.setActionHandler('nexttrack', onNext || null);
-      navigator.mediaSession.setActionHandler('previoustrack', onPrev || null);
-      return;
+  // PostMessage helper to control YouTube Iframe API
+  const postEmbedCommand = (command: string, args: any[] = []) => {
+    const iframe = iframeRef.current;
+    if (!iframe || !iframe.contentWindow) return;
+    try {
+      iframe.contentWindow.postMessage(
+        JSON.stringify({
+          event: 'command',
+          func: command,
+          args: args,
+        }),
+        '*'
+      );
+    } catch (e) {
+      console.warn('postEmbedCommand error:', e);
     }
+  };
 
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: streamData.title,
-      artist: streamData.uploader,
-      album: 'CarHub VinFast VF5',
-      artwork: [
-        { src: streamData.thumbnailUrl, sizes: '512x512', type: 'image/jpeg' },
-      ],
-    });
+  // Listen to YouTube Iframe API state & time updates
+  useEffect(() => {
+    if (!isEmbed) return;
 
-    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-
-    navigator.mediaSession.setActionHandler('play', () => {
-      const el = playerMode === 'audio' ? audioRef.current : videoRef.current;
-      el?.play().catch(console.error);
-      if (isAudioSyncNeeded && syncAudioRef.current && videoRef.current) {
-        syncAudioRef.current.currentTime = videoRef.current.currentTime;
-        syncAudioRef.current.play().catch(console.warn);
+    const handleWindowMessage = (e: MessageEvent) => {
+      try {
+        const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+        if (data?.event === 'infoDelivery' && data?.info) {
+          if (typeof data.info.currentTime === 'number') {
+            setCurrentTime(data.info.currentTime);
+          }
+          if (typeof data.info.duration === 'number' && data.info.duration > 0) {
+            setDuration(data.info.duration);
+          }
+          if (typeof data.info.playerState === 'number') {
+            const state = data.info.playerState;
+            if (state === 1) {
+              // Playing
+              setIsPlaying(true);
+              setIsBuffering(false);
+            } else if (state === 2) {
+              // Paused
+              setIsPlaying(false);
+              setIsBuffering(false);
+            } else if (state === 3) {
+              // Buffering
+              setIsBuffering(true);
+            } else if (state === 0) {
+              // Ended
+              setIsPlaying(false);
+              if (onNext) onNext();
+            }
+          }
+        }
+      } catch {
+        // Ignore unparseable messages
       }
-    });
-    navigator.mediaSession.setActionHandler('pause', () => {
-      const el = playerMode === 'audio' ? audioRef.current : videoRef.current;
-      el?.pause();
-      if (isAudioSyncNeeded && syncAudioRef.current) {
-        syncAudioRef.current.pause();
-      }
-    });
-    navigator.mediaSession.setActionHandler('seekbackward', () => {
-      handleSeekRelative(-10);
-    });
-    navigator.mediaSession.setActionHandler('seekforward', () => {
-      handleSeekRelative(10);
-    });
-    navigator.mediaSession.setActionHandler('nexttrack', onNext || null);
-    navigator.mediaSession.setActionHandler('previoustrack', onPrev || null);
-  }, [streamData, onNext, onPrev, isEmbed, playerMode, isPlaying, isAudioSyncNeeded]);
+    };
+
+    window.addEventListener('message', handleWindowMessage);
+    return () => window.removeEventListener('message', handleWindowMessage);
+  }, [isEmbed, onNext]);
+
+  const handleIframeLoad = () => {
+    setIsBuffering(false);
+    setIsPlaying(true);
+    const iframe = iframeRef.current;
+    if (iframe && iframe.contentWindow) {
+      try {
+        iframe.contentWindow.postMessage(JSON.stringify({ event: 'listening' }), '*');
+      } catch {}
+    }
+  };
 
   const getActiveMediaElement = () => {
     if (isEmbed) return null;
@@ -383,8 +439,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const togglePlay = () => {
+    if (playbackError) return;
+
+    if (isEmbed) {
+      if (isPlaying) {
+        postEmbedCommand('pauseVideo');
+        setIsPlaying(false);
+      } else {
+        postEmbedCommand('playVideo');
+        setIsPlaying(true);
+      }
+      return;
+    }
+
     const el = getActiveMediaElement();
-    if (!el || playbackError) return;
+    if (!el) return;
     if (el.paused) {
       el.play().catch((err) => console.warn('Play failed:', err));
       if (isAudioSyncNeeded && syncAudioRef.current) {
@@ -400,8 +469,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const handleSeekRelative = (seconds: number) => {
+    if (playbackError) return;
+
+    if (isEmbed) {
+      const maxDur = duration || 100;
+      const newTime = Math.max(0, Math.min(currentTime + seconds, maxDur));
+      setCurrentTime(newTime);
+      postEmbedCommand('seekTo', [newTime, true]);
+      return;
+    }
+
     const el = getActiveMediaElement();
-    if (!el || playbackError) return;
+    if (!el) return;
     const maxDur = el.duration || duration || 0;
     const newTime = Math.max(0, Math.min(el.currentTime + seconds, maxDur));
     el.currentTime = newTime;
@@ -417,7 +496,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const curr = el.currentTime;
     setCurrentTime(curr);
 
-    // Sync audio drift check (keep sync within 250ms)
+    // Sync audio drift check (keep within 250ms)
     if (isAudioSyncNeeded && syncAudioRef.current && !el.paused) {
       const drift = Math.abs(syncAudioRef.current.currentTime - curr);
       if (drift > 0.25) {
@@ -447,6 +526,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setCurrentTime(val);
+
+    if (isEmbed) {
+      postEmbedCommand('seekTo', [val, true]);
+      return;
+    }
+
     const el = getActiveMediaElement();
     if (el) {
       el.currentTime = val;
@@ -455,6 +540,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       syncAudioRef.current.currentTime = val;
     }
   };
+
+  // MediaSession API for CarPlay & VinFast VF5 Steering Wheel Controls
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: streamData.title,
+      artist: streamData.uploader,
+      album: 'CarHub VinFast VF5',
+      artwork: [
+        { src: streamData.thumbnailUrl, sizes: '512x512', type: 'image/jpeg' },
+      ],
+    });
+
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+    navigator.mediaSession.setActionHandler('play', () => {
+      togglePlay();
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      togglePlay();
+    });
+    navigator.mediaSession.setActionHandler('seekbackward', () => {
+      handleSeekRelative(-10);
+    });
+    navigator.mediaSession.setActionHandler('seekforward', () => {
+      handleSeekRelative(10);
+    });
+    navigator.mediaSession.setActionHandler('nexttrack', onNext || null);
+    navigator.mediaSession.setActionHandler('previoustrack', onPrev || null);
+  }, [streamData, onNext, onPrev, isPlaying, isEmbed, isAudioSyncNeeded]);
 
   const handleQualityChange = (q: string) => {
     if (videoRef.current && videoRef.current.currentTime > 0) {
@@ -478,6 +594,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     new Set((streamData.videoStreams || []).map((v) => v.quality))
   );
 
+  const embedOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const embedIframeUrl = `https://www.youtube-nocookie.com/embed/${streamData.id}?enablejsapi=1&autoplay=1&playsinline=1&modestbranding=1&rel=0&iv_load_policy=3&origin=${encodeURIComponent(embedOrigin)}`;
+
   return (
     <div
       ref={containerRef}
@@ -496,12 +615,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
 
         {/* Playback Error Overlay */}
-        {playbackError && !isEmbed && (
+        {playbackError && (
           <div className="absolute inset-0 z-30 bg-black/95 flex flex-col items-center justify-center p-6 text-center gap-4">
             <AlertCircle className="w-14 h-14 text-rose-500" />
-            <h4 className="text-lg sm:text-xl font-bold text-white">Không thể phát luồng trực tiếp</h4>
+            <h4 className="text-lg sm:text-xl font-bold text-white">Không thể phát luồng này</h4>
             <p className="text-sm text-car-textMuted max-w-md">{playbackError}</p>
             <div className="flex flex-wrap items-center justify-center gap-3 mt-3">
+              {streamData.embedUrl && (
+                <button
+                  onClick={() => handleSelectSource('embed')}
+                  className="h-13 px-5 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl text-sm sm:text-base font-bold flex items-center gap-2 active:scale-95"
+                >
+                  <Tv className="w-5 h-5" />
+                  <span>Phát qua YouTube Embed (100% OK)</span>
+                </button>
+              )}
               {onRetry && (
                 <button
                   onClick={() => {
@@ -511,19 +639,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   className="h-13 px-5 bg-car-card hover:bg-slate-800 border-2 border-car-border text-white rounded-2xl text-sm sm:text-base font-bold flex items-center gap-2 active:scale-95"
                 >
                   <RefreshCw className="w-5 h-5" />
-                  <span>Tải lại luồng mới</span>
-                </button>
-              )}
-              {streamData.embedUrl && (
-                <button
-                  onClick={() => {
-                    setPlaybackError(null);
-                    setForceEmbed(true);
-                  }}
-                  className="h-13 px-5 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl text-sm sm:text-base font-bold flex items-center gap-2 active:scale-95"
-                >
-                  <ExternalLink className="w-5 h-5" />
-                  <span>Phát qua YouTube Embed</span>
+                  <span>Tải lại</span>
                 </button>
               )}
               {hasNext && onNext && (
@@ -541,13 +657,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         {/* SponsorBlock & Mode Toast Notices */}
         {(sponsorSkippedNotice || modeNotice) && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-car-accent/95 text-white px-5 py-2 rounded-full text-sm sm:text-base font-bold flex items-center gap-2 shadow-xl backdrop-blur">
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-car-accent/95 text-white px-5 py-2.5 rounded-full text-sm sm:text-base font-bold flex items-center gap-2 shadow-xl backdrop-blur">
             <ShieldCheck className="w-5 h-5 text-emerald-300 shrink-0" />
             <span>{sponsorSkippedNotice || modeNotice}</span>
           </div>
         )}
 
-        {/* Mode 1: Video with Direct / HLS Stream */}
+        {/* Mode 1: Video with Direct / HLS / Proxy Stream */}
         {!isEmbed && playerMode === 'video' && (
           <>
             <video
@@ -631,19 +747,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </>
         )}
 
-        {/* Mode 2: YouTube Embed Fallback */}
+        {/* Mode 2: YouTube Embed with Full Automotive JS API */}
         {isEmbed && streamData.embedUrl && (
           <div className="relative w-full h-full flex flex-col">
             <iframe
-              src={streamData.embedUrl}
+              ref={iframeRef}
+              src={embedIframeUrl}
               title={streamData.title}
               className="w-full h-full border-0"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               allowFullScreen
+              onLoad={handleIframeLoad}
             />
             <div className="absolute top-3 left-3 z-10 bg-amber-500/95 text-black px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-md">
               <ExternalLink className="w-4 h-4" />
-              <span>Nguồn: YouTube Embed (Dự phòng)</span>
+              <span>Nguồn: YouTube Embed (100% Ổn định)</span>
             </div>
           </div>
         )}
@@ -737,64 +855,68 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {!isEmbed && playerMode === 'video' && (
-              <span className="shrink-0 text-xs sm:text-sm font-extrabold px-3 py-1.5 rounded-xl border-2 bg-blue-500/20 text-blue-300 border-blue-500/50 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
-                {isHlsActive
+            {playerMode === 'video' && (
+              <span
+                className={`shrink-0 text-xs sm:text-sm font-extrabold px-3 py-1.5 rounded-xl border-2 flex items-center gap-1.5 ${
+                  activeSource === 'embed'
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                    : activeSource === 'hls'
+                    ? 'bg-purple-500/20 text-purple-300 border-purple-500/50'
+                    : 'bg-blue-500/20 text-blue-300 border-blue-500/50'
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full bg-current animate-pulse"></span>
+                {activeSource === 'embed'
+                  ? 'YouTube Embed'
+                  : activeSource === 'hls'
                   ? '1080p HLS'
-                  : activeVideoStream?.quality?.includes('1080')
-                  ? '1080p Full HD'
-                  : activeVideoStream?.quality?.includes('720')
-                  ? '720p HD'
-                  : `${activeVideoStream?.quality || '1080p'}`}
+                  : `${activeVideoStream?.quality || '1080p'} Full HD`}
               </span>
             )}
             <span
               className={`shrink-0 text-xs sm:text-sm font-bold px-3 py-1.5 rounded-xl border-2 ${
-                isEmbed
+                activeSource === 'embed'
                   ? 'bg-amber-500/10 text-amber-300 border-amber-500/40'
-                  : isHlsActive
+                  : playerMode === 'audio'
+                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40'
+                  : activeSource === 'hls'
                   ? 'bg-purple-500/10 text-purple-300 border-purple-500/40'
-                  : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40'
+                  : activeSource === 'proxy'
+                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40'
+                  : 'bg-blue-500/10 text-blue-300 border-blue-500/40'
               }`}
             >
-              {isEmbed
-                ? 'YouTube Embed'
+              {activeSource === 'embed'
+                ? '100% Ổn định'
                 : playerMode === 'audio'
                 ? 'Chỉ nghe nhạc'
-                : isHlsActive
+                : activeSource === 'hls'
                 ? 'HLS Stream'
+                : activeSource === 'proxy'
+                ? 'Edge Proxy'
                 : 'Direct MP4'}
             </span>
           </div>
         </div>
 
-        {/* Thick Progress Scrub Bar with Large Touch Thumb */}
-        {!isEmbed && (
-          <div className="flex items-center gap-3 sm:gap-4 mb-3">
-            <span className="text-sm sm:text-base font-mono font-bold text-slate-200 shrink-0 min-w-[50px]">
-              {formatSeconds(currentTime)}
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              value={currentTime}
-              disabled={Boolean(playbackError)}
-              onChange={handleSeekChange}
-              className="w-full cursor-pointer"
-            />
-            <span className="text-sm sm:text-base font-mono font-bold text-slate-200 shrink-0 min-w-[50px] text-right">
-              {formatSeconds(duration)}
-            </span>
-          </div>
-        )}
-
-        {isEmbed && (
-          <div className="text-xs sm:text-sm text-amber-300 bg-amber-500/15 px-4 py-2.5 rounded-xl border border-amber-500/30 mb-3 font-semibold">
-            ⚠️ Nguồn dự phòng YouTube Embed: Chạm trực tiếp vào khung video ở trên để Play/Pause và tua.
-          </div>
-        )}
+        {/* Thick Progress Scrub Bar with Large Touch Thumb - ALWAYS INTERACTIVE ON BOTH EMBED & DIRECT */}
+        <div className="flex items-center gap-3 sm:gap-4 mb-3">
+          <span className="text-sm sm:text-base font-mono font-bold text-slate-200 shrink-0 min-w-[50px]">
+            {formatSeconds(currentTime)}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={duration || 100}
+            value={currentTime}
+            disabled={Boolean(playbackError)}
+            onChange={handleSeekChange}
+            className="w-full cursor-pointer"
+          />
+          <span className="text-sm sm:text-base font-mono font-bold text-slate-200 shrink-0 min-w-[50px] text-right">
+            {formatSeconds(duration)}
+          </span>
+        </div>
 
         {/* Giant In-Car Transport Controls */}
         <div className="flex items-center justify-between gap-3 pt-1">
@@ -866,7 +988,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </div>
 
-          {/* Center: MASSIVE Automotive Transport Controls */}
+          {/* Center: MASSIVE Automotive Transport Controls (Always active for BOTH Embed & Direct) */}
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Prev Track (Big touch) */}
             <button
@@ -878,57 +1000,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <SkipBack className="w-6 h-6 sm:w-7 sm:h-7" />
             </button>
 
-            {/* Rewind 10s (Big touch with clear 10s text) */}
-            {!isEmbed && (
-              <button
-                onClick={() => handleSeekRelative(-10)}
-                disabled={Boolean(playbackError)}
-                className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-100 flex flex-col items-center justify-center border-2 border-slate-700 disabled:opacity-30 active:scale-95 transition shadow-sm relative"
-                title="Tua lùi 10 giây"
-              >
-                <RotateCcw className="w-6 h-6 sm:w-7 sm:h-7 text-car-accent" />
-                <span className="text-[10px] sm:text-xs font-extrabold text-slate-200 mt-0.5 leading-none">
-                  -10s
-                </span>
-              </button>
-            )}
+            {/* Rewind 10s */}
+            <button
+              onClick={() => handleSeekRelative(-10)}
+              disabled={Boolean(playbackError)}
+              className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-100 flex flex-col items-center justify-center border-2 border-slate-700 disabled:opacity-30 active:scale-95 transition shadow-sm relative"
+              title="Tua lùi 10 giây"
+            >
+              <RotateCcw className="w-6 h-6 sm:w-7 sm:h-7 text-car-accent" />
+              <span className="text-[10px] sm:text-xs font-extrabold text-slate-200 mt-0.5 leading-none">
+                -10s
+              </span>
+            </button>
 
             {/* Giant Central Play/Pause Button (80px - 88px) */}
-            {!isEmbed ? (
-              <button
-                onClick={togglePlay}
-                disabled={Boolean(playbackError)}
-                className="w-18 h-18 sm:w-22 sm:h-22 rounded-full bg-car-accent hover:bg-car-accentHover disabled:opacity-40 text-white flex items-center justify-center shadow-xl shadow-car-accent/50 active:scale-90 transition mx-1 border-4 border-blue-400"
-                title={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
-              >
-                {isBuffering ? (
-                  <Loader2 className="w-8 h-8 sm:w-10 sm:h-10 animate-spin" />
-                ) : isPlaying ? (
-                  <Pause className="w-8 h-8 sm:w-10 sm:h-10 fill-white" />
-                ) : (
-                  <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-white ml-1" />
-                )}
-              </button>
-            ) : (
-              <div className="text-sm text-slate-300 font-bold px-3">
-                (Chạm video để Play)
-              </div>
-            )}
+            <button
+              onClick={togglePlay}
+              disabled={Boolean(playbackError)}
+              className="w-18 h-18 sm:w-22 sm:h-22 rounded-full bg-car-accent hover:bg-car-accentHover disabled:opacity-40 text-white flex items-center justify-center shadow-xl shadow-car-accent/50 active:scale-90 transition mx-1 border-4 border-blue-400"
+              title={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
+            >
+              {isBuffering ? (
+                <Loader2 className="w-8 h-8 sm:w-10 sm:h-10 animate-spin" />
+              ) : isPlaying ? (
+                <Pause className="w-8 h-8 sm:w-10 sm:h-10 fill-white" />
+              ) : (
+                <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-white ml-1" />
+              )}
+            </button>
 
-            {/* Forward 10s (Big touch with clear 10s text) */}
-            {!isEmbed && (
-              <button
-                onClick={() => handleSeekRelative(10)}
-                disabled={Boolean(playbackError)}
-                className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-100 flex flex-col items-center justify-center border-2 border-slate-700 disabled:opacity-30 active:scale-95 transition shadow-sm relative"
-                title="Tua tới 10 giây"
-              >
-                <RotateCw className="w-6 h-6 sm:w-7 sm:h-7 text-car-accent" />
-                <span className="text-[10px] sm:text-xs font-extrabold text-slate-200 mt-0.5 leading-none">
-                  +10s
-                </span>
-              </button>
-            )}
+            {/* Forward 10s */}
+            <button
+              onClick={() => handleSeekRelative(10)}
+              disabled={Boolean(playbackError)}
+              className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-100 flex flex-col items-center justify-center border-2 border-slate-700 disabled:opacity-30 active:scale-95 transition shadow-sm relative"
+              title="Tua tới 10 giây"
+            >
+              <RotateCw className="w-6 h-6 sm:w-7 sm:h-7 text-car-accent" />
+              <span className="text-[10px] sm:text-xs font-extrabold text-slate-200 mt-0.5 leading-none">
+                +10s
+              </span>
+            </button>
 
             {/* Next Track (Big touch) */}
             <button
@@ -970,7 +1082,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       </div>
 
-      {/* Dedicated In-Car Manual Source Selection Bar */}
+      {/* Dedicated In-Car Manual Source Selection Bar - 1-TOUCH SWITCHING GUARANTEED */}
       <div className="bg-slate-950/95 px-4 py-3 sm:px-6 sm:py-3.5 border-t-2 border-car-border/70 flex flex-col md:flex-row md:items-center justify-between gap-3">
         {/* Left: 4 Clear Playback Source Buttons */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -979,45 +1091,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <span>Nguồn phát:</span>
           </div>
 
-          {/* Source 1: Direct MP4 (1080p Full HD) */}
+          {/* Source 1: Direct MP4 */}
           <button
             type="button"
-            onClick={() => {
-              setPlaybackError(null);
-              setForceEmbed(false);
-              setUseProxy(false);
-              if (selectedQuality === 'hls') {
-                setSelectedQuality((streamData.videoStreams || [])[0]?.quality || '1080p');
-              }
-            }}
+            onClick={() => handleSelectSource('direct')}
             disabled={!hasDirectVideo}
             className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition active:scale-95 border-2 ${
-              !isEmbed && !useProxy && !isHlsActive
+              activeSource === 'direct'
                 ? 'bg-blue-600 text-white border-blue-400 shadow-md shadow-blue-600/30 font-black'
                 : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
             } disabled:opacity-30 disabled:pointer-events-none`}
-            title="Phát trực tiếp MP4 Full HD không quảng cáo (Hỗ trợ SponsorBlock)"
+            title={hasDirectVideo ? 'Phát trực tiếp MP4 Full HD không quảng cáo' : 'Video này không có luồng direct MP4'}
           >
             <Zap className="w-4 h-4 text-amber-400" />
             <span>Direct MP4</span>
+            {!hasDirectVideo && <span className="text-[10px] text-slate-400">(K/D)</span>}
           </button>
 
-          {/* Source 2: HLS Stream (Tự thích ứng) */}
+          {/* Source 2: HLS Stream */}
           {hasHls && (
             <button
               type="button"
-              onClick={() => {
-                setPlaybackError(null);
-                setForceEmbed(false);
-                setUseProxy(false);
-                setSelectedQuality('hls');
-              }}
+              onClick={() => handleSelectSource('hls')}
               className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition active:scale-95 border-2 ${
-                !isEmbed && !useProxy && isHlsActive
+                activeSource === 'hls'
                   ? 'bg-purple-600 text-white border-purple-400 shadow-md shadow-purple-600/30 font-black'
                   : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
               }`}
-              title="Luồng phát HLS thích ứng tự động theo sóng 4G/5G"
+              title="Luồng phát HLS thích ứng tự động"
             >
               <Wifi className="w-4 h-4 text-purple-300" />
               <span>HLS Thích ứng</span>
@@ -1027,39 +1128,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Source 3: Cloudflare Edge Proxy */}
           <button
             type="button"
-            onClick={() => {
-              setPlaybackError(null);
-              setForceEmbed(false);
-              setUseProxy(true);
-            }}
+            onClick={() => handleSelectSource('proxy')}
+            disabled={!hasDirectVideo}
             className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition active:scale-95 border-2 ${
-              !isEmbed && useProxy
+              activeSource === 'proxy'
                 ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-600/30 font-black'
                 : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
-            }`}
-            title="Định tuyến qua Cloudflare Edge Proxy chống chặn mạng di động"
+            } disabled:opacity-30 disabled:pointer-events-none`}
+            title={hasDirectVideo ? 'Định tuyến qua Cloudflare Edge Proxy' : 'Không có luồng để proxy'}
           >
             <Server className="w-4 h-4 text-emerald-300" />
             <span>Edge Proxy</span>
           </button>
 
-          {/* Source 4: YouTube Embed (Dự phòng) */}
+          {/* Source 4: YouTube Embed (100% Ổn định) */}
           {streamData.embedUrl && (
             <button
               type="button"
-              onClick={() => {
-                setPlaybackError(null);
-                setForceEmbed(true);
-              }}
+              onClick={() => handleSelectSource('embed')}
               className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition active:scale-95 border-2 ${
-                isEmbed
+                activeSource === 'embed'
                   ? 'bg-amber-600 text-white border-amber-400 shadow-md shadow-amber-600/30 font-black'
                   : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
               }`}
-              title="Trình phát YouTube Embed chính thức dự phòng"
+              title="Trình phát YouTube Embed chính thức (100% video đều phát được ngay)"
             >
               <Tv className="w-4 h-4 text-amber-300" />
               <span>YouTube Embed</span>
+              <span className="text-[10px] bg-amber-400/20 text-amber-200 px-1.5 py-0.5 rounded font-black border border-amber-400/40">
+                100% OK
+              </span>
             </button>
           )}
         </div>

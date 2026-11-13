@@ -10,6 +10,7 @@ export interface VideoItem {
 }
 
 export type PlaybackType = 'direct' | 'hls' | 'embed' | 'unplayable';
+export type ActiveSource = 'direct' | 'hls' | 'proxy' | 'embed';
 
 export interface VideoStreamItem {
   url: string;
