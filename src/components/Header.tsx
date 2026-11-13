@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Mic, MicOff, Clock, Sparkles, History, Bookmark, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Search, Mic, Clock, Sparkles, History, Bookmark, ZoomIn, ZoomOut } from 'lucide-react';
 import { UiScale } from '../types';
 
 interface HeaderProps {
@@ -7,9 +7,9 @@ interface HeaderProps {
   activeTab: 'explore' | 'history' | 'favorites';
   setActiveTab: (tab: 'explore' | 'history' | 'favorites') => void;
   searchQuery: string;
-  setSearchQuery: (q: string) => void;
   uiScale: UiScale;
   onChangeUiScale: (scale: UiScale) => void;
+  onOpenSearchModal: (startVoice?: boolean) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -17,13 +17,11 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
   searchQuery,
-  setSearchQuery,
   uiScale,
   onChangeUiScale,
+  onOpenSearchModal,
 }) => {
   const [time, setTime] = useState<string>('');
-  const [isListening, setIsListening] = useState(false);
-  const [speechSupported, setSpeechSupported] = useState(false);
 
   // Clock for car dashboard
   useEffect(() => {
@@ -42,59 +40,6 @@ export const Header: React.FC<HeaderProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  // Check Web Speech API support
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const SpeechRecognition =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        setSpeechSupported(true);
-      }
-    }
-  }, []);
-
-  const handleVoiceSearch = () => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert('Trình duyệt trên xe chưa hỗ trợ nhận diện giọng nói Web Speech.');
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'vi-VN';
-    recognition.continuous = false;
-    recognition.interimResults = false;
-
-    recognition.onstart = () => {
-      setIsListening(true);
-    };
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setSearchQuery(transcript);
-      onSearch(transcript);
-      setIsListening(false);
-    };
-
-    recognition.onerror = () => {
-      setIsListening(false);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognition.start();
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      onSearch(searchQuery.trim());
-    }
-  };
-
   const cycleScale = () => {
     if (uiScale === 'normal') onChangeUiScale('large');
     else if (uiScale === 'large') onChangeUiScale('xlarge');
@@ -103,7 +48,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-40 bg-car-bg/98 backdrop-blur border-b border-car-border px-3 py-3 sm:px-6">
-      <div className="flex items-center justify-between gap-3 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between gap-3 max-w-[1600px] mx-auto">
         {/* Car Branding & Clock */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <div className="flex items-center gap-2 bg-car-card px-3.5 py-2.5 rounded-2xl border border-car-border shadow-sm">
@@ -144,47 +89,34 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </div>
 
-        {/* Large Touch Search Bar */}
-        <form onSubmit={handleSubmit} className="flex-1 max-w-xl relative flex items-center">
-          <div className="relative w-full">
-            <Search className="w-6 h-6 absolute left-4 top-1/2 -translate-y-1/2 text-car-textMuted pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Tìm bài hát, ca sĩ, remix..."
-              className="w-full h-14 bg-car-card text-slate-100 placeholder-car-textMuted/70 pl-13 pr-24 rounded-2xl border-2 border-car-border focus:border-car-accent focus:outline-none text-base sm:text-lg font-semibold shadow-inner"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery('');
-                  onSearch('');
-                }}
-                className="absolute right-13 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-car-textMuted hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            )}
-
-            {/* Voice Search Button (Big touch target) */}
-            {speechSupported && (
-              <button
-                type="button"
-                onClick={handleVoiceSearch}
-                title="Bấm để nói tên bài hát bằng tiếng Việt"
-                className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-11 h-11 rounded-xl flex items-center justify-center transition-all ${
-                  isListening
-                    ? 'bg-rose-600 text-white animate-pulse shadow-lg shadow-rose-600/50'
-                    : 'bg-car-accent/20 text-car-accent hover:bg-car-accent hover:text-white'
-                }`}
-              >
-                {isListening ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-              </button>
-            )}
+        {/* AUTOMOTIVE ONE-TOUCH SEARCH BAR & GIANT VOICE BUTTON */}
+        <div className="flex-1 max-w-2xl flex items-center gap-2 sm:gap-3">
+          {/* Big Search Input Trigger */}
+          <div
+            onClick={() => onOpenSearchModal(false)}
+            className="flex-1 h-14 bg-car-card hover:bg-slate-800/90 text-slate-100 pl-4 pr-4 rounded-2xl border-2 border-car-border hover:border-car-accent flex items-center gap-3 cursor-pointer shadow-inner active:scale-98 transition"
+          >
+            <Search className="w-6 h-6 text-car-accent shrink-0" />
+            <span
+              className={`text-base sm:text-lg font-bold truncate ${
+                searchQuery ? 'text-white' : 'text-car-textMuted/80'
+              }`}
+            >
+              {searchQuery || 'Tìm bài hát, ca sĩ, remix...'}
+            </span>
           </div>
-        </form>
+
+          {/* DEDICATED GIANT VOICE SEARCH BUTTON ("NÓI ĐỂ TÌM") */}
+          <button
+            type="button"
+            onClick={() => onOpenSearchModal(true)}
+            className="h-14 px-4 sm:px-5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-sm sm:text-base flex items-center gap-2 shadow-lg shadow-blue-600/40 border-2 border-blue-400 active:scale-95 transition shrink-0"
+            title="Tìm kiếm bằng giọng nói tiếng Việt"
+          >
+            <Mic className="w-6 h-6 animate-pulse" />
+            <span className="hidden sm:inline uppercase tracking-wide">NÓI ĐỂ TÌM</span>
+          </button>
+        </div>
 
         {/* Big Navigation Tabs */}
         <div className="flex items-center gap-1.5 shrink-0 bg-car-card p-1.5 rounded-2xl border border-car-border">

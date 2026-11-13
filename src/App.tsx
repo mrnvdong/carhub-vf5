@@ -4,6 +4,7 @@ import { CategoryChips } from './components/CategoryChips';
 import { VideoPlayer } from './components/VideoPlayer';
 import { VideoList } from './components/VideoList';
 import { SuggestedList } from './components/SuggestedList';
+import { CarSearchModal } from './components/CarSearchModal';
 import { VideoItem, StreamData, PlayerMode, UiScale } from './types';
 import { searchVideos, getVideoDetails } from './services/api';
 import { Car, ShieldCheck, AlertCircle, RefreshCw, SkipForward } from 'lucide-react';
@@ -13,6 +14,9 @@ export const App: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('remix');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [playerMode, setPlayerMode] = useState<PlayerMode>('video');
+
+  // Search Modal state
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState<boolean>(false);
 
   // UI scale preset: default to 'large' (120%) for VinFast VF5
   const [uiScale, setUiScale] = useState<UiScale>(() => {
@@ -37,7 +41,7 @@ export const App: React.FC = () => {
 
   const requestCounterRef = useRef<number>(0);
 
-  // Local storage for history & favorites
+  // Local storage for history, favorites & recent searches
   const [history, setHistory] = useState<VideoItem[]>(() => {
     try {
       const saved = localStorage.getItem('carhub_history');
@@ -56,7 +60,18 @@ export const App: React.FC = () => {
     }
   });
 
-  // Save UI scale, history & favorites to localStorage
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_recent_searches');
+      return saved
+        ? JSON.parse(saved)
+        : ['Nhạc trẻ remix bass căng', 'Vinahouse nonstop', 'Bolero hải ngoại'];
+    } catch {
+      return ['Nhạc trẻ remix bass căng', 'Vinahouse nonstop', 'Bolero hải ngoại'];
+    }
+  });
+
+  // Save state to localStorage
   useEffect(() => {
     try {
       localStorage.setItem('carhub_ui_scale', uiScale);
@@ -80,6 +95,14 @@ export const App: React.FC = () => {
       console.error(e);
     }
   }, [favorites]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_recent_searches', JSON.stringify(recentSearches));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [recentSearches]);
 
   // Initial load
   useEffect(() => {
@@ -107,12 +130,21 @@ export const App: React.FC = () => {
 
   const handleSearch = async (query: string) => {
     if (!query.trim()) return;
+    const cleanQuery = query.trim();
+    setSearchQuery(cleanQuery);
     setActiveTab('explore');
     setSelectedCategory('');
     setIsLoadingVideos(true);
     setNextContinuation(null);
+
+    // Add to recent searches
+    setRecentSearches((prev) => {
+      const filtered = prev.filter((s) => s.toLowerCase() !== cleanQuery.toLowerCase());
+      return [cleanQuery, ...filtered].slice(0, 10);
+    });
+
     try {
-      const result = await searchVideos(query);
+      const result = await searchVideos(cleanQuery);
       setVideos(result.items);
       setNextContinuation(result.nextContinuation);
     } catch (err) {
@@ -236,6 +268,14 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleClearRecentSearches = () => {
+    setRecentSearches([]);
+  };
+
+  const handleRemoveRecentSearch = (itemToRemove: string) => {
+    setRecentSearches((prev) => prev.filter((item) => item !== itemToRemove));
+  };
+
   const currentIndex = getCurrentIndex();
   const currentList = activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
   const hasNext =
@@ -247,7 +287,6 @@ export const App: React.FC = () => {
   // Compute zoom style for in-car CarPlay screens
   const zoomFactor = uiScale === 'normal' ? 1.0 : uiScale === 'large' ? 1.2 : 1.38;
 
-  // Active list to display in Suggested Column
   const activeSuggestedList =
     activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
 
@@ -270,9 +309,9 @@ export const App: React.FC = () => {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
         uiScale={uiScale}
         onChangeUiScale={setUiScale}
+        onOpenSearchModal={() => setIsSearchModalOpen(true)}
       />
 
       {/* Driver Safety Notice Banner */}
@@ -298,12 +337,10 @@ export const App: React.FC = () => {
 
       {/* Main Container */}
       <main className="flex-1 max-w-[1600px] mx-auto w-full px-3 sm:px-6 pt-2">
-        {/* YOUTUBE SPLIT LAYOUT: Left is Player (60-65%), Right is Suggested Playlist (35-40%) */}
         {currentVideo ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-            {/* LEFT COLUMN: Player & Car Controls (lg:col-span-7 xl:col-span-8) */}
+            {/* LEFT COLUMN: Player & Car Controls */}
             <div className="lg:col-span-7 xl:col-span-8 space-y-4">
-              {/* Loading state when switching video */}
               {isLoadingStream && (
                 <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-car-border flex flex-col items-center justify-center gap-4 p-6 text-center shadow-2xl">
                   <div className="w-12 h-12 border-4 border-car-accent border-t-transparent rounded-full animate-spin"></div>
@@ -318,7 +355,6 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Error state if video failed */}
               {streamErrorMessage && !isLoadingStream && (
                 <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-rose-500/40 p-6 flex flex-col items-center justify-center text-center gap-4 shadow-2xl">
                   <AlertCircle className="w-14 h-14 text-rose-500" />
@@ -351,7 +387,6 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Active Player */}
               {streamData && !isLoadingStream && !streamErrorMessage && (
                 <VideoPlayer
                   key={streamData.id}
@@ -370,7 +405,7 @@ export const App: React.FC = () => {
               )}
             </div>
 
-            {/* RIGHT COLUMN: YouTube Suggested Playlist Column (lg:col-span-5 xl:col-span-4) */}
+            {/* RIGHT COLUMN: YouTube Suggested Playlist Column */}
             <div className="lg:col-span-5 xl:col-span-4 min-h-0 sticky top-24">
               <SuggestedList
                 videos={activeSuggestedList}
@@ -385,7 +420,6 @@ export const App: React.FC = () => {
             </div>
           </div>
         ) : (
-          /* When NO video is selected yet: Full-width Grid */
           <div>
             {activeTab === 'explore' && (
               <VideoList
@@ -421,6 +455,17 @@ export const App: React.FC = () => {
           </div>
         )}
       </main>
+
+      {/* DEDICATED IN-CAR SEARCH OVERLAY / MODAL */}
+      <CarSearchModal
+        isOpen={isSearchModalOpen}
+        onClose={() => setIsSearchModalOpen(false)}
+        onSearch={handleSearch}
+        initialQuery={searchQuery}
+        recentSearches={recentSearches}
+        onClearRecentSearches={handleClearRecentSearches}
+        onRemoveRecentSearch={handleRemoveRecentSearch}
+      />
     </div>
   );
 };
