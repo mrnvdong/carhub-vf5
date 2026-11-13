@@ -19,6 +19,10 @@ import {
   ExternalLink,
   RefreshCw,
   Lock,
+  Zap,
+  Wifi,
+  Server,
+  Layers,
 } from 'lucide-react';
 import { StreamData, PlayerMode } from '../types';
 import { formatSeconds } from '../services/api';
@@ -932,6 +936,126 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Dedicated In-Car Manual Source Selection Bar */}
+      <div className="bg-slate-950/95 px-4 py-3 sm:px-6 sm:py-3.5 border-t-2 border-car-border/70 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        {/* Left: 4 Clear Playback Source Buttons */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 text-xs sm:text-sm font-extrabold text-slate-300 uppercase tracking-wider mr-1 shrink-0">
+            <Layers className="w-4 h-4 text-car-accent" />
+            <span>Nguồn phát:</span>
+          </div>
+
+          {/* Source 1: Direct MP4 (1080p Full HD) */}
+          <button
+            type="button"
+            onClick={() => {
+              setPlaybackError(null);
+              setForceEmbed(false);
+              setUseProxy(false);
+              if (selectedQuality === 'hls') {
+                setSelectedQuality((streamData.videoStreams || [])[0]?.quality || '1080p');
+              }
+            }}
+            disabled={!hasDirectVideo}
+            className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition active:scale-95 border-2 ${
+              !isEmbed && !useProxy && !isHlsActive
+                ? 'bg-blue-600 text-white border-blue-400 shadow-md shadow-blue-600/30 font-black'
+                : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
+            } disabled:opacity-30 disabled:pointer-events-none`}
+            title="Phát trực tiếp MP4 Full HD không quảng cáo (Hỗ trợ SponsorBlock)"
+          >
+            <Zap className="w-4 h-4 text-amber-400" />
+            <span>Direct MP4</span>
+          </button>
+
+          {/* Source 2: HLS Stream (Tự thích ứng) */}
+          {hasHls && (
+            <button
+              type="button"
+              onClick={() => {
+                setPlaybackError(null);
+                setForceEmbed(false);
+                setUseProxy(false);
+                setSelectedQuality('hls');
+              }}
+              className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition active:scale-95 border-2 ${
+                !isEmbed && !useProxy && isHlsActive
+                  ? 'bg-purple-600 text-white border-purple-400 shadow-md shadow-purple-600/30 font-black'
+                  : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
+              }`}
+              title="Luồng phát HLS thích ứng tự động theo sóng 4G/5G"
+            >
+              <Wifi className="w-4 h-4 text-purple-300" />
+              <span>HLS Thích ứng</span>
+            </button>
+          )}
+
+          {/* Source 3: Cloudflare Edge Proxy */}
+          <button
+            type="button"
+            onClick={() => {
+              setPlaybackError(null);
+              setForceEmbed(false);
+              setUseProxy(true);
+            }}
+            className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition active:scale-95 border-2 ${
+              !isEmbed && useProxy
+                ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-600/30 font-black'
+                : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
+            }`}
+            title="Định tuyến qua Cloudflare Edge Proxy chống chặn mạng di động"
+          >
+            <Server className="w-4 h-4 text-emerald-300" />
+            <span>Edge Proxy</span>
+          </button>
+
+          {/* Source 4: YouTube Embed (Dự phòng) */}
+          {streamData.embedUrl && (
+            <button
+              type="button"
+              onClick={() => {
+                setPlaybackError(null);
+                setForceEmbed(true);
+              }}
+              className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition active:scale-95 border-2 ${
+                isEmbed
+                  ? 'bg-amber-600 text-white border-amber-400 shadow-md shadow-amber-600/30 font-black'
+                  : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
+              }`}
+              title="Trình phát YouTube Embed chính thức dự phòng"
+            >
+              <Tv className="w-4 h-4 text-amber-300" />
+              <span>YouTube Embed</span>
+            </button>
+          )}
+        </div>
+
+        {/* Right: Quick 1-Touch Resolution Chips when in Direct / Proxy mode */}
+        {!isEmbed && !isHlsActive && uniqueQualities.length > 1 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto py-1 shrink-0">
+            <span className="text-xs font-bold text-slate-400 uppercase mr-1">Độ nét:</span>
+            {uniqueQualities.map((q) => {
+              const isSelected = selectedQuality === q;
+              const shortLabel = q.replace(/p\d+$/, 'p');
+              return (
+                <button
+                  key={q}
+                  type="button"
+                  onClick={() => handleQualityChange(q)}
+                  className={`h-10 px-3 rounded-xl text-xs sm:text-sm font-black transition active:scale-95 border-2 ${
+                    isSelected
+                      ? 'bg-car-accent text-white border-blue-400 shadow-sm'
+                      : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
+                  }`}
+                >
+                  {shortLabel}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
