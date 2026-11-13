@@ -53,7 +53,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const syncAudioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const prevTimeRef = useRef<number>(0);
 
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isBuffering, setIsBuffering] = useState<boolean>(true);
@@ -62,7 +64,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [sponsorSkippedNotice, setSponsorSkippedNotice] = useState<string | null>(null);
   const [modeNotice, setModeNotice] = useState<string | null>(null);
-  const [selectedQuality, setSelectedQuality] = useState<string>('auto');
+
+  const initialQuality = (streamData.videoStreams || [])[0]?.quality || '1080p';
+  const [selectedQuality, setSelectedQuality] = useState<string>(initialQuality);
   const [useProxy, setUseProxy] = useState<boolean>(false);
   const [forceEmbed, setForceEmbed] = useState<boolean>(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
@@ -77,6 +81,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     (streamData.playbackType === 'hls' ||
       selectedQuality === 'hls' ||
       (!hasDirectVideo && hasHls));
+
+  const activeVideoStream =
+    hasDirectVideo && !isHlsActive && !isEmbed
+      ? streamData.videoStreams.find((s) => s.quality === selectedQuality) ||
+        streamData.videoStreams[0]
+      : null;
+
+  const isAudioSyncNeeded = Boolean(
+    playerMode === 'video' &&
+      !isEmbed &&
+      !isHlsActive &&
+      activeVideoStream?.needsAudioSync &&
+      hasAudioStream
+  );
+
+  const rawAudioSyncUrl = isAudioSyncNeeded ? streamData.audioStreams[0]?.url : '';
+  const finalAudioSyncUrl =
+    useProxy && rawAudioSyncUrl && rawAudioSyncUrl.includes('googlevideo.com')
+      ? `/api/proxy?url=${encodeURIComponent(rawAudioSyncUrl)}`
+      : rawAudioSyncUrl;
 
   // Enforce: "Chỉ nghe nhạc" is only active when hasAudioStream is true and not in embed mode
   useEffect(() => {
@@ -97,7 +121,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setDuration(streamData.duration || 0);
     setIsBuffering(!isEmbed);
     setIsPlaying(false);
+    setSelectedQuality((streamData.videoStreams || [])[0]?.quality || '1080p');
   }, [streamData.id, streamData.duration, isEmbed]);
+
+  // Synchronized Audio Attachment for dual-element 1080p/720p Direct Video
+  useEffect(() => {
+    const syncAudio = syncAudioRef.current;
+    if (!syncAudio || !isAudioSyncNeeded || !finalAudioSyncUrl) {
+      if (syncAudio) {
+        syncAudio.pause();
+        syncAudio.removeAttribute('src');
+        syncAudio.load();
+      }
+      return;
+    }
+
+    syncAudio.src = finalAudioSyncUrl;
+    syncAudio.load();
+    if (videoRef.current && !videoRef.current.paused) {
+      syncAudio.currentTime = videoRef.current.currentTime;
+      syncAudio.play().catch(console.warn);
+    }
+
+    return () => {
+      syncAudio.pause();
+      syncAudio.removeAttribute('src');
+      syncAudio.load();
+    };
+  }, [finalAudioSyncUrl, isAudioSyncNeeded]);
 
   // Determine raw stream URL for active mode
   const getRawStreamUrl = (): string => {
@@ -268,10 +319,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     navigator.mediaSession.setActionHandler('play', () => {
       const el = playerMode === 'audio' ? audioRef.current : videoRef.current;
       el?.play().catch(console.error);
+      if (isAudioSyncNeeded && syncAudioRef.current && videoRef.current) {
+        syncAudioRef.current.currentTime = videoRef.current.currentTime;
+        syncAudioRef.current.play().catch(console.warn);
+      }
     });
     navigator.mediaSession.setActionHandler('pause', () => {
       const el = playerMode === 'audio' ? audioRef.current : videoRef.current;
       el?.pause();
+      if (isAudioSyncNeeded && syncAudioRef.current) {
+        syncAudioRef.current.pause();
+      }
     });
     navigator.mediaSession.setActionHandler('seekbackward', () => {
       handleSeekRelative(-10);
@@ -281,7 +339,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     });
     navigator.mediaSession.setActionHandler('nexttrack', onNext || null);
     navigator.mediaSession.setActionHandler('previoustrack', onPrev || null);
-  }, [streamData, onNext, onPrev, isEmbed, playerMode, isPlaying]);
+  }, [streamData, onNext, onPrev, isEmbed, playerMode, isPlaying, isAudioSyncNeeded]);
 
   const getActiveMediaElement = () => {
     if (isEmbed) return null;
@@ -293,8 +351,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!el || playbackError) return;
     if (el.paused) {
       el.play().catch((err) => console.warn('Play failed:', err));
+      if (isAudioSyncNeeded && syncAudioRef.current) {
+        syncAudioRef.current.currentTime = el.currentTime;
+        syncAudioRef.current.play().catch(console.warn);
+      }
     } else {
       el.pause();
+      if (isAudioSyncNeeded && syncAudioRef.current) {
+        syncAudioRef.current.pause();
+      }
     }
   };
 
@@ -305,6 +370,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const newTime = Math.max(0, Math.min(el.currentTime + seconds, maxDur));
     el.currentTime = newTime;
     setCurrentTime(newTime);
+    if (isAudioSyncNeeded && syncAudioRef.current) {
+      syncAudioRef.current.currentTime = newTime;
+    }
   };
 
   const handleTimeUpdate = () => {
@@ -313,11 +381,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const curr = el.currentTime;
     setCurrentTime(curr);
 
+    // Sync audio drift check (keep sync within 250ms)
+    if (isAudioSyncNeeded && syncAudioRef.current && !el.paused) {
+      const drift = Math.abs(syncAudioRef.current.currentTime - curr);
+      if (drift > 0.25) {
+        syncAudioRef.current.currentTime = curr;
+      }
+      if (syncAudioRef.current.paused) {
+        syncAudioRef.current.play().catch(console.warn);
+      }
+    }
+
     // SponsorBlock: Only active for direct/HLS streams
     if (!isEmbed && streamData.sponsorSegments && streamData.sponsorSegments.length > 0) {
       for (const segment of streamData.sponsorSegments) {
         if (curr >= segment.start && curr < segment.end - 0.5) {
           el.currentTime = segment.end;
+          if (isAudioSyncNeeded && syncAudioRef.current) {
+            syncAudioRef.current.currentTime = segment.end;
+          }
           setSponsorSkippedNotice(`Đã tự động bỏ qua đoạn ${segment.category}`);
           setTimeout(() => setSponsorSkippedNotice(null), 3000);
           break;
@@ -333,6 +415,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (el) {
       el.currentTime = val;
     }
+    if (isAudioSyncNeeded && syncAudioRef.current) {
+      syncAudioRef.current.currentTime = val;
+    }
+  };
+
+  const handleQualityChange = (q: string) => {
+    if (videoRef.current && videoRef.current.currentTime > 0) {
+      prevTimeRef.current = videoRef.current.currentTime;
+    }
+    setSelectedQuality(q);
   };
 
   const toggleFullscreen = () => {
@@ -421,35 +513,86 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         {/* Mode 1: Video with Direct / HLS Stream */}
         {!isEmbed && playerMode === 'video' && (
-          <video
-            ref={videoRef}
-            className="w-full h-full object-contain cursor-pointer"
-            playsInline
-            controls={false}
-            onPlay={() => {
-              setIsPlaying(true);
-              setIsBuffering(false);
-            }}
-            onPlaying={() => {
-              setIsPlaying(true);
-              setIsBuffering(false);
-            }}
-            onWaiting={() => setIsBuffering(true)}
-            onPause={() => setIsPlaying(false)}
-            onTimeUpdate={handleTimeUpdate}
-            onError={handleMediaError}
-            onLoadedMetadata={() => {
-              setIsBuffering(false);
-              if (videoRef.current && videoRef.current.duration && isFinite(videoRef.current.duration)) {
-                setDuration(videoRef.current.duration);
-              }
-            }}
-            onEnded={() => {
-              setIsPlaying(false);
-              if (onNext) onNext();
-            }}
-            onClick={togglePlay}
-          />
+          <>
+            <video
+              ref={videoRef}
+              className="w-full h-full object-contain cursor-pointer"
+              playsInline
+              muted={isAudioSyncNeeded}
+              controls={false}
+              onPlay={() => {
+                setIsPlaying(true);
+                setIsBuffering(false);
+                if (isAudioSyncNeeded && syncAudioRef.current) {
+                  syncAudioRef.current.currentTime = videoRef.current?.currentTime || 0;
+                  syncAudioRef.current.play().catch(console.warn);
+                }
+              }}
+              onPlaying={() => {
+                setIsPlaying(true);
+                setIsBuffering(false);
+                if (isAudioSyncNeeded && syncAudioRef.current) {
+                  syncAudioRef.current.currentTime = videoRef.current?.currentTime || 0;
+                  syncAudioRef.current.play().catch(console.warn);
+                }
+              }}
+              onWaiting={() => {
+                setIsBuffering(true);
+                if (isAudioSyncNeeded && syncAudioRef.current) {
+                  syncAudioRef.current.pause();
+                }
+              }}
+              onPause={() => {
+                setIsPlaying(false);
+                if (isAudioSyncNeeded && syncAudioRef.current) {
+                  syncAudioRef.current.pause();
+                }
+              }}
+              onSeeking={() => {
+                if (isAudioSyncNeeded && syncAudioRef.current && videoRef.current) {
+                  syncAudioRef.current.currentTime = videoRef.current.currentTime;
+                }
+              }}
+              onSeeked={() => {
+                if (isAudioSyncNeeded && syncAudioRef.current && videoRef.current) {
+                  syncAudioRef.current.currentTime = videoRef.current.currentTime;
+                }
+              }}
+              onTimeUpdate={handleTimeUpdate}
+              onError={handleMediaError}
+              onLoadedMetadata={() => {
+                setIsBuffering(false);
+                if (videoRef.current && videoRef.current.duration && isFinite(videoRef.current.duration)) {
+                  setDuration(videoRef.current.duration);
+                }
+                if (prevTimeRef.current > 0 && videoRef.current) {
+                  videoRef.current.currentTime = prevTimeRef.current;
+                  if (isAudioSyncNeeded && syncAudioRef.current) {
+                    syncAudioRef.current.currentTime = prevTimeRef.current;
+                  }
+                  prevTimeRef.current = 0;
+                }
+              }}
+              onEnded={() => {
+                setIsPlaying(false);
+                if (isAudioSyncNeeded && syncAudioRef.current) {
+                  syncAudioRef.current.pause();
+                }
+                if (onNext) onNext();
+              }}
+              onClick={togglePlay}
+            />
+
+            {/* Hidden Synchronized Audio Element for 1080p/720p Video */}
+            {isAudioSyncNeeded && (
+              <audio
+                ref={syncAudioRef}
+                preload="auto"
+                className="hidden"
+                onError={(e) => console.warn('Sync audio error:', e)}
+              />
+            )}
+          </>
         )}
 
         {/* Mode 2: YouTube Embed Fallback */}
@@ -557,23 +700,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {streamData.uploader}
             </p>
           </div>
-          <span
-            className={`shrink-0 text-xs sm:text-sm font-bold px-3 py-1.5 rounded-xl border-2 ${
-              isEmbed
-                ? 'bg-amber-500/10 text-amber-300 border-amber-500/40'
+          <div className="flex items-center gap-2 shrink-0">
+            {!isEmbed && playerMode === 'video' && (
+              <span className="shrink-0 text-xs sm:text-sm font-extrabold px-3 py-1.5 rounded-xl border-2 bg-blue-500/20 text-blue-300 border-blue-500/50 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
+                {isHlsActive
+                  ? '1080p HLS'
+                  : activeVideoStream?.quality?.includes('1080')
+                  ? '1080p Full HD'
+                  : activeVideoStream?.quality?.includes('720')
+                  ? '720p HD'
+                  : `${activeVideoStream?.quality || '1080p'}`}
+              </span>
+            )}
+            <span
+              className={`shrink-0 text-xs sm:text-sm font-bold px-3 py-1.5 rounded-xl border-2 ${
+                isEmbed
+                  ? 'bg-amber-500/10 text-amber-300 border-amber-500/40'
+                  : isHlsActive
+                  ? 'bg-purple-500/10 text-purple-300 border-purple-500/40'
+                  : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40'
+              }`}
+            >
+              {isEmbed
+                ? 'YouTube Embed'
+                : playerMode === 'audio'
+                ? 'Chỉ nghe nhạc'
                 : isHlsActive
-                ? 'bg-purple-500/10 text-purple-300 border-purple-500/40'
-                : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40'
-            }`}
-          >
-            {isEmbed
-              ? 'YouTube Embed'
-              : playerMode === 'audio'
-              ? 'Chỉ nghe nhạc'
-              : isHlsActive
-              ? 'HLS Stream'
-              : 'Direct MP4'}
-          </span>
+                ? 'HLS Stream'
+                : 'Direct MP4'}
+            </span>
+          </div>
         </div>
 
         {/* Thick Progress Scrub Bar with Large Touch Thumb */}
@@ -647,20 +804,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </button>
             )}
 
-            {/* Quality Picker */}
+            {/* Automotive Quality Picker */}
             {!isEmbed && playerMode === 'video' && (uniqueQualities.length > 1 || (hasDirectVideo && hasHls)) && (
               <select
                 value={selectedQuality}
-                onChange={(e) => setSelectedQuality(e.target.value)}
-                className="h-13 sm:h-14 bg-slate-800 text-slate-100 text-sm sm:text-base px-3.5 rounded-2xl border-2 border-slate-700 font-bold focus:outline-none"
+                onChange={(e) => handleQualityChange(e.target.value)}
+                className="h-13 sm:h-14 bg-slate-800 text-slate-100 text-sm sm:text-base px-3.5 rounded-2xl border-2 border-slate-700 font-bold focus:outline-none focus:border-car-accent shadow-sm"
               >
-                <option value="auto">Auto</option>
-                {hasHls && <option value="hls">HLS</option>}
-                {uniqueQualities.map((q) => (
-                  <option key={q} value={q}>
-                    {q}
-                  </option>
-                ))}
+                {uniqueQualities.map((q) => {
+                  let label = q;
+                  if (q.includes('2160') || q.includes('4K')) label = '2160p 4K';
+                  else if (q.includes('1440') || q.includes('2K')) label = '1440p 2K';
+                  else if (q.includes('1080')) label = '1080p Full HD';
+                  else if (q.includes('720')) label = '720p HD';
+                  else if (q.includes('480')) label = '480p SD';
+                  else if (q.includes('360')) label = '360p (Tiết kiệm)';
+                  return (
+                    <option key={q} value={q}>
+                      {label}
+                    </option>
+                  );
+                })}
+                {hasHls && <option value="hls">HLS Tự động thích ứng</option>}
               </select>
             )}
           </div>

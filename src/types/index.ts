@@ -11,6 +11,22 @@ export interface VideoItem {
 
 export type PlaybackType = 'direct' | 'hls' | 'embed' | 'unplayable';
 
+export interface VideoStreamItem {
+  url: string;
+  quality: string;
+  resolution: string;
+  mimeType: string;
+  fps?: number;
+  needsAudioSync?: boolean;
+}
+
+export interface AudioStreamItem {
+  url: string;
+  quality: string;
+  mimeType: string;
+  bitrate?: number;
+}
+
 export interface StreamData {
   id: string;
   title: string;
@@ -24,19 +40,8 @@ export interface StreamData {
   error?: string;
   hlsUrl?: string | null;
   embedUrl?: string | null;
-  videoStreams: Array<{
-    url: string;
-    quality: string;
-    resolution: string;
-    mimeType: string;
-    fps?: number;
-  }>;
-  audioStreams: Array<{
-    url: string;
-    quality: string;
-    mimeType: string;
-    bitrate?: number;
-  }>;
+  videoStreams: VideoStreamItem[];
+  audioStreams: AudioStreamItem[];
   relatedStreams?: VideoItem[];
   sponsorSegments?: Array<{
     category: string;

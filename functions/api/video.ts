@@ -23,9 +23,9 @@ export async function onRequestGet(context: any) {
     );
   }
 
-  // 1. Check cache (versioned v3, only used when nocache !== '1')
+  // 1. Check cache (versioned v4 for 1080p streams, only used when nocache !== '1')
   const cache = (caches as any).default;
-  const cacheKey = new Request(`${url.origin}/api/video?id=${id}&v=3`, request);
+  const cacheKey = new Request(`${url.origin}/api/video?id=${id}&v=4`, request);
   if (cache && !noCache) {
     try {
       const cachedResponse = await cache.match(cacheKey);
@@ -55,7 +55,7 @@ export async function onRequestGet(context: any) {
     .then(async (r) => (r.ok ? await r.json() : []))
     .catch(() => []);
 
-  // 2. Phương án B: Direct Cloudflare Edge to YouTube InnerTube (ANDROID 20.10.38 + IOS 20.10.4 + ANDROID_VR)
+  // 2. Phương án B: Direct Cloudflare Edge to YouTube InnerTube (IOS 20.10.4 + ANDROID 20.10.38)
   try {
     const directResult = await fetchViaInnerTubeMultiClient(id);
     if (
@@ -95,7 +95,6 @@ export async function onRequestGet(context: any) {
           : [],
       };
 
-      // Cache valid streams with short TTL (120s) so googlevideo expire tokens stay fresh
       const resp = new Response(JSON.stringify(responseData), {
         headers: {
           'Content-Type': 'application/json',
@@ -112,7 +111,7 @@ export async function onRequestGet(context: any) {
     console.warn('InnerTube extraction error:', err);
   }
 
-  // 3. Phương án A: Fallback to Piped Instances (filtering only muxed videoStreams with audio)
+  // 3. Phương án A: Fallback to Piped Instances
   const pipedInstances = [
     'https://api.piped.private.coffee',
     'https://pipedapi.ducks.party',
@@ -129,12 +128,10 @@ export async function onRequestGet(context: any) {
 
       if (res.ok) {
         const data: any = await res.json();
-        // IMPORTANT: Only include videoStreams where videoOnly !== true so audio is always present!
         const videoStreams = (data.videoStreams || [])
           .filter(
             (v: any) =>
               v.url &&
-              v.videoOnly !== true &&
               (v.format === 'MPEG_4' ||
                 v.format === 'MP4' ||
                 v.format === 'mp4' ||
@@ -142,11 +139,16 @@ export async function onRequestGet(context: any) {
           )
           .map((v: any) => ({
             url: v.url,
-            quality: v.quality || '360p',
-            resolution: v.resolution || '640x360',
+            quality: v.quality || '720p',
+            resolution: v.resolution || '1280x720',
             mimeType: v.mimeType || 'video/mp4',
             fps: v.fps || 30,
-          }));
+            needsAudioSync: Boolean(v.videoOnly),
+          }))
+          .sort((a: any, b: any) => {
+            const getRes = (q: string) => parseInt(q.replace(/\D/g, '') || '0', 10);
+            return getRes(b.quality) - getRes(a.quality);
+          });
 
         const audioStreams = (data.audioStreams || [])
           .filter((a: any) => a.url)
@@ -218,7 +220,7 @@ export async function onRequestGet(context: any) {
     }
   }
 
-  // 4. Verify if the video is actually embeddable via YouTube oEmbed before returning 'embed'
+  // 4. Verify via YouTube oEmbed before returning 'embed'
   try {
     const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
       `https://www.youtube.com/watch?v=${id}`
@@ -255,7 +257,7 @@ export async function onRequestGet(context: any) {
     // oEmbed failed
   }
 
-  // 5. Video is completely unplayable (deleted, private, or embedding forbidden)
+  // 5. Unplayable fallback
   return new Response(
     JSON.stringify({
       success: false,
@@ -276,22 +278,9 @@ export async function onRequestGet(context: any) {
   );
 }
 
-// Multi-client InnerTube extractor: combines ANDROID 20.10.38, IOS 20.10.4, and ANDROID_VR
+// Multi-client InnerTube extractor prioritizing Full HD 1080p and 720p streams
 async function fetchViaInnerTubeMultiClient(videoId: string) {
   const clients = [
-    {
-      name: 'edge-innertube-android',
-      context: {
-        client: {
-          clientName: 'ANDROID',
-          clientVersion: '20.10.38',
-          androidSdkVersion: 34,
-          hl: 'vi',
-          gl: 'VN',
-        },
-      },
-      userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip',
-    },
     {
       name: 'edge-innertube-ios',
       context: {
@@ -307,6 +296,19 @@ async function fetchViaInnerTubeMultiClient(videoId: string) {
         },
       },
       userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)',
+    },
+    {
+      name: 'edge-innertube-android',
+      context: {
+        client: {
+          clientName: 'ANDROID',
+          clientVersion: '20.10.38',
+          androidSdkVersion: 34,
+          hl: 'vi',
+          gl: 'VN',
+        },
+      },
+      userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip',
     },
     {
       name: 'edge-innertube-android-vr',
@@ -325,36 +327,56 @@ async function fetchViaInnerTubeMultiClient(videoId: string) {
     },
   ];
 
-  // Try ANDROID and IOS concurrently first for maximum speed and coverage (both MP4 + HLS)
-  const [androidRes, iosRes] = await Promise.allSettled([
+  // Run IOS & ANDROID concurrently for 1080p MP4 + HLS master manifest
+  const [iosRes, androidRes] = await Promise.allSettled([
     queryInnerTubeClient(videoId, clients[0]),
     queryInnerTubeClient(videoId, clients[1]),
   ]);
 
-  const androidData = androidRes.status === 'fulfilled' ? androidRes.value : null;
   const iosData = iosRes.status === 'fulfilled' ? iosRes.value : null;
+  const androidData = androidRes.status === 'fulfilled' ? androidRes.value : null;
 
-  if (androidData || iosData) {
-    const primary = androidData || iosData!;
-    const videoStreams = [
-      ...(androidData?.videoStreams || []),
+  if (iosData || androidData) {
+    const primary = iosData || androidData!;
+    const combinedVideoStreams = [
       ...(iosData?.videoStreams || []),
+      ...(androidData?.videoStreams || []),
     ];
+
+    // De-duplicate videoStreams by resolution/quality and sort descending (1080p -> 720p -> 480p -> 360p)
+    // Prioritize avc1 (H.264) codec for maximum hardware compatibility on Apple CarPlay WebKit
+    const qualityMap = new Map<string, any>();
+    for (const v of combinedVideoStreams) {
+      const qKey = v.quality;
+      const isAvc = (v.mimeType || '').includes('avc1');
+      if (!qualityMap.has(qKey)) {
+        qualityMap.set(qKey, v);
+      } else if (isAvc && !(qualityMap.get(qKey).mimeType || '').includes('avc1')) {
+        qualityMap.set(qKey, v);
+      }
+    }
+    const uniqueVideoStreams = Array.from(qualityMap.values());
+
+    uniqueVideoStreams.sort((a, b) => {
+      const getH = (str: string) => parseInt(str.replace(/\D/g, '') || '0', 10);
+      return getH(b.quality) - getH(a.quality);
+    });
+
     const audioStreams =
-      (androidData?.audioStreams?.length ? androidData.audioStreams : iosData?.audioStreams) || [];
+      (iosData?.audioStreams?.length ? iosData.audioStreams : androidData?.audioStreams) || [];
     const hlsUrl = iosData?.hlsUrl || androidData?.hlsUrl || null;
 
-    if (videoStreams.length > 0 || audioStreams.length > 0 || hlsUrl) {
+    if (uniqueVideoStreams.length > 0 || audioStreams.length > 0 || hlsUrl) {
       return {
         ...primary,
-        videoStreams,
+        videoStreams: uniqueVideoStreams,
         audioStreams,
         hlsUrl,
       };
     }
   }
 
-  // Fallback to ANDROID_VR if both failed
+  // Fallback to ANDROID_VR
   return await queryInnerTubeClient(videoId, clients[2]);
 }
 
@@ -382,33 +404,29 @@ async function queryInnerTubeClient(
   const videoDetails = data.videoDetails || {};
   const streamingData = data.streamingData || {};
 
-  // IMPORTANT: Only take muxed formats (which contain BOTH video AND audio) for videoStreams!
-  // adaptiveFormats video streams do NOT have audio and would play silently on <video>.
   const muxedFormats = streamingData.formats || [];
   const adaptiveFormats = streamingData.adaptiveFormats || [];
+  const allFormats = [...muxedFormats, ...adaptiveFormats];
 
   const videoStreams: any[] = [];
   const audioStreams: any[] = [];
 
-  for (const fmt of muxedFormats) {
+  for (const fmt of allFormats) {
     if (!fmt.url) continue;
     const mime = fmt.mimeType || '';
-    const hasAudio = Boolean(fmt.audioQuality || mime.includes('mp4a') || mime.includes('opus'));
-    if (mime.includes('video/mp4') && hasAudio) {
+
+    // Extract High Definition MP4 video streams (1080p, 720p, 480p, 360p)
+    if (mime.includes('video/mp4')) {
+      const isMuxed = Boolean(fmt.audioQuality || mime.includes('mp4a'));
       videoStreams.push({
         url: fmt.url,
         quality: fmt.qualityLabel || `${fmt.height || 360}p`,
         resolution: `${fmt.width || 640}x${fmt.height || 360}`,
         mimeType: mime,
         fps: fmt.fps || 30,
+        needsAudioSync: !isMuxed,
       });
-    }
-  }
-
-  for (const fmt of adaptiveFormats) {
-    if (!fmt.url) continue;
-    const mime = fmt.mimeType || '';
-    if (mime.includes('audio/')) {
+    } else if (mime.includes('audio/')) {
       audioStreams.push({
         url: fmt.url,
         quality: fmt.audioQuality || 'AUDIO_QUALITY_MEDIUM',
@@ -418,7 +436,17 @@ async function queryInnerTubeClient(
     }
   }
 
-  // Sort audioStreams: prioritize audio/mp4 (AAC/M4A) first for iOS / Apple CarPlay WebKit compatibility
+  // Sort videoStreams: 1080p first, then 720p, then 480p, then 360p (prefer avc1 / H.264 for hardware decoding)
+  videoStreams.sort((a, b) => {
+    const getRes = (str: string) => parseInt(str.replace(/\D/g, '') || '0', 10);
+    const diff = getRes(b.quality) - getRes(a.quality);
+    if (diff !== 0) return diff;
+    const aIsAvc = (a.mimeType || '').includes('avc1') ? 0 : 1;
+    const bIsAvc = (b.mimeType || '').includes('avc1') ? 0 : 1;
+    return aIsAvc - bIsAvc;
+  });
+
+  // Sort audioStreams: prioritize audio/mp4 (AAC/M4A) first
   audioStreams.sort((a, b) => {
     const aIsMp4 = a.mimeType.includes('audio/mp4') ? 0 : 1;
     const bIsMp4 = b.mimeType.includes('audio/mp4') ? 0 : 1;
