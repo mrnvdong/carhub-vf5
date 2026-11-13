@@ -25,53 +25,53 @@ export const VideoList: React.FC<VideoListProps> = ({
 }) => {
   if (isLoading) {
     return (
-      <div className="py-12 text-center">
-        <div className="w-9 h-9 border-3 border-car-accent border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-        <p className="text-sm text-car-textMuted font-medium">Đang tìm kiếm toàn bộ video...</p>
+      <div className="py-16 text-center">
+        <div className="w-12 h-12 border-4 border-car-accent border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+        <p className="text-base sm:text-lg text-slate-200 font-bold">Đang tìm kiếm bài hát...</p>
       </div>
     );
   }
 
   if (videos.length === 0) {
     return (
-      <div className="py-12 text-center text-car-textMuted bg-car-card/50 rounded-2xl border border-car-border p-6">
-        <Sparkles className="w-10 h-10 mx-auto text-car-border mb-3" />
-        <p className="text-sm font-semibold text-slate-300">Không tìm thấy video nào</p>
-        <p className="text-xs text-car-textMuted mt-1">Hãy thử tìm kiếm với từ khóa khác</p>
+      <div className="py-16 text-center text-car-textMuted bg-car-card/60 rounded-3xl border-2 border-car-border p-8">
+        <Sparkles className="w-14 h-14 mx-auto text-car-border mb-3" />
+        <p className="text-lg font-bold text-slate-200">Không tìm thấy video nào</p>
+        <p className="text-sm text-car-textMuted mt-1">Hãy thử tìm kiếm với từ khóa khác hoặc bấm nút Micro</p>
       </div>
     );
   }
 
   return (
-    <div className="px-3 sm:px-6 pb-6">
+    <div className="px-3 sm:px-6 pb-8">
       {title && (
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm sm:text-base font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-car-accent"></span>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base sm:text-lg font-extrabold text-slate-100 uppercase tracking-wider flex items-center gap-2.5">
+            <span className="w-3 h-3 rounded-full bg-car-accent"></span>
             {title}
           </h3>
-          <span className="text-xs text-car-textMuted font-mono">
-            {videos.length} video
+          <span className="text-sm text-slate-300 font-mono font-bold bg-car-card px-3 py-1 rounded-xl border border-car-border">
+            {videos.length} bài
           </span>
         </div>
       )}
 
-      {/* Grid optimized for landscape car screens (VF5 CarPlay) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
+      {/* 2-Column Generous Grid (VF5 Automotive Landscape Friendly) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 sm:gap-4">
         {videos.map((item) => {
           const isCurrent = currentVideoId === item.id;
           return (
             <div
               key={item.id}
               onClick={() => onSelectVideo(item)}
-              className={`group flex sm:flex-col bg-car-card rounded-xl overflow-hidden border transition-all cursor-pointer active:scale-98 ${
+              className={`group flex bg-car-card rounded-2xl overflow-hidden border-2 transition-all cursor-pointer active:scale-98 p-2.5 sm:p-3 items-center gap-3 sm:gap-4 shadow-md ${
                 isCurrent
-                  ? 'border-car-accent ring-1 ring-car-accent bg-car-accent/10'
-                  : 'border-car-border hover:border-slate-600'
+                  ? 'border-car-accent ring-2 ring-car-accent bg-car-accent/15'
+                  : 'border-car-border hover:border-slate-500'
               }`}
             >
-              {/* Thumbnail Container */}
-              <div className="relative w-36 sm:w-full aspect-video shrink-0 bg-slate-900 overflow-hidden">
+              {/* Large Thumbnail Container */}
+              <div className="relative w-40 sm:w-48 aspect-video shrink-0 bg-slate-900 rounded-xl overflow-hidden shadow-sm">
                 <img
                   src={item.thumbnail}
                   alt={item.title}
@@ -79,9 +79,9 @@ export const VideoList: React.FC<VideoListProps> = ({
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
 
-                {/* Duration badge */}
+                {/* Duration badge (Big, readable) */}
                 {item.durationText && (
-                  <div className="absolute bottom-1.5 right-1.5 bg-black/80 text-white text-[10px] font-mono font-bold px-1.5 py-0.5 rounded backdrop-blur">
+                  <div className="absolute bottom-1.5 right-1.5 bg-black/85 text-white text-xs sm:text-sm font-mono font-extrabold px-2 py-0.5 rounded-lg backdrop-blur">
                     {item.durationText}
                   </div>
                 )}
@@ -89,31 +89,31 @@ export const VideoList: React.FC<VideoListProps> = ({
                 {/* Active Playing Badge */}
                 {isCurrent && (
                   <div className="absolute inset-0 bg-car-accent/40 flex items-center justify-center backdrop-blur-xs">
-                    <div className="bg-car-accent text-white p-2 rounded-full shadow-lg animate-pulse">
-                      <Play className="w-4 h-4 fill-white" />
+                    <div className="bg-car-accent text-white p-3 rounded-full shadow-xl animate-pulse">
+                      <Play className="w-6 h-6 fill-white ml-0.5" />
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Video Info */}
-              <div className="p-2.5 sm:p-3 flex flex-col justify-between flex-1 min-w-0">
+              {/* Video Info (Large bold text) */}
+              <div className="flex flex-col justify-between flex-1 min-w-0 pr-1">
                 <div>
                   <h4
-                    className={`text-xs sm:text-sm font-semibold line-clamp-2 leading-snug ${
+                    className={`text-base sm:text-lg font-bold line-clamp-2 leading-snug ${
                       isCurrent ? 'text-car-accent' : 'text-slate-100 group-hover:text-white'
                     }`}
                   >
                     {item.title}
                   </h4>
-                  <p className="text-[11px] text-car-textMuted mt-1 truncate font-medium">
+                  <p className="text-xs sm:text-sm text-slate-300 font-semibold mt-1.5 truncate">
                     {item.uploaderName}
                   </p>
                 </div>
 
                 {item.viewsText && (
-                  <div className="flex items-center gap-1 text-[10px] text-car-textMuted/70 mt-2">
-                    <Clock className="w-3 h-3" />
+                  <div className="flex items-center gap-1.5 text-xs text-car-textMuted mt-2 font-medium">
+                    <Clock className="w-3.5 h-3.5" />
                     <span>{item.viewsText}</span>
                   </div>
                 )}
@@ -123,22 +123,22 @@ export const VideoList: React.FC<VideoListProps> = ({
         })}
       </div>
 
-      {/* Large Car-friendly Load More Button */}
+      {/* Massive In-Car Load More Button */}
       {hasMore && onLoadMore && (
-        <div className="mt-6 text-center">
+        <div className="mt-8 text-center">
           <button
             onClick={onLoadMore}
             disabled={isLoadingMore}
-            className="w-full sm:w-auto min-w-[280px] bg-car-card hover:bg-slate-800 text-slate-100 font-bold py-3.5 px-6 rounded-2xl border border-car-border hover:border-car-accent shadow-lg flex items-center justify-center gap-2 transition active:scale-95 disabled:opacity-50"
+            className="w-full sm:max-w-md mx-auto h-16 bg-car-card hover:bg-slate-800 text-slate-100 font-extrabold text-base sm:text-lg rounded-2xl border-2 border-car-border hover:border-car-accent shadow-xl flex items-center justify-center gap-3 transition active:scale-95 disabled:opacity-50"
           >
             {isLoadingMore ? (
               <>
-                <Loader2 className="w-5 h-5 text-car-accent animate-spin" />
-                <span>Đang tải thêm kết quả...</span>
+                <Loader2 className="w-6 h-6 text-car-accent animate-spin" />
+                <span>Đang tải thêm danh sách...</span>
               </>
             ) : (
               <>
-                <ChevronDown className="w-5 h-5 text-car-accent" />
+                <ChevronDown className="w-6 h-6 text-car-accent" />
                 <span>Tải thêm video khác</span>
               </>
             )}

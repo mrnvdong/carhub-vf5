@@ -46,3 +46,4 @@ export interface StreamData {
 }
 
 export type PlayerMode = 'video' | 'audio';
+export type UiScale = 'normal' | 'large' | 'xlarge';

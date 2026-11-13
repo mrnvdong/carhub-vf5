@@ -157,12 +157,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     if (isM3U8) {
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Native HLS playback on iOS / Apple CarPlay WebKit (APTV)
         video.src = finalStreamUrl;
         video.load();
-        video.play().catch(() => {
-          setIsPlaying(false);
-        });
+        video.play().catch(() => setIsPlaying(false));
       } else if (Hls.isSupported()) {
         const hls = new Hls({
           enableWorker: true,
@@ -172,14 +169,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         hls.loadSource(finalStreamUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch(() => {
-            setIsPlaying(false);
-          });
+          video.play().catch(() => setIsPlaying(false));
         });
         hls.on(Hls.Events.ERROR, (_, data) => {
           if (data.fatal) {
             if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-              setPlaybackError('Lỗi mạng khi tải luồng HLS (m3u8)');
+              setPlaybackError('Lỗi mạng khi tải luồng HLS');
             } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
               hls.recoverMediaError();
             } else {
@@ -193,9 +188,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     } else {
       video.src = finalStreamUrl;
       video.load();
-      video.play().catch(() => {
-        setIsPlaying(false);
-      });
+      video.play().catch(() => setIsPlaying(false));
     }
 
     return () => {
@@ -218,9 +211,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     audio.src = finalStreamUrl;
     audio.load();
-    audio.play().catch(() => {
-      setIsPlaying(false);
-    });
+    audio.play().catch(() => setIsPlaying(false));
 
     return () => {
       audio.pause();
@@ -301,9 +292,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const el = getActiveMediaElement();
     if (!el || playbackError) return;
     if (el.paused) {
-      el.play().catch((err) => {
-        console.warn('Play failed:', err);
-      });
+      el.play().catch((err) => console.warn('Play failed:', err));
     } else {
       el.pause();
     }
@@ -324,7 +313,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const curr = el.currentTime;
     setCurrentTime(curr);
 
-    // SponsorBlock: Only active for direct/HLS streams (not embed)
+    // SponsorBlock: Only active for direct/HLS streams
     if (!isEmbed && streamData.sponsorSegments && streamData.sponsorSegments.length > 0) {
       for (const segment of streamData.sponsorSegments) {
         if (curr >= segment.start && curr < segment.end - 0.5) {
@@ -357,7 +346,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  // Unique available qualities from actual muxed videoStreams
   const uniqueQualities = Array.from(
     new Set((streamData.videoStreams || []).map((v) => v.quality))
   );
@@ -365,7 +353,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`relative w-full bg-black rounded-2xl overflow-hidden border border-car-border shadow-2xl transition-all ${
+      className={`relative w-full bg-black rounded-3xl overflow-hidden border-2 border-car-border shadow-2xl transition-all ${
         isFullscreen ? 'fixed inset-0 z-50 rounded-none border-none' : 'mb-6'
       }`}
     >
@@ -373,28 +361,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <div className="relative aspect-video w-full bg-slate-950 flex items-center justify-center overflow-hidden">
         {/* Loading Overlay */}
         {isLoading && (
-          <div className="absolute inset-0 z-20 bg-black/90 flex flex-col items-center justify-center gap-3">
-            <Loader2 className="w-10 h-10 text-car-accent animate-spin" />
-            <p className="text-sm font-medium text-slate-300">Đang chuẩn bị luồng phát...</p>
+          <div className="absolute inset-0 z-20 bg-black/90 flex flex-col items-center justify-center gap-4">
+            <Loader2 className="w-14 h-14 text-car-accent animate-spin" />
+            <p className="text-base sm:text-lg font-bold text-slate-200">Đang chuẩn bị luồng phát...</p>
           </div>
         )}
 
         {/* Playback Error Overlay */}
         {playbackError && !isEmbed && (
-          <div className="absolute inset-0 z-30 bg-black/95 flex flex-col items-center justify-center p-6 text-center gap-3">
-            <AlertCircle className="w-10 h-10 text-rose-500" />
-            <h4 className="text-base font-bold text-white">Không thể phát luồng trực tiếp</h4>
-            <p className="text-xs text-car-textMuted max-w-md">{playbackError}</p>
-            <div className="flex flex-wrap items-center justify-center gap-2.5 mt-2">
+          <div className="absolute inset-0 z-30 bg-black/95 flex flex-col items-center justify-center p-6 text-center gap-4">
+            <AlertCircle className="w-14 h-14 text-rose-500" />
+            <h4 className="text-lg sm:text-xl font-bold text-white">Không thể phát luồng trực tiếp</h4>
+            <p className="text-sm text-car-textMuted max-w-md">{playbackError}</p>
+            <div className="flex flex-wrap items-center justify-center gap-3 mt-3">
               {onRetry && (
                 <button
                   onClick={() => {
                     setPlaybackError(null);
                     onRetry();
                   }}
-                  className="px-4 py-2.5 bg-car-card hover:bg-slate-800 border border-car-border text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                  className="h-13 px-5 bg-car-card hover:bg-slate-800 border-2 border-car-border text-white rounded-2xl text-sm sm:text-base font-bold flex items-center gap-2 active:scale-95"
                 >
-                  <RefreshCw className="w-4 h-4" />
+                  <RefreshCw className="w-5 h-5" />
                   <span>Tải lại luồng mới</span>
                 </button>
               )}
@@ -404,18 +392,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     setPlaybackError(null);
                     setForceEmbed(true);
                   }}
-                  className="px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                  className="h-13 px-5 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl text-sm sm:text-base font-bold flex items-center gap-2 active:scale-95"
                 >
-                  <ExternalLink className="w-4 h-4" />
+                  <ExternalLink className="w-5 h-5" />
                   <span>Phát qua YouTube Embed</span>
                 </button>
               )}
               {hasNext && onNext && (
                 <button
                   onClick={onNext}
-                  className="px-4 py-2.5 bg-car-accent hover:bg-car-accentHover text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                  className="h-13 px-5 bg-car-accent hover:bg-car-accentHover text-white rounded-2xl text-sm sm:text-base font-bold flex items-center gap-2 active:scale-95"
                 >
-                  <SkipForward className="w-4 h-4" />
+                  <SkipForward className="w-5 h-5" />
                   <span>Bài tiếp theo</span>
                 </button>
               )}
@@ -425,8 +413,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         {/* SponsorBlock & Mode Toast Notices */}
         {(sponsorSkippedNotice || modeNotice) && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-car-accent/95 text-white px-4 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 shadow-lg backdrop-blur">
-            <ShieldCheck className="w-4 h-4 text-emerald-300 shrink-0" />
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-car-accent/95 text-white px-5 py-2 rounded-full text-sm sm:text-base font-bold flex items-center gap-2 shadow-xl backdrop-blur">
+            <ShieldCheck className="w-5 h-5 text-emerald-300 shrink-0" />
             <span>{sponsorSkippedNotice || modeNotice}</span>
           </div>
         )}
@@ -474,14 +462,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               allowFullScreen
             />
-            <div className="absolute top-2 left-2 z-10 bg-amber-500/95 text-black px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 shadow">
-              <ExternalLink className="w-3 h-3" />
+            <div className="absolute top-3 left-3 z-10 bg-amber-500/95 text-black px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-md">
+              <ExternalLink className="w-4 h-4" />
               <span>Nguồn: YouTube Embed (Dự phòng)</span>
             </div>
           </div>
         )}
 
-        {/* Mode 3: Audio Only ("Chỉ nghe nhạc" - Only rendered when hasAudioStream is true) */}
+        {/* Mode 3: Audio Only ("Chỉ nghe nhạc") */}
         {!isEmbed && playerMode === 'audio' && hasAudioStream && (
           <div className="w-full h-full flex flex-col items-center justify-center p-6 bg-gradient-to-br from-car-card via-slate-900 to-black relative">
             <audio
@@ -510,10 +498,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               }}
             />
 
-            {/* Rotating Album Art Vinyl Disc - Only spins when actually playing audio */}
-            <div className="relative mb-4 group" onClick={togglePlay}>
+            {/* Rotating Album Art Vinyl Disc (Big touchable) */}
+            <div className="relative mb-4 group cursor-pointer" onClick={togglePlay}>
               <div
-                className={`w-32 h-32 sm:w-44 sm:h-44 rounded-full overflow-hidden border-4 border-slate-700 shadow-2xl relative cursor-pointer ${
+                className={`w-40 h-40 sm:w-56 sm:h-56 rounded-full overflow-hidden border-4 border-slate-700 shadow-2xl relative ${
                   isPlaying && !isBuffering && !playbackError ? 'animate-spin' : ''
                 }`}
                 style={{ animationDuration: '10s' }}
@@ -524,27 +512,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   className="w-full h-full object-cover"
                 />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-8 h-8 rounded-full bg-slate-900 border-2 border-slate-400"></div>
+                  <div className="w-10 h-10 rounded-full bg-slate-900 border-2 border-slate-400"></div>
                 </div>
               </div>
               <div
-                className={`absolute -bottom-2 -right-2 p-2 rounded-full text-white shadow-lg ${
+                className={`absolute -bottom-2 -right-2 p-3 rounded-full text-white shadow-xl ${
                   isPlaying && !isBuffering ? 'bg-emerald-500' : 'bg-slate-700'
                 }`}
               >
                 {isBuffering ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-6 h-6 animate-spin" />
                 ) : (
-                  <Radio className={`w-4 h-4 ${isPlaying ? 'animate-pulse' : ''}`} />
+                  <Radio className={`w-6 h-6 ${isPlaying ? 'animate-pulse' : ''}`} />
                 )}
               </div>
             </div>
 
-            <div className="text-center max-w-lg px-4">
-              <h2 className="text-base sm:text-xl font-bold line-clamp-1 text-white">
+            <div className="text-center max-w-xl px-4">
+              <h2 className="text-lg sm:text-2xl font-extrabold line-clamp-1 text-white">
                 {streamData.title}
               </h2>
-              <p className="text-xs sm:text-sm text-car-textMuted font-medium mt-1">
+              <p className="text-sm sm:text-base text-car-textMuted font-semibold mt-1">
                 {streamData.uploader} •{' '}
                 {isBuffering
                   ? 'Đang nạp luồng âm thanh...'
@@ -557,39 +545,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
       </div>
 
-      {/* Car Player Controls Bar */}
-      <div className="bg-car-card px-4 py-3 border-t border-car-border">
+      {/* Car Player Controls Bar - OVERSIZED FOR AUTOMOTIVE TOUCHSCREEN */}
+      <div className="bg-car-card px-4 py-4 sm:px-6 sm:py-5 border-t-2 border-car-border">
         {/* Title bar for current video */}
-        <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center justify-between gap-3 mb-3">
           <div className="min-w-0 flex-1">
-            <h3 className="text-xs sm:text-sm font-bold text-slate-100 truncate">
+            <h3 className="text-base sm:text-xl font-extrabold text-slate-100 truncate">
               {streamData.title}
             </h3>
-            <p className="text-[11px] text-car-textMuted truncate">{streamData.uploader}</p>
+            <p className="text-sm sm:text-base text-slate-300 font-semibold truncate mt-0.5">
+              {streamData.uploader}
+            </p>
           </div>
           <span
-            className={`shrink-0 text-[10px] font-mono px-2 py-0.5 rounded border ${
+            className={`shrink-0 text-xs sm:text-sm font-bold px-3 py-1.5 rounded-xl border-2 ${
               isEmbed
-                ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                ? 'bg-amber-500/10 text-amber-300 border-amber-500/40'
                 : isHlsActive
-                ? 'bg-purple-500/10 text-purple-300 border-purple-500/30'
-                : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                ? 'bg-purple-500/10 text-purple-300 border-purple-500/40'
+                : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40'
             }`}
           >
             {isEmbed
-              ? 'YouTube Embed (Dự phòng)'
+              ? 'YouTube Embed'
               : playerMode === 'audio'
-              ? `Audio Stream (${useProxy ? 'Proxy' : 'Direct'})`
+              ? 'Chỉ nghe nhạc'
               : isHlsActive
-              ? 'HLS Stream (M3U8)'
-              : `Direct MP4 (${useProxy ? 'Proxy' : 'CDN'})`}
+              ? 'HLS Stream'
+              : 'Direct MP4'}
           </span>
         </div>
 
-        {/* Progress scrub bar - Only for direct/HLS streams */}
+        {/* Thick Progress Scrub Bar with Large Touch Thumb */}
         {!isEmbed && (
-          <div className="flex items-center gap-3 mb-2">
-            <span className="text-xs font-mono text-car-textMuted shrink-0">
+          <div className="flex items-center gap-3 sm:gap-4 mb-3">
+            <span className="text-sm sm:text-base font-mono font-bold text-slate-200 shrink-0 min-w-[50px]">
               {formatSeconds(currentTime)}
             </span>
             <input
@@ -599,23 +589,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               value={currentTime}
               disabled={Boolean(playbackError)}
               onChange={handleSeekChange}
-              className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-car-accent focus:outline-none disabled:opacity-40"
+              className="w-full cursor-pointer"
             />
-            <span className="text-xs font-mono text-car-textMuted shrink-0">
+            <span className="text-sm sm:text-base font-mono font-bold text-slate-200 shrink-0 min-w-[50px] text-right">
               {formatSeconds(duration)}
             </span>
           </div>
         )}
 
         {isEmbed && (
-          <div className="text-[11px] text-amber-300/90 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20 mb-2">
-            ⚠️ Nguồn dự phòng YouTube Embed: Không hỗ trợ chặn quảng cáo/SponsorBlock, không hỗ trợ chế độ Chỉ nghe nhạc và phím Play/Tua rời. Vui lòng chạm trực tiếp vào khung video để điều khiển.
+          <div className="text-xs sm:text-sm text-amber-300 bg-amber-500/15 px-4 py-2.5 rounded-xl border border-amber-500/30 mb-3 font-semibold">
+            ⚠️ Nguồn dự phòng YouTube Embed: Chạm trực tiếp vào khung video ở trên để Play/Pause và tua.
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-2">
+        {/* Giant In-Car Transport Controls */}
+        <div className="flex items-center justify-between gap-3 pt-1">
           {/* Left: Mode Switcher & Quality */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:gap-3">
             {!isEmbed && (
               <button
                 onClick={() => {
@@ -624,47 +615,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }
                 }}
                 disabled={!hasAudioStream}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition ${
+                className={`h-13 sm:h-14 px-4 sm:px-5 rounded-2xl text-sm sm:text-base font-bold transition flex items-center gap-2 active:scale-95 shadow-sm ${
                   !hasAudioStream
-                    ? 'bg-slate-900 text-slate-500 border border-slate-800 cursor-not-allowed'
+                    ? 'bg-slate-900 text-slate-500 border-2 border-slate-800 cursor-not-allowed'
                     : playerMode === 'audio'
-                    ? 'bg-emerald-600 text-white shadow-md'
-                    : 'bg-slate-800 text-slate-200 hover:text-white'
+                    ? 'bg-emerald-600 text-white border-2 border-emerald-400 shadow-lg shadow-emerald-600/30'
+                    : 'bg-slate-800 text-slate-100 hover:text-white border-2 border-slate-700'
                 }`}
                 title={
                   hasAudioStream
-                    ? 'Bật/tắt chế độ Chỉ nghe nhạc (tiết kiệm 4G)'
+                    ? 'Bật/tắt chế độ Chỉ nghe nhạc'
                     : 'Video này không có luồng âm thanh riêng biệt'
                 }
               >
                 {!hasAudioStream ? (
                   <>
-                    <Lock className="w-3.5 h-3.5 text-slate-500" />
+                    <Lock className="w-4 h-4 text-slate-500" />
                     <span className="hidden sm:inline">Không có audio riêng</span>
                   </>
                 ) : playerMode === 'audio' ? (
                   <>
-                    <Tv className="w-4 h-4 text-emerald-100" />
-                    <span className="hidden sm:inline">Chuyển sang Video</span>
+                    <Tv className="w-5 h-5 text-emerald-100" />
+                    <span>Xem video</span>
                   </>
                 ) : (
                   <>
-                    <Headphones className="w-4 h-4 text-emerald-400" />
-                    <span className="hidden sm:inline">Chỉ nghe nhạc</span>
+                    <Headphones className="w-5 h-5 text-emerald-400" />
+                    <span>Chỉ nghe nhạc</span>
                   </>
                 )}
               </button>
             )}
 
-            {/* Quality Picker: Only show actual available qualities */}
+            {/* Quality Picker */}
             {!isEmbed && playerMode === 'video' && (uniqueQualities.length > 1 || (hasDirectVideo && hasHls)) && (
               <select
                 value={selectedQuality}
                 onChange={(e) => setSelectedQuality(e.target.value)}
-                className="bg-slate-800 text-slate-200 text-xs px-2.5 py-2 rounded-xl border border-car-border font-medium focus:outline-none"
+                className="h-13 sm:h-14 bg-slate-800 text-slate-100 text-sm sm:text-base px-3.5 rounded-2xl border-2 border-slate-700 font-bold focus:outline-none"
               >
-                <option value="auto">Tự động</option>
-                {hasHls && <option value="hls">HLS (Adaptive)</option>}
+                <option value="auto">Auto</option>
+                {hasHls && <option value="hls">HLS</option>}
                 {uniqueQualities.map((q) => (
                   <option key={q} value={q}>
                     {q}
@@ -674,97 +665,105 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </div>
 
-          {/* Center: Transport Controls */}
-          <div className="flex items-center gap-1 sm:gap-2">
-            {/* Prev Track */}
+          {/* Center: MASSIVE Automotive Transport Controls */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Prev Track (Big touch) */}
             <button
               onClick={onPrev}
               disabled={!hasPrev}
-              className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none active:scale-95 transition"
+              className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-100 flex items-center justify-center border-2 border-slate-700 disabled:opacity-30 disabled:pointer-events-none active:scale-95 transition shadow-sm"
               title="Bài trước"
             >
-              <SkipBack className="w-5 h-5" />
+              <SkipBack className="w-6 h-6 sm:w-7 sm:h-7" />
             </button>
 
-            {/* Rewind 10s - Only for direct/HLS */}
+            {/* Rewind 10s (Big touch with clear 10s text) */}
             {!isEmbed && (
               <button
                 onClick={() => handleSeekRelative(-10)}
                 disabled={Boolean(playbackError)}
-                className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 active:scale-95 transition flex items-center justify-center relative"
+                className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-100 flex flex-col items-center justify-center border-2 border-slate-700 disabled:opacity-30 active:scale-95 transition shadow-sm relative"
                 title="Tua lùi 10 giây"
               >
-                <RotateCcw className="w-5 h-5" />
-                <span className="absolute text-[8px] font-bold bottom-0.5">10</span>
+                <RotateCcw className="w-6 h-6 sm:w-7 sm:h-7 text-car-accent" />
+                <span className="text-[10px] sm:text-xs font-extrabold text-slate-200 mt-0.5 leading-none">
+                  -10s
+                </span>
               </button>
             )}
 
-            {/* Play/Pause Button - Only active for direct/HLS */}
+            {/* Giant Central Play/Pause Button (80px - 88px) */}
             {!isEmbed ? (
               <button
                 onClick={togglePlay}
                 disabled={Boolean(playbackError)}
-                className="w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-car-accent hover:bg-car-accentHover disabled:opacity-40 text-white flex items-center justify-center shadow-lg shadow-car-accent/40 active:scale-90 transition mx-1"
+                className="w-18 h-18 sm:w-22 sm:h-22 rounded-full bg-car-accent hover:bg-car-accentHover disabled:opacity-40 text-white flex items-center justify-center shadow-xl shadow-car-accent/50 active:scale-90 transition mx-1 border-4 border-blue-400"
                 title={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
               >
                 {isBuffering ? (
-                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <Loader2 className="w-8 h-8 sm:w-10 sm:h-10 animate-spin" />
                 ) : isPlaying ? (
-                  <Pause className="w-6 h-6 fill-white" />
+                  <Pause className="w-8 h-8 sm:w-10 sm:h-10 fill-white" />
                 ) : (
-                  <Play className="w-6 h-6 fill-white ml-0.5" />
+                  <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-white ml-1" />
                 )}
               </button>
             ) : (
-              <div className="text-xs text-car-textMuted px-2 font-medium">
-                Chạm trên video để phát
+              <div className="text-sm text-slate-300 font-bold px-3">
+                (Chạm video để Play)
               </div>
             )}
 
-            {/* Forward 10s - Only for direct/HLS */}
+            {/* Forward 10s (Big touch with clear 10s text) */}
             {!isEmbed && (
               <button
                 onClick={() => handleSeekRelative(10)}
                 disabled={Boolean(playbackError)}
-                className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 active:scale-95 transition flex items-center justify-center relative"
+                className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-100 flex flex-col items-center justify-center border-2 border-slate-700 disabled:opacity-30 active:scale-95 transition shadow-sm relative"
                 title="Tua tới 10 giây"
               >
-                <RotateCw className="w-5 h-5" />
-                <span className="absolute text-[8px] font-bold bottom-0.5">10</span>
+                <RotateCw className="w-6 h-6 sm:w-7 sm:h-7 text-car-accent" />
+                <span className="text-[10px] sm:text-xs font-extrabold text-slate-200 mt-0.5 leading-none">
+                  +10s
+                </span>
               </button>
             )}
 
-            {/* Next Track */}
+            {/* Next Track (Big touch) */}
             <button
               onClick={onNext}
               disabled={!hasNext}
-              className="p-2 sm:p-2.5 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none active:scale-95 transition"
+              className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-100 flex items-center justify-center border-2 border-slate-700 disabled:opacity-30 disabled:pointer-events-none active:scale-95 transition shadow-sm"
               title="Bài tiếp theo"
             >
-              <SkipForward className="w-5 h-5" />
+              <SkipForward className="w-6 h-6 sm:w-7 sm:h-7" />
             </button>
           </div>
 
           {/* Right: Favorite & Fullscreen */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             <button
               onClick={onToggleFavorite}
-              className={`p-2 sm:p-2.5 rounded-xl transition ${
+              className={`w-13 h-13 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center border-2 transition active:scale-95 ${
                 isFavorite
-                  ? 'text-amber-400 bg-amber-400/10'
-                  : 'text-car-textMuted hover:text-white hover:bg-slate-800'
+                  ? 'text-amber-400 bg-amber-400/15 border-amber-400'
+                  : 'text-slate-300 hover:text-white bg-slate-800 border-slate-700'
               }`}
               title="Thêm vào danh sách yêu thích"
             >
-              <Star className={`w-5 h-5 ${isFavorite ? 'fill-amber-400' : ''}`} />
+              <Star className={`w-6 h-6 sm:w-7 sm:h-7 ${isFavorite ? 'fill-amber-400' : ''}`} />
             </button>
 
             <button
               onClick={toggleFullscreen}
-              className="p-2 sm:p-2.5 rounded-xl text-car-textMuted hover:text-white hover:bg-slate-800 transition"
+              className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center text-slate-300 hover:text-white bg-slate-800 border-2 border-slate-700 transition active:scale-95"
               title="Toàn màn hình"
             >
-              {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+              {isFullscreen ? (
+                <Minimize2 className="w-6 h-6 sm:w-7 sm:h-7" />
+              ) : (
+                <Maximize2 className="w-6 h-6 sm:w-7 sm:h-7" />
+              )}
             </button>
           </div>
         </div>

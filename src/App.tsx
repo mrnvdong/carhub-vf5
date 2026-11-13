@@ -3,7 +3,7 @@ import { Header } from './components/Header';
 import { CategoryChips } from './components/CategoryChips';
 import { VideoPlayer } from './components/VideoPlayer';
 import { VideoList } from './components/VideoList';
-import { VideoItem, StreamData, PlayerMode } from './types';
+import { VideoItem, StreamData, PlayerMode, UiScale } from './types';
 import { searchVideos, getVideoDetails } from './services/api';
 import { Car, ShieldCheck, AlertCircle, RefreshCw, SkipForward } from 'lucide-react';
 
@@ -12,6 +12,17 @@ export const App: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('remix');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [playerMode, setPlayerMode] = useState<PlayerMode>('video');
+
+  // UI scale preset: default to 'large' (120%) for VinFast VF5
+  const [uiScale, setUiScale] = useState<UiScale>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_ui_scale');
+      if (saved === 'normal' || saved === 'large' || saved === 'xlarge') return saved;
+      return 'large';
+    } catch {
+      return 'large';
+    }
+  });
 
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [nextContinuation, setNextContinuation] = useState<string | null>(null);
@@ -44,7 +55,15 @@ export const App: React.FC = () => {
     }
   });
 
-  // Save history & favorites to localStorage
+  // Save UI scale, history & favorites to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_ui_scale', uiScale);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [uiScale]);
+
   useEffect(() => {
     try {
       localStorage.setItem('carhub_history', JSON.stringify(history));
@@ -141,13 +160,11 @@ export const App: React.FC = () => {
     async (video: VideoItem, noCache = false) => {
       const reqId = ++requestCounterRef.current;
 
-      // Immediately unmount previous player and clear errors so old video never stays on screen
       setStreamData(null);
       setStreamErrorMessage(null);
       setCurrentVideo(video);
       setIsLoadingStream(true);
 
-      // Add to history
       setHistory((prev) => {
         const filtered = prev.filter((item) => item.id !== video.id);
         return [video, ...filtered].slice(0, 50);
@@ -155,7 +172,6 @@ export const App: React.FC = () => {
 
       try {
         const details = await getVideoDetails(video.id, noCache);
-        // Ignore stale response if user clicked another video in the meantime
         if (reqId !== requestCounterRef.current) return;
 
         if (details && details.playbackType !== 'unplayable') {
@@ -227,27 +243,35 @@ export const App: React.FC = () => {
     Boolean(nextContinuation);
   const hasPrev = currentIndex > 0;
 
+  // Compute zoom style for in-car CarPlay screens
+  const zoomFactor = uiScale === 'normal' ? 1.0 : uiScale === 'large' ? 1.2 : 1.38;
+
   return (
-    <div className="min-h-screen bg-car-bg text-slate-100 flex flex-col pb-16">
+    <div
+      style={{ zoom: zoomFactor }}
+      className="min-h-screen bg-car-bg text-slate-100 flex flex-col pb-20 transition-all duration-200"
+    >
       <Header
         onSearch={handleSearch}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
+        uiScale={uiScale}
+        onChangeUiScale={setUiScale}
       />
 
-      {/* Safety Notice Banner */}
-      <div className="bg-slate-900 border-b border-car-border px-3 py-1.5 flex items-center justify-between text-[11px] text-car-textMuted">
-        <div className="flex items-center gap-1.5 mx-auto text-amber-300">
-          <Car className="w-3.5 h-3.5 shrink-0" />
+      {/* Driver Safety Notice Banner (Clearer, larger text) */}
+      <div className="bg-slate-900 border-b border-car-border px-4 py-2 flex items-center justify-between text-xs sm:text-sm text-car-textMuted">
+        <div className="flex items-center gap-2 mx-auto text-amber-300 font-bold">
+          <Car className="w-4 h-4 shrink-0" />
           <span>
-            Lái xe an toàn • Bật chế độ <strong>Chỉ nghe nhạc</strong> khi xe đang di chuyển
+            VinFast VF5 • Bật chế độ <strong>Chỉ nghe nhạc</strong> khi xe đang di chuyển
           </span>
         </div>
-        <div className="hidden sm:flex items-center gap-1 text-slate-400 font-medium">
-          <ShieldCheck className="w-3.5 h-3.5 text-car-accent" />
-          <span>Chặn quảng cáo & SponsorBlock trên luồng trực tiếp (Direct/HLS)</span>
+        <div className="hidden sm:flex items-center gap-1.5 text-slate-300 font-semibold">
+          <ShieldCheck className="w-4 h-4 text-car-accent" />
+          <span>Chặn quảng cáo (Direct/HLS)</span>
         </div>
       </div>
 
@@ -258,17 +282,17 @@ export const App: React.FC = () => {
         />
       )}
 
-      <main className="flex-1 max-w-7xl mx-auto w-full px-2 sm:px-6 pt-3">
-        {/* Loading state when switching video (old player is immediately cleared) */}
+      <main className="flex-1 max-w-7xl mx-auto w-full px-3 sm:px-6 pt-3">
+        {/* Loading state when switching video */}
         {isLoadingStream && currentVideo && (
-          <div className="w-full aspect-video bg-car-card rounded-2xl border border-car-border flex flex-col items-center justify-center gap-3 mb-6 p-4 text-center shadow-2xl">
-            <div className="w-10 h-10 border-3 border-car-accent border-t-transparent rounded-full animate-spin"></div>
+          <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-car-border flex flex-col items-center justify-center gap-4 mb-6 p-6 text-center shadow-2xl">
+            <div className="w-12 h-12 border-4 border-car-accent border-t-transparent rounded-full animate-spin"></div>
             <div className="max-w-md">
-              <p className="text-sm sm:text-base font-bold text-white line-clamp-1">
+              <p className="text-base sm:text-xl font-bold text-white line-clamp-1">
                 {currentVideo.title}
               </p>
-              <p className="text-xs text-car-textMuted mt-1">
-                Đang tải luồng phát cho video mới...
+              <p className="text-sm text-slate-300 font-semibold mt-1">
+                Đang chuẩn bị luồng phát mới...
               </p>
             </div>
           </div>
@@ -276,36 +300,36 @@ export const App: React.FC = () => {
 
         {/* Error state if video is unplayable or stream extraction failed */}
         {streamErrorMessage && currentVideo && !isLoadingStream && (
-          <div className="w-full aspect-video bg-car-card rounded-2xl border border-rose-500/30 p-6 flex flex-col items-center justify-center text-center gap-3 mb-6 shadow-2xl">
-            <AlertCircle className="w-10 h-10 text-rose-500" />
+          <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-rose-500/40 p-6 flex flex-col items-center justify-center text-center gap-4 mb-6 shadow-2xl">
+            <AlertCircle className="w-14 h-14 text-rose-500" />
             <div className="max-w-md">
-              <h4 className="text-sm sm:text-base font-bold text-white line-clamp-1">
+              <h4 className="text-base sm:text-xl font-bold text-white line-clamp-1">
                 {currentVideo.title}
               </h4>
-              <p className="text-xs text-rose-400 mt-1">{streamErrorMessage}</p>
+              <p className="text-sm text-rose-300 font-semibold mt-1">{streamErrorMessage}</p>
             </div>
-            <div className="flex flex-wrap items-center justify-center gap-3 mt-2">
+            <div className="flex flex-wrap items-center justify-center gap-3 mt-3">
               <button
                 onClick={() => playVideo(currentVideo, true)}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-xl text-white border border-car-border flex items-center gap-1.5"
+                className="h-13 px-5 bg-slate-800 hover:bg-slate-700 text-sm sm:text-base font-bold rounded-2xl text-white border-2 border-car-border flex items-center gap-2 active:scale-95"
               >
-                <RefreshCw className="w-4 h-4" />
-                <span>Thử tải lại (Bỏ cache)</span>
+                <RefreshCw className="w-5 h-5" />
+                <span>Thử tải lại</span>
               </button>
               {hasNext && (
                 <button
                   onClick={handleNext}
-                  className="px-4 py-2.5 bg-car-accent hover:bg-car-accentHover text-xs font-semibold rounded-xl text-white flex items-center gap-1.5"
+                  className="h-13 px-5 bg-car-accent hover:bg-car-accentHover text-sm sm:text-base font-bold rounded-2xl text-white flex items-center gap-2 active:scale-95"
                 >
-                  <SkipForward className="w-4 h-4" />
-                  <span>Chuyển sang bài tiếp theo</span>
+                  <SkipForward className="w-5 h-5" />
+                  <span>Bài tiếp theo</span>
                 </button>
               )}
             </div>
           </div>
         )}
 
-        {/* Active Player - Keyed by streamData.id so old player DOM is always destroyed on track change */}
+        {/* Active Player */}
         {streamData && currentVideo && !isLoadingStream && !streamErrorMessage && (
           <VideoPlayer
             key={streamData.id}
