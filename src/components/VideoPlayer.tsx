@@ -228,17 +228,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         });
         hls.on(Hls.Events.ERROR, (_, data) => {
           if (data.fatal) {
-            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-              setPlaybackError('Lỗi mạng khi tải luồng HLS');
-            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
               hls.recoverMediaError();
             } else {
-              setPlaybackError('Không thể giải mã luồng HLS này');
+              handleMediaError('hls');
             }
           }
         });
       } else {
-        setPlaybackError('Trình duyệt không hỗ trợ định dạng HLS');
+        handleMediaError('hls-unsupported');
       }
     } else {
       video.src = finalStreamUrl;
@@ -275,24 +273,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [finalStreamUrl, isEmbed, playerMode]);
 
-  // Handle stream error with automatic proxy fallback before showing error screen
-  const handleMediaError = () => {
+  // Self-Healing Stream Fallback Cascade: Direct MP4 -> Edge Proxy -> HLS -> YouTube Embed
+  const handleMediaError = (reasonOrEvent?: string | React.SyntheticEvent) => {
+    const reason = typeof reasonOrEvent === 'string' ? reasonOrEvent : 'media-event-error';
+    console.warn(`[Auto-Heal] Stream failed (${reason}). Initiating fallback...`);
+
+    // Level 1: If Direct MP4 failed, try Cloudflare Edge Proxy
     if (!useProxy && rawStreamUrl && rawStreamUrl.includes('googlevideo.com')) {
-      console.warn('Direct googlevideo stream failed, retrying via Cloudflare Edge Proxy...');
+      setModeNotice('Direct MP4 bị hạn chế mạng — Đang tự động đổi sang Edge Proxy...');
+      setTimeout(() => setModeNotice(null), 3000);
       setUseProxy(true);
       setPlaybackError(null);
       return;
     }
-    if (playerMode === 'video' && !isHlsActive && hasHls) {
-      console.warn('Direct MP4 failed, switching to HLS stream...');
+
+    // Level 2: If Edge Proxy failed and HLS is available, try HLS
+    if (!isHlsActive && hasHls && streamData.hlsUrl) {
+      setModeNotice('Edge Proxy lỗi — Đang tự động chuyển sang HLS Stream...');
+      setTimeout(() => setModeNotice(null), 3000);
+      setUseProxy(false);
       setSelectedQuality('hls');
       setPlaybackError(null);
       return;
     }
+
+    // Level 3: Seamlessly fallback to YouTube Embed without stopping or showing error
+    if (streamData.embedUrl && !forceEmbed) {
+      setModeNotice('Tự động chuyển sang YouTube Embed để nhạc trên xe không bị ngắt');
+      setTimeout(() => setModeNotice(null), 4000);
+      setForceEmbed(true);
+      setPlaybackError(null);
+      return;
+    }
+
+    // Level 4: Final fallback only if everything is exhausted
     setIsPlaying(false);
     setIsBuffering(false);
-    setPlaybackError('Luồng phát bị gián đoạn hoặc URL đã hết hạn.');
+    setPlaybackError('Không thể phát video này trên mọi nguồn.');
   };
+
+  // Watchdog Timer: Auto-heal if video gets stuck buffering for > 4.5 seconds on direct stream
+  useEffect(() => {
+    if (!isBuffering || isEmbed || isPlaying || Boolean(playbackError) || !finalStreamUrl) return;
+
+    const timer = setTimeout(() => {
+      if (isBuffering && !isPlaying && !isEmbed) {
+        console.warn('[Watchdog] Playback stalled in buffering for > 4.5s. Auto-healing to next source...');
+        handleMediaError('stalled-buffering');
+      }
+    }, 4500);
+
+    return () => clearTimeout(timer);
+  }, [isBuffering, isPlaying, isEmbed, playbackError, finalStreamUrl]);
 
   // MediaSession API for CarPlay & VinFast VF5 Steering Wheel Controls
   useEffect(() => {

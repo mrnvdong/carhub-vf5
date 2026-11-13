@@ -123,7 +123,7 @@ export async function onRequestGet(context: any) {
       const pipedUrl = `${instance}/streams/${id}`;
       const res = await fetch(pipedUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' },
-        signal: AbortSignal.timeout(3500),
+        signal: AbortSignal.timeout(1800),
       });
 
       if (res.ok) {
@@ -280,73 +280,128 @@ export async function onRequestGet(context: any) {
 
 // Multi-client InnerTube extractor prioritizing Full HD 1080p and 720p streams
 async function fetchViaInnerTubeMultiClient(videoId: string) {
-  const clients = [
-    {
-      name: 'edge-innertube-ios',
-      context: {
-        client: {
-          clientName: 'IOS',
-          clientVersion: '20.10.4',
-          deviceMake: 'Apple',
-          deviceModel: 'iPhone16,2',
-          osName: 'iPhone',
-          osVersion: '18.2.1.22C161',
-          hl: 'vi',
-          gl: 'VN',
-        },
+  // 1. Primary: IOS client (Most reliable from edge datacenters, does not trigger bot check)
+  const iosClient = {
+    name: 'edge-innertube-ios',
+    context: {
+      client: {
+        clientName: 'IOS',
+        clientVersion: '20.10.4',
+        deviceMake: 'Apple',
+        deviceModel: 'iPhone16,2',
+        osName: 'iPhone',
+        osVersion: '18.2.1.22C161',
+        hl: 'vi',
+        gl: 'VN',
       },
-      userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)',
     },
-    {
-      name: 'edge-innertube-android',
-      context: {
-        client: {
-          clientName: 'ANDROID',
-          clientVersion: '20.10.38',
-          androidSdkVersion: 34,
-          hl: 'vi',
-          gl: 'VN',
-        },
+    userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)',
+  };
+
+  const iosData = await queryInnerTubeClient(videoId, iosClient);
+  if (
+    iosData &&
+    (iosData.videoStreams.length > 0 || iosData.audioStreams.length > 0 || iosData.hlsUrl)
+  ) {
+    return iosData;
+  }
+
+  // 2. Secondary fallback: ANDROID client
+  const androidClient = {
+    name: 'edge-innertube-android',
+    context: {
+      client: {
+        clientName: 'ANDROID',
+        clientVersion: '20.10.38',
+        androidSdkVersion: 34,
+        hl: 'vi',
+        gl: 'VN',
       },
-      userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip',
     },
-    {
-      name: 'edge-innertube-android-vr',
-      context: {
-        client: {
-          clientName: 'ANDROID_VR',
-          clientVersion: '1.60.19',
-          deviceMake: 'Oculus',
-          deviceModel: 'Quest 3',
-          hl: 'vi',
-          gl: 'VN',
-        },
+    userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip',
+  };
+
+  const androidData = await queryInnerTubeClient(videoId, androidClient);
+  if (
+    androidData &&
+    (androidData.videoStreams.length > 0 || androidData.audioStreams.length > 0 || androidData.hlsUrl)
+  ) {
+    return androidData;
+  }
+
+  return null;
+}
+
+async function queryInnerTubeClient(
+  videoId: string,
+  clientConfig: { name: string; context: any; userAgent: string }
+) {
+  try {
+    const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': clientConfig.userAgent,
       },
-      userAgent:
-        'Mozilla/5.0 (Linux; Android 12; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    },
-  ];
+      body: JSON.stringify({
+        context: clientConfig.context,
+        videoId,
+      }),
+      signal: AbortSignal.timeout(7000),
+    });
 
-  // Run IOS & ANDROID concurrently for 1080p MP4 + HLS master manifest
-  const [iosRes, androidRes] = await Promise.allSettled([
-    queryInnerTubeClient(videoId, clients[0]),
-    queryInnerTubeClient(videoId, clients[1]),
-  ]);
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    if (data.playabilityStatus?.status !== 'OK') return null;
 
-  const iosData = iosRes.status === 'fulfilled' ? iosRes.value : null;
-  const androidData = androidRes.status === 'fulfilled' ? androidRes.value : null;
+    const videoDetails = data.videoDetails || {};
+    const streamingData = data.streamingData || {};
 
-  if (iosData || androidData) {
-    const primary = iosData || androidData!;
-    const combinedVideoStreams = [
-      ...(iosData?.videoStreams || []),
-      ...(androidData?.videoStreams || []),
-    ];
+    const muxedFormats = streamingData.formats || [];
+    const adaptiveFormats = streamingData.adaptiveFormats || [];
+    const allFormats = [...muxedFormats, ...adaptiveFormats];
 
-    // De-duplicate videoStreams by resolution/quality and sort descending (1080p -> 720p -> 480p -> 360p)
-    // Prioritize avc1 (H.264) codec for maximum hardware compatibility on Apple CarPlay WebKit
+    const videoStreams: any[] = [];
+    const audioStreams: any[] = [];
+
+    for (const fmt of allFormats) {
+      if (!fmt.url) continue;
+      const mime = fmt.mimeType || '';
+
+      // Extract High Definition MP4 video streams (1080p, 720p, 480p, 360p)
+      if (mime.includes('video/mp4')) {
+        const isMuxed = Boolean(fmt.audioQuality || mime.includes('mp4a'));
+        videoStreams.push({
+          url: fmt.url,
+          quality: fmt.qualityLabel || `${fmt.height || 360}p`,
+          resolution: `${fmt.width || 640}x${fmt.height || 360}`,
+          mimeType: mime,
+          fps: fmt.fps || 30,
+          needsAudioSync: !isMuxed,
+        });
+      } else if (mime.includes('audio/')) {
+        audioStreams.push({
+          url: fmt.url,
+          quality: fmt.audioQuality || 'AUDIO_QUALITY_MEDIUM',
+          mimeType: mime,
+          bitrate: fmt.bitrate || 128000,
+        });
+      }
+    }
+
+    // Sort videoStreams: 1080p first, then 720p, then 480p, then 360p (prefer avc1 / H.264 for hardware decoding)
+    videoStreams.sort((a, b) => {
+      const getRes = (str: string) => parseInt(str.replace(/\D/g, '') || '0', 10);
+      const diff = getRes(b.quality) - getRes(a.quality);
+      if (diff !== 0) return diff;
+      const aIsAvc = (a.mimeType || '').includes('avc1') ? 0 : 1;
+      const bIsAvc = (b.mimeType || '').includes('avc1') ? 0 : 1;
+      return aIsAvc - bIsAvc;
+    });
+
+    // De-duplicate videoStreams by resolution/quality
     const qualityMap = new Map<string, any>();
-    for (const v of combinedVideoStreams) {
+    for (const v of videoStreams) {
       const qKey = v.quality;
       const isAvc = (v.mimeType || '').includes('avc1');
       if (!qualityMap.has(qKey)) {
@@ -357,114 +412,28 @@ async function fetchViaInnerTubeMultiClient(videoId: string) {
     }
     const uniqueVideoStreams = Array.from(qualityMap.values());
 
-    uniqueVideoStreams.sort((a, b) => {
-      const getH = (str: string) => parseInt(str.replace(/\D/g, '') || '0', 10);
-      return getH(b.quality) - getH(a.quality);
+    // Sort audioStreams: prioritize audio/mp4 (AAC/M4A) first
+    audioStreams.sort((a, b) => {
+      const aIsMp4 = a.mimeType.includes('audio/mp4') ? 0 : 1;
+      const bIsMp4 = b.mimeType.includes('audio/mp4') ? 0 : 1;
+      if (aIsMp4 !== bIsMp4) return aIsMp4 - bIsMp4;
+      return (b.bitrate || 0) - (a.bitrate || 0);
     });
 
-    const audioStreams =
-      (iosData?.audioStreams?.length ? iosData.audioStreams : androidData?.audioStreams) || [];
-    const hlsUrl = iosData?.hlsUrl || androidData?.hlsUrl || null;
-
-    if (uniqueVideoStreams.length > 0 || audioStreams.length > 0 || hlsUrl) {
-      return {
-        ...primary,
-        videoStreams: uniqueVideoStreams,
-        audioStreams,
-        hlsUrl,
-      };
-    }
+    return {
+      source: clientConfig.name,
+      title: videoDetails.title || '',
+      uploader: videoDetails.author || '',
+      thumbnailUrl:
+        videoDetails.thumbnail?.thumbnails?.slice(-1)[0]?.url ||
+        `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      duration: parseInt(videoDetails.lengthSeconds || '0', 10),
+      views: parseInt(videoDetails.viewCount || '0', 10),
+      hlsUrl: streamingData.hlsManifestUrl || null,
+      videoStreams: uniqueVideoStreams,
+      audioStreams,
+    };
+  } catch {
+    return null;
   }
-
-  // Fallback to ANDROID_VR
-  return await queryInnerTubeClient(videoId, clients[2]);
-}
-
-async function queryInnerTubeClient(
-  videoId: string,
-  clientConfig: { name: string; context: any; userAgent: string }
-) {
-  const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': clientConfig.userAgent,
-    },
-    body: JSON.stringify({
-      context: clientConfig.context,
-      videoId,
-    }),
-    signal: AbortSignal.timeout(4000),
-  });
-
-  if (!res.ok) return null;
-  const data: any = await res.json();
-  if (data.playabilityStatus?.status !== 'OK') return null;
-
-  const videoDetails = data.videoDetails || {};
-  const streamingData = data.streamingData || {};
-
-  const muxedFormats = streamingData.formats || [];
-  const adaptiveFormats = streamingData.adaptiveFormats || [];
-  const allFormats = [...muxedFormats, ...adaptiveFormats];
-
-  const videoStreams: any[] = [];
-  const audioStreams: any[] = [];
-
-  for (const fmt of allFormats) {
-    if (!fmt.url) continue;
-    const mime = fmt.mimeType || '';
-
-    // Extract High Definition MP4 video streams (1080p, 720p, 480p, 360p)
-    if (mime.includes('video/mp4')) {
-      const isMuxed = Boolean(fmt.audioQuality || mime.includes('mp4a'));
-      videoStreams.push({
-        url: fmt.url,
-        quality: fmt.qualityLabel || `${fmt.height || 360}p`,
-        resolution: `${fmt.width || 640}x${fmt.height || 360}`,
-        mimeType: mime,
-        fps: fmt.fps || 30,
-        needsAudioSync: !isMuxed,
-      });
-    } else if (mime.includes('audio/')) {
-      audioStreams.push({
-        url: fmt.url,
-        quality: fmt.audioQuality || 'AUDIO_QUALITY_MEDIUM',
-        mimeType: mime,
-        bitrate: fmt.bitrate || 128000,
-      });
-    }
-  }
-
-  // Sort videoStreams: 1080p first, then 720p, then 480p, then 360p (prefer avc1 / H.264 for hardware decoding)
-  videoStreams.sort((a, b) => {
-    const getRes = (str: string) => parseInt(str.replace(/\D/g, '') || '0', 10);
-    const diff = getRes(b.quality) - getRes(a.quality);
-    if (diff !== 0) return diff;
-    const aIsAvc = (a.mimeType || '').includes('avc1') ? 0 : 1;
-    const bIsAvc = (b.mimeType || '').includes('avc1') ? 0 : 1;
-    return aIsAvc - bIsAvc;
-  });
-
-  // Sort audioStreams: prioritize audio/mp4 (AAC/M4A) first
-  audioStreams.sort((a, b) => {
-    const aIsMp4 = a.mimeType.includes('audio/mp4') ? 0 : 1;
-    const bIsMp4 = b.mimeType.includes('audio/mp4') ? 0 : 1;
-    if (aIsMp4 !== bIsMp4) return aIsMp4 - bIsMp4;
-    return (b.bitrate || 0) - (a.bitrate || 0);
-  });
-
-  return {
-    source: clientConfig.name,
-    title: videoDetails.title || '',
-    uploader: videoDetails.author || '',
-    thumbnailUrl:
-      videoDetails.thumbnail?.thumbnails?.slice(-1)[0]?.url ||
-      `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-    duration: parseInt(videoDetails.lengthSeconds || '0', 10),
-    views: parseInt(videoDetails.viewCount || '0', 10),
-    hlsUrl: streamingData.hlsManifestUrl || null,
-    videoStreams,
-    audioStreams,
-  };
 }
