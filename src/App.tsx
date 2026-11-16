@@ -19,7 +19,7 @@ export const App: React.FC = () => {
   // Search Modal state
   const [isSearchModalOpen, setIsSearchModalOpen] = useState<boolean>(false);
 
-  // UI scale preset: default to 'large' (120%) for VinFast VF5
+  // UI scale preset: default to 'normal' or 'large' for VinFast VF5
   const [uiScale, setUiScale] = useState<UiScale>(() => {
     try {
       const saved = localStorage.getItem('carhub_ui_scale');
@@ -30,7 +30,7 @@ export const App: React.FC = () => {
     }
   });
 
-  // View Mode: 'classic' (CarHub Video) or 'ytmusic' (YouTube Music UI)
+  // View Mode: 'ytmusic' (Chỉ phát âm thanh - Giao diện YouTube Music) hoặc 'classic' (Xem Video)
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     try {
       if (typeof window !== 'undefined') {
@@ -41,7 +41,7 @@ export const App: React.FC = () => {
       }
       const saved = localStorage.getItem('carhub_view_mode') as ViewMode | null;
       if (saved === 'classic' || saved === 'ytmusic') return saved;
-      return 'ytmusic'; // Default to YouTube Music layout for automotive music experience
+      return 'ytmusic';
     } catch {
       return 'ytmusic';
     }
@@ -89,6 +89,8 @@ export const App: React.FC = () => {
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
 
   const requestCounterRef = useRef<number>(0);
+  // Bộ nhớ đệm Pre-fetch giúp chuyển bài bằng phím vô lăng VF5 tức thì (0ms delay)
+  const streamCacheRef = useRef<Map<string, StreamData>>(new Map());
 
   // Local storage for history, favorites & recent searches
   const [history, setHistory] = useState<VideoItem[]>(() => {
@@ -120,61 +122,46 @@ export const App: React.FC = () => {
     }
   });
 
-  // Save state to localStorage
   useEffect(() => {
     try {
       localStorage.setItem('carhub_ui_scale', uiScale);
-    } catch (e) {
-      console.error(e);
-    }
+    } catch {}
   }, [uiScale]);
 
   useEffect(() => {
     try {
       localStorage.setItem('carhub_view_mode', viewMode);
-    } catch (e) {
-      console.error(e);
-    }
+    } catch {}
   }, [viewMode]);
 
   useEffect(() => {
     try {
       localStorage.setItem('carhub_shuffle', String(isShuffle));
-    } catch (e) {
-      console.error(e);
-    }
+    } catch {}
   }, [isShuffle]);
 
   useEffect(() => {
     try {
       localStorage.setItem('carhub_repeat', repeatMode);
-    } catch (e) {
-      console.error(e);
-    }
+    } catch {}
   }, [repeatMode]);
 
   useEffect(() => {
     try {
       localStorage.setItem('carhub_history', JSON.stringify(history));
-    } catch (e) {
-      console.error(e);
-    }
+    } catch {}
   }, [history]);
 
   useEffect(() => {
     try {
       localStorage.setItem('carhub_favorites', JSON.stringify(favorites));
-    } catch (e) {
-      console.error(e);
-    }
+    } catch {}
   }, [favorites]);
 
   useEffect(() => {
     try {
       localStorage.setItem('carhub_recent_searches', JSON.stringify(recentSearches));
-    } catch (e) {
-      console.error(e);
-    }
+    } catch {}
   }, [recentSearches]);
 
   // Initial load
@@ -210,7 +197,6 @@ export const App: React.FC = () => {
     setIsLoadingVideos(true);
     setNextContinuation(null);
 
-    // Add to recent searches
     setRecentSearches((prev) => {
       const filtered = prev.filter((item) => item.toLowerCase() !== cleanQuery.toLowerCase());
       return [cleanQuery, ...filtered].slice(0, 10);
@@ -220,6 +206,9 @@ export const App: React.FC = () => {
       const result = await searchVideos(cleanQuery);
       setVideos(result.items);
       setNextContinuation(result.nextContinuation);
+      if (result.items.length > 0) {
+        playVideo(result.items[0]);
+      }
     } catch (err) {
       console.error('Search failed', err);
     } finally {
@@ -262,31 +251,38 @@ export const App: React.FC = () => {
     return map[catId] || 'nhạc hay';
   };
 
-  // Seamless video switching: Update metadata without destroying DOM media elements
+  // Phát bài hát (Ưu tiên lấy ngay từ bộ nhớ đệm Pre-fetch để chuyển bài bằng vô lăng 0ms)
   const playVideo = useCallback(
     async (video: VideoItem, noCache = false) => {
       const reqId = ++requestCounterRef.current;
 
       setStreamErrorMessage(null);
       setCurrentVideo(video);
-      setIsLoadingStream(true);
-
-      // Keep streamData populated with incoming video details so <VideoPlayer> is NOT unmounted
-      setStreamData((prev) => ({
-        id: video.id,
-        title: video.title,
-        uploader: video.uploaderName,
-        thumbnailUrl: video.thumbnail,
-        duration: video.duration || prev?.duration || 0,
-        playbackType: prev?.playbackType || 'direct',
-        source: prev?.source || 'init',
-        videoStreams: prev?.videoStreams || [],
-        audioStreams: prev?.audioStreams || [],
-      }));
 
       setHistory((prev) => {
         const filtered = prev.filter((item) => item.id !== video.id);
         return [video, ...filtered].slice(0, 50);
+      });
+
+      // Nếu đã được Pre-fetch trong RAM -> Phát ngay lập tức trong 0ms (giữ nguyên kết nối CarPlay)!
+      const cached = !noCache ? streamCacheRef.current.get(video.id) : undefined;
+      if (cached && cached.playbackType !== 'unplayable') {
+        setStreamData(cached);
+        setIsLoadingStream(false);
+        return;
+      }
+
+      setIsLoadingStream(true);
+      setStreamData({
+        id: video.id,
+        title: video.title,
+        uploader: video.uploaderName,
+        thumbnailUrl: video.thumbnail,
+        duration: video.duration || 0,
+        playbackType: 'direct',
+        source: 'init',
+        videoStreams: [],
+        audioStreams: [],
       });
 
       try {
@@ -294,20 +290,22 @@ export const App: React.FC = () => {
         if (reqId !== requestCounterRef.current) return;
 
         if (details && details.playbackType !== 'unplayable') {
-          setStreamData({
+          const enriched: StreamData = {
             ...details,
             title: details.title || video.title,
             uploader: details.uploader || video.uploaderName,
-          });
+          };
+          streamCacheRef.current.set(video.id, enriched);
+          setStreamData(enriched);
         } else {
           setStreamErrorMessage(
-            details?.error || 'Không tìm thấy luồng phát hợp lệ cho video này.'
+            details?.error || 'Không tìm thấy luồng phát hợp lệ cho bài hát này.'
           );
         }
       } catch (err) {
         if (reqId !== requestCounterRef.current) return;
         console.error('Failed to fetch stream details', err);
-        setStreamErrorMessage('Lỗi kết nối mạng khi tải luồng phát.');
+        setStreamErrorMessage('Lỗi kết nối mạng khi tải bài hát.');
       } finally {
         if (reqId === requestCounterRef.current) {
           setIsLoadingStream(false);
@@ -316,6 +314,40 @@ export const App: React.FC = () => {
     },
     []
   );
+
+  // Tự động Pre-fetch ngầm bài tiếp theo và bài trước đó để bấm vô lăng VF5 nhảy bài tức thì
+  useEffect(() => {
+    if (!currentVideo) return;
+    const list =
+      activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
+    const idx = list.findIndex((v) => v.id === currentVideo.id);
+    if (idx === -1) return;
+
+    const candidates: VideoItem[] = [];
+    if (idx + 1 < list.length) candidates.push(list[idx + 1]);
+    if (idx + 2 < list.length) candidates.push(list[idx + 2]);
+    if (idx - 1 >= 0) candidates.push(list[idx - 1]);
+
+    const timer = setTimeout(() => {
+      for (const item of candidates) {
+        if (!streamCacheRef.current.has(item.id)) {
+          getVideoDetails(item.id)
+            .then((details) => {
+              if (details && details.playbackType !== 'unplayable') {
+                streamCacheRef.current.set(item.id, {
+                  ...details,
+                  title: details.title || item.title,
+                  uploader: details.uploader || item.uploaderName,
+                });
+              }
+            })
+            .catch(() => {});
+        }
+      }
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [currentVideo, activeTab, videos, favorites, history]);
 
   const getCurrentIndex = () => {
     if (!currentVideo) return -1;
@@ -327,7 +359,6 @@ export const App: React.FC = () => {
     const list = activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
     const currentIndex = getCurrentIndex();
 
-    // Shuffle mode
     if (isShuffle && list.length > 1) {
       let randIdx = Math.floor(Math.random() * list.length);
       if (randIdx === currentIndex) {
@@ -353,6 +384,8 @@ export const App: React.FC = () => {
     const currentIndex = getCurrentIndex();
     if (currentIndex > 0) {
       playVideo(list[currentIndex - 1]);
+    } else if (list.length > 0) {
+      playVideo(list[0]);
     }
   };
 
@@ -364,7 +397,7 @@ export const App: React.FC = () => {
     });
   };
 
-  // Fallback hardware steering wheel keys if no video is playing yet
+  // Fallback phím vô lăng khi chưa chọn bài nào
   useCarHardwareControls({
     streamData: null,
     isPlaying: false,
@@ -404,27 +437,22 @@ export const App: React.FC = () => {
   };
 
   const currentIndex = getCurrentIndex();
-  const currentList = activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
+  const currentList =
+    activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
   const hasNext =
     currentIndex < currentList.length - 1 ||
+    repeatMode === 'all' ||
     (streamData?.relatedStreams?.length ?? 0) > 0 ||
     Boolean(nextContinuation);
-  const hasPrev = currentIndex > 0;
+  const hasPrev = currentIndex > 0 || currentList.length > 0;
 
-  // Compute zoom style for in-car CarPlay screens
-  const zoomFactor = uiScale === 'normal' ? 1.0 : uiScale === 'large' ? 1.2 : 1.38;
+  const zoomFactor = uiScale === 'normal' ? 1.0 : uiScale === 'large' ? 1.18 : 1.32;
 
   const activeSuggestedList =
     activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
 
   const activeColumnTitle =
-    viewMode === 'ytmusic'
-      ? activeTab === 'favorites'
-        ? 'Bài hát yêu thích'
-        : activeTab === 'history'
-        ? 'Vừa nghe gần đây'
-        : 'Tiếp theo (Up Next)'
-      : activeTab === 'favorites'
+    activeTab === 'favorites'
       ? 'Danh sách yêu thích'
       : activeTab === 'history'
       ? 'Lịch sử vừa nghe'
@@ -435,7 +463,7 @@ export const App: React.FC = () => {
   return (
     <div
       style={{ zoom: zoomFactor }}
-      className={`min-h-screen text-slate-100 flex flex-col pb-16 transition-all duration-200 ${
+      className={`min-h-screen text-slate-100 flex flex-col pb-12 transition-colors duration-200 ${
         viewMode === 'ytmusic' ? 'bg-[#030303]' : 'bg-car-bg'
       }`}
     >
@@ -451,7 +479,8 @@ export const App: React.FC = () => {
         onChangeViewMode={handleViewModeChange}
       />
 
-      {activeTab === 'explore' && (
+      {/* Ở chế độ Xem Video (Classic) hoặc khi chưa có bài hát nào phát thì hiện thanh chủ đề ở trên */}
+      {(viewMode === 'classic' || !currentVideo) && activeTab === 'explore' && (
         <CategoryChips
           selectedCategory={selectedCategory}
           onSelectCategory={loadCategory}
@@ -460,14 +489,20 @@ export const App: React.FC = () => {
       )}
 
       {/* Main Container */}
-      <main className="flex-1 max-w-[1600px] mx-auto w-full px-3 sm:px-6 pt-2">
+      <main className="flex-1 max-w-[1600px] mx-auto w-full px-3 sm:px-6 pt-3">
         {currentVideo ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-            {/* LEFT COLUMN: Player & Car Controls */}
-            <div className="lg:col-span-7 xl:col-span-8 space-y-4">
+            {/* Giữ cùng 1 vị trí cây DOM cho VideoPlayer để chuyển đổi giữa YT Music và Video không bị ngắt nhạc */}
+            <div
+              className={
+                viewMode === 'ytmusic'
+                  ? 'lg:col-span-12'
+                  : 'lg:col-span-7 xl:col-span-8 space-y-4'
+              }
+            >
               {streamErrorMessage && !isLoadingStream && (
-                <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-rose-500/40 p-6 flex flex-col items-center justify-center text-center gap-4 shadow-2xl">
-                  <AlertCircle className="w-14 h-14 text-rose-500" />
+                <div className="w-full bg-car-card rounded-3xl border-2 border-rose-500/40 p-6 mb-4 flex flex-col items-center justify-center text-center gap-4 shadow-2xl">
+                  <AlertCircle className="w-12 h-12 text-rose-500" />
                   <div className="max-w-md">
                     <h4 className="text-base sm:text-xl font-bold text-white line-clamp-1">
                       {currentVideo.title}
@@ -476,20 +511,20 @@ export const App: React.FC = () => {
                       {streamErrorMessage}
                     </p>
                   </div>
-                  <div className="flex flex-wrap items-center justify-center gap-3 mt-3">
+                  <div className="flex flex-wrap items-center justify-center gap-3">
                     <button
                       onClick={() => playVideo(currentVideo, true)}
-                      className="h-13 px-5 bg-slate-800 hover:bg-slate-700 text-sm sm:text-base font-bold rounded-2xl text-white border-2 border-car-border flex items-center gap-2 active:scale-95"
+                      className="h-12 px-5 bg-slate-800 hover:bg-slate-700 text-sm font-bold rounded-2xl text-white border border-car-border flex items-center gap-2 active:scale-95"
                     >
-                      <RefreshCw className="w-5 h-5" />
+                      <RefreshCw className="w-4 h-4" />
                       <span>Thử tải lại</span>
                     </button>
                     {hasNext && (
                       <button
                         onClick={handleNext}
-                        className="h-13 px-5 bg-car-accent hover:bg-car-accentHover text-sm sm:text-base font-bold rounded-2xl text-white flex items-center gap-2 active:scale-95"
+                        className="h-12 px-5 bg-rose-600 hover:bg-rose-500 text-sm font-bold rounded-2xl text-white flex items-center gap-2 active:scale-95"
                       >
-                        <SkipForward className="w-5 h-5" />
+                        <SkipForward className="w-4 h-4" />
                         <span>Bài tiếp theo</span>
                       </button>
                     )}
@@ -497,7 +532,6 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              {/* PERSISTENT VIDEO PLAYER: Component stays alive across songs to preserve iOS/CarPlay audio session */}
               <VideoPlayer
                 streamData={
                   streamData || {
@@ -523,28 +557,43 @@ export const App: React.FC = () => {
                 isFavorite={isFavorite}
                 onToggleFavorite={toggleFavorite}
                 viewMode={viewMode}
-                onViewModeChange={setViewMode}
+                onViewModeChange={handleViewModeChange}
                 isShuffle={isShuffle}
                 onToggleShuffle={() => setIsShuffle((s) => !s)}
                 repeatMode={repeatMode}
                 onToggleRepeat={handleToggleRepeat}
+                queueVideos={activeSuggestedList}
+                currentVideoId={currentVideo.id}
+                onSelectVideo={(v) => playVideo(v)}
+                isLoadingQueue={isLoadingVideos}
+                hasMoreQueue={Boolean(nextContinuation)}
+                isLoadingMoreQueue={isLoadingMore}
+                onLoadMoreQueue={handleLoadMore}
+                selectedCategory={selectedCategory}
+                onSelectCategory={loadCategory}
+                activeTab={activeTab}
+                onChangeTab={setActiveTab}
+                favoritesCount={favorites.length}
+                historyCount={history.length}
               />
             </div>
 
-            {/* RIGHT COLUMN: Up Next Queue or Suggested List */}
-            <div className="lg:col-span-5 xl:col-span-4 min-h-0 sticky top-24">
-              <SuggestedList
-                videos={activeSuggestedList}
-                currentVideoId={currentVideo?.id}
-                onSelectVideo={(v) => playVideo(v)}
-                isLoading={isLoadingVideos}
-                hasMore={Boolean(nextContinuation)}
-                isLoadingMore={isLoadingMore}
-                onLoadMore={handleLoadMore}
-                title={activeColumnTitle}
-                variant={viewMode}
-              />
-            </div>
+            {/* Cột phải chỉ hiển thị ở chế độ Xem Video (vì chế độ YT Music đã tích hợp sẵn bảng Tab danh sách bên trong) */}
+            {viewMode === 'classic' && (
+              <div className="lg:col-span-5 xl:col-span-4 min-h-0 sticky top-20">
+                <SuggestedList
+                  videos={activeSuggestedList}
+                  currentVideoId={currentVideo?.id}
+                  onSelectVideo={(v) => playVideo(v)}
+                  isLoading={isLoadingVideos}
+                  hasMore={Boolean(nextContinuation)}
+                  isLoadingMore={isLoadingMore}
+                  onLoadMore={handleLoadMore}
+                  title={activeColumnTitle}
+                  variant={viewMode}
+                />
+              </div>
+            )}
           </div>
         ) : (
           <div>
@@ -586,7 +635,6 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {/* DEDICATED IN-CAR SEARCH OVERLAY / MODAL */}
       <CarSearchModal
         isOpen={isSearchModalOpen}
         onClose={() => setIsSearchModalOpen(false)}

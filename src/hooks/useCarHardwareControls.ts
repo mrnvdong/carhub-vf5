@@ -13,13 +13,15 @@ interface CarHardwareControlsOptions {
   onPrev: () => void;
   onSeekRelative: (seconds: number) => void;
   onSeekTo?: (time: number) => void;
+  onHardwareAction?: (actionLabel: string) => void;
 }
 
 /**
- * Hook to handle:
- * 1. VinFast VF5 / Android Box / CarPlay steering wheel hardware buttons (MediaTrackNext, MediaTrackPrevious, Play/Pause)
- * 2. Standard keyboard shortcuts on car screens / bluetooth remotes
- * 3. HTML5 MediaSession API for Apple CarPlay (APTV) & Android Auto
+ * Hook điều khiển phím cứng vô lăng chuyên biệt cho VinFast VF5:
+ * 1. Tương thích Apple CarPlay (APTV) & Bluetooth AVRCP qua HTML5 MediaSession API
+ *    (Chú ý: Tắt seekbackward/seekforward trên MediaSession để iOS CarPlay kích hoạt đúng
+ *    nút Next Track / Previous Track trên vô lăng VF5 thay vì nút tua 10s của Podcast).
+ * 2. Tương thích Android Box / Màn hình Android / CAN-bus KeyCode qua KeyboardEvent toàn cục.
  */
 export function useCarHardwareControls({
   streamData,
@@ -33,8 +35,8 @@ export function useCarHardwareControls({
   onPrev,
   onSeekRelative,
   onSeekTo,
+  onHardwareAction,
 }: CarHardwareControlsOptions) {
-  // Use refs so event listeners always call the latest callbacks without re-attaching listeners
   const callbacksRef = useRef({
     onPlay,
     onPause,
@@ -43,6 +45,7 @@ export function useCarHardwareControls({
     onPrev,
     onSeekRelative,
     onSeekTo,
+    onHardwareAction,
   });
 
   useEffect(() => {
@@ -54,59 +57,74 @@ export function useCarHardwareControls({
       onPrev,
       onSeekRelative,
       onSeekTo,
+      onHardwareAction,
     };
   });
 
-  // 1. GLOBAL KEYBOARD / HARDWARE MEDIA KEYS LISTENER
+  // 1. GLOBAL KEYBOARD / HARDWARE MEDIA KEYS LISTENER (VF5 CAN-bus / Android Box / Bluetooth Remote)
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing in a text input or textarea
+    let lastKeyTime = 0;
+
+    const handleKeyEvent = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
         target &&
         (target.tagName === 'INPUT' ||
           target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
           target.isContentEditable)
       ) {
         return;
       }
 
-      const key = e.key;
-      const code = e.code;
-      const keyCode = e.keyCode;
+      const now = Date.now();
+      const key = e.key || '';
+      const code = e.code || '';
+      const keyCode = e.keyCode || e.which || 0;
 
-      // VF5 Steering Wheel & Android Car Media Keys:
-      // KEYCODE_MEDIA_NEXT = 87, MediaTrackNext = 176
+      const notify = (label: string) => {
+        callbacksRef.current.onHardwareAction?.(label);
+      };
+
+      // NEXT TRACK: MediaTrackNext (176), Android KEYCODE_MEDIA_NEXT (87)
       if (
         key === 'MediaTrackNext' ||
         code === 'MediaTrackNext' ||
-        keyCode === 176 ||
-        keyCode === 87 ||
         key === 'TrackNext' ||
-        code === 'TrackNext'
+        code === 'TrackNext' ||
+        keyCode === 176 ||
+        keyCode === 87
       ) {
         e.preventDefault();
         e.stopPropagation();
-        callbacksRef.current.onNext();
+        if (now - lastKeyTime > 250) {
+          lastKeyTime = now;
+          notify('⏭️ Vô lăng: Bài tiếp theo');
+          callbacksRef.current.onNext();
+        }
         return;
       }
 
-      // KEYCODE_MEDIA_PREVIOUS = 88, MediaTrackPrevious = 177
+      // PREVIOUS TRACK: MediaTrackPrevious (177), Android KEYCODE_MEDIA_PREVIOUS (88)
       if (
         key === 'MediaTrackPrevious' ||
         code === 'MediaTrackPrevious' ||
-        keyCode === 177 ||
-        keyCode === 88 ||
         key === 'TrackPrevious' ||
-        code === 'TrackPrevious'
+        code === 'TrackPrevious' ||
+        keyCode === 177 ||
+        keyCode === 88
       ) {
         e.preventDefault();
         e.stopPropagation();
-        callbacksRef.current.onPrev();
+        if (now - lastKeyTime > 250) {
+          lastKeyTime = now;
+          notify('⏮️ Vô lăng: Bài trước đó');
+          callbacksRef.current.onPrev();
+        }
         return;
       }
 
-      // KEYCODE_MEDIA_PLAY_PAUSE = 85, MediaPlayPause = 179
+      // PLAY / PAUSE TOGGLE: MediaPlayPause (179), Android KEYCODE_MEDIA_PLAY_PAUSE (85)
       if (
         key === 'MediaPlayPause' ||
         code === 'MediaPlayPause' ||
@@ -115,115 +133,114 @@ export function useCarHardwareControls({
       ) {
         e.preventDefault();
         e.stopPropagation();
-        callbacksRef.current.onTogglePlay();
+        if (now - lastKeyTime > 250) {
+          lastKeyTime = now;
+          notify('⏯️ Vô lăng: Phát / Tạm dừng');
+          callbacksRef.current.onTogglePlay();
+        }
         return;
       }
 
-      // KEYCODE_MEDIA_PLAY = 126
-      if (key === 'MediaPlay' || keyCode === 126) {
+      // PLAY: MediaPlay (126)
+      if (key === 'MediaPlay' || code === 'MediaPlay' || keyCode === 126) {
         e.preventDefault();
         e.stopPropagation();
+        notify('▶️ Vô lăng: Phát nhạc');
         callbacksRef.current.onPlay();
         return;
       }
 
-      // KEYCODE_MEDIA_PAUSE = 127, MediaStop = 178
+      // PAUSE / STOP: MediaPause (127), MediaStop (178)
       if (
         key === 'MediaPause' ||
-        keyCode === 127 ||
+        code === 'MediaPause' ||
         key === 'MediaStop' ||
+        code === 'MediaStop' ||
+        keyCode === 127 ||
         keyCode === 178
       ) {
         e.preventDefault();
         e.stopPropagation();
+        notify('⏸️ Vô lăng: Tạm dừng');
         callbacksRef.current.onPause();
         return;
       }
 
-      // Generic Shortcuts for in-car keypads, remotes, or USB wheel controllers:
-      // Space: Play/Pause
-      if (key === ' ' || code === 'Space') {
-        e.preventDefault();
-        callbacksRef.current.onTogglePlay();
-        return;
-      }
-
-      // ArrowRight: Tua tới 10s (hoặc Shift + ArrowRight: Next bài)
-      if (key === 'ArrowRight') {
-        e.preventDefault();
-        if (e.shiftKey) {
-          callbacksRef.current.onNext();
-        } else {
-          callbacksRef.current.onSeekRelative(10);
-        }
-        return;
-      }
-
-      // ArrowLeft: Tua lùi 10s (hoặc Shift + ArrowLeft: Prev bài)
-      if (key === 'ArrowLeft') {
-        e.preventDefault();
-        if (e.shiftKey) {
-          callbacksRef.current.onPrev();
-        } else {
-          callbacksRef.current.onSeekRelative(-10);
-        }
-        return;
-      }
-
-      // Key N / Key P / PageDown / PageUp for steering wheel adapters
+      // Phím PageDown / PageUp / N / P / [ / ] thường được box vô lăng map sang chuyển bài
       if (code === 'KeyN' || key === 'PageDown' || key === ']') {
         e.preventDefault();
+        notify('⏭️ Bài tiếp theo');
         callbacksRef.current.onNext();
         return;
       }
       if (code === 'KeyP' || key === 'PageUp' || key === '[') {
         e.preventDefault();
+        notify('⏮️ Bài trước đó');
         callbacksRef.current.onPrev();
+        return;
+      }
+
+      // Space: Play / Pause
+      if (key === ' ' || code === 'Space') {
+        e.preventDefault();
+        notify('⏯️ Phát / Tạm dừng');
+        callbacksRef.current.onTogglePlay();
+        return;
+      }
+
+      // ArrowRight / ArrowLeft
+      if (key === 'ArrowRight') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          notify('⏭️ Bài tiếp theo');
+          callbacksRef.current.onNext();
+        } else {
+          notify('⏩ Tua +10s');
+          callbacksRef.current.onSeekRelative(10);
+        }
+        return;
+      }
+
+      if (key === 'ArrowLeft') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          notify('⏮️ Bài trước đó');
+          callbacksRef.current.onPrev();
+        } else {
+          notify('⏪ Tua -10s');
+          callbacksRef.current.onSeekRelative(-10);
+        }
         return;
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('keydown', handleKeyEvent, { capture: true });
     return () => {
-      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('keydown', handleKeyEvent, { capture: true });
     };
   }, []);
 
-  // 2. HTML5 MEDIASESSION API (Apple CarPlay APTV / Android Auto)
+  // 2. HTML5 MEDIASESSION API (Apple CarPlay APTV & Bluetooth AVRCP trên VinFast VF5)
   useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
 
-    if (streamData) {
+    if (streamData && streamData.title) {
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
-          title: streamData.title || 'CarHub Video',
-          artist: streamData.uploader || 'VinFast VF5',
-          album: 'CarHub - VF5 YouTube Player',
-          artwork: [
-            {
-              src: streamData.thumbnailUrl,
-              sizes: '96x96',
-              type: 'image/jpeg',
-            },
-            {
-              src: streamData.thumbnailUrl,
-              sizes: '128x128',
-              type: 'image/jpeg',
-            },
-            {
-              src: streamData.thumbnailUrl,
-              sizes: '256x256',
-              type: 'image/jpeg',
-            },
-            {
-              src: streamData.thumbnailUrl,
-              sizes: '512x512',
-              type: 'image/jpeg',
-            },
-          ],
+          title: streamData.title,
+          artist: streamData.uploader || 'CarHub YouTube Music',
+          album: 'VinFast VF5 Audio',
+          artwork: streamData.thumbnailUrl
+            ? [
+                { src: streamData.thumbnailUrl, sizes: '96x96', type: 'image/jpeg' },
+                { src: streamData.thumbnailUrl, sizes: '128x128', type: 'image/jpeg' },
+                { src: streamData.thumbnailUrl, sizes: '256x256', type: 'image/jpeg' },
+                { src: streamData.thumbnailUrl, sizes: '512x512', type: 'image/jpeg' },
+              ]
+            : [],
         });
       } catch (e) {
-        console.warn('Failed to set MediaMetadata:', e);
+        console.warn('MediaMetadata error:', e);
       }
     }
 
@@ -231,41 +248,58 @@ export function useCarHardwareControls({
       navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
     } catch {}
 
-    const registerHandler = (
+    const safeSetHandler = (
       action: MediaSessionAction,
       handler: MediaSessionActionHandler | null
     ) => {
       try {
         navigator.mediaSession.setActionHandler(action, handler);
       } catch {
-        // Ignore unsupported action in old webkit
+        // Ignore unsupported actions
       }
     };
 
-    registerHandler('play', () => callbacksRef.current.onPlay());
-    registerHandler('pause', () => callbacksRef.current.onPause());
-    registerHandler('stop', () => callbacksRef.current.onPause());
-    registerHandler('nexttrack', () => callbacksRef.current.onNext());
-    registerHandler('previoustrack', () => callbacksRef.current.onPrev());
-    registerHandler('seekbackward', (details) => {
-      callbacksRef.current.onSeekRelative(-(details.seekOffset || 10));
+    safeSetHandler('play', () => {
+      callbacksRef.current.onHardwareAction?.('▶️ Vô lăng: Tiếp tục phát');
+      callbacksRef.current.onPlay();
     });
-    registerHandler('seekforward', (details) => {
-      callbacksRef.current.onSeekRelative(details.seekOffset || 10);
+
+    safeSetHandler('pause', () => {
+      callbacksRef.current.onHardwareAction?.('⏸️ Vô lăng: Tạm dừng');
+      callbacksRef.current.onPause();
     });
-    registerHandler('seekto', (details) => {
-      if (
-        typeof details.seekTime === 'number' &&
-        callbacksRef.current.onSeekTo
-      ) {
+
+    safeSetHandler('stop', () => {
+      callbacksRef.current.onPause();
+    });
+
+    safeSetHandler('nexttrack', () => {
+      callbacksRef.current.onHardwareAction?.('⏭️ Vô lăng: Bài tiếp theo');
+      callbacksRef.current.onNext();
+    });
+
+    safeSetHandler('previoustrack', () => {
+      callbacksRef.current.onHardwareAction?.('⏮️ Vô lăng: Bài trước đó');
+      callbacksRef.current.onPrev();
+    });
+
+    // QUAN TRỌNG CHO IOS CARPLAY & VF5:
+    // Phải đặt seekbackward & seekforward = null để iOS MPRemoteCommandCenter
+    // hiển thị và nhận lệnh Next Track / Previous Track từ phím cứng vô lăng VF5!
+    safeSetHandler('seekbackward', null);
+    safeSetHandler('seekforward', null);
+
+    safeSetHandler('seekto', (details) => {
+      if (typeof details.seekTime === 'number' && callbacksRef.current.onSeekTo) {
         callbacksRef.current.onSeekTo(details.seekTime);
       }
     });
-  }, [streamData, isPlaying]);
+  }, [streamData?.id, streamData?.title, streamData?.uploader, streamData?.thumbnailUrl, isPlaying]);
 
-  // 3. Update MediaSession Position State safely
+  // 3. Cập nhật vị trí thời gian thực cho màn hình xe / CarPlay
   useEffect(() => {
     if (
+      typeof navigator === 'undefined' ||
       !('mediaSession' in navigator) ||
       !navigator.mediaSession.setPositionState
     ) {
@@ -276,13 +310,11 @@ export function useCarHardwareControls({
       try {
         const validPos = Math.max(0, Math.min(currentTime, duration));
         navigator.mediaSession.setPositionState({
-          duration: Math.round(duration),
+          duration: Math.max(1, Math.round(duration)),
           playbackRate: isPlaying ? 1 : 0,
           position: Math.round(validPos),
         });
-      } catch (e) {
-        // Ignore pos state error if media ended or state changing
-      }
+      } catch {}
     }
-  }, [currentTime, duration, isPlaying]);
+  }, [Math.floor(currentTime), Math.floor(duration), isPlaying]);
 }
