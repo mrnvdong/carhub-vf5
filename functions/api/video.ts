@@ -23,9 +23,9 @@ export async function onRequestGet(context: any) {
     );
   }
 
-  // 1. Check cache (versioned v4 for 1080p streams, only used when nocache !== '1')
+  // 1. Check cache (versioned v5 for visitorData-enabled streams, only used when nocache !== '1')
   const cache = (caches as any).default;
-  const cacheKey = new Request(`${url.origin}/api/video?id=${id}&v=4`, request);
+  const cacheKey = new Request(`${url.origin}/api/video?id=${id}&v=5`, request);
   if (cache && !noCache) {
     try {
       const cachedResponse = await cache.match(cacheKey);
@@ -278,11 +278,33 @@ export async function onRequestGet(context: any) {
   );
 }
 
+// Fetch fresh visitorData token from YouTube sw.js_data to bypass edge bot checks
+async function fetchYouTubeVisitorData(): Promise<string> {
+  try {
+    const res = await fetch('https://www.youtube.com/sw.js_data', {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1',
+      },
+      signal: AbortSignal.timeout(1800),
+    });
+    if (!res.ok) return '';
+    const text = await res.text();
+    const json = JSON.parse(text.replace(/^\)\]\}'\n?/, ''));
+    return json?.[0]?.[2]?.[0]?.[0]?.[13] || '';
+  } catch {
+    return '';
+  }
+}
+
 // Multi-client InnerTube extractor prioritizing Full HD 1080p and 720p streams
 async function fetchViaInnerTubeMultiClient(videoId: string) {
-  // 1. Primary: IOS client (Most reliable from edge datacenters, does not trigger bot check)
+  const visitorData = await fetchYouTubeVisitorData();
+
+  // 1. Primary: IOS client (Most reliable from edge datacenters with visitorData)
   const iosClient = {
     name: 'edge-innertube-ios',
+    visitorData,
     context: {
       client: {
         clientName: 'IOS',
@@ -293,6 +315,7 @@ async function fetchViaInnerTubeMultiClient(videoId: string) {
         osVersion: '18.2.1.22C161',
         hl: 'vi',
         gl: 'VN',
+        ...(visitorData ? { visitorData } : {}),
       },
     },
     userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)',
@@ -309,6 +332,7 @@ async function fetchViaInnerTubeMultiClient(videoId: string) {
   // 2. Secondary fallback: ANDROID client
   const androidClient = {
     name: 'edge-innertube-android',
+    visitorData,
     context: {
       client: {
         clientName: 'ANDROID',
@@ -316,6 +340,7 @@ async function fetchViaInnerTubeMultiClient(videoId: string) {
         androidSdkVersion: 34,
         hl: 'vi',
         gl: 'VN',
+        ...(visitorData ? { visitorData } : {}),
       },
     },
     userAgent: 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip',
@@ -334,18 +359,25 @@ async function fetchViaInnerTubeMultiClient(videoId: string) {
 
 async function queryInnerTubeClient(
   videoId: string,
-  clientConfig: { name: string; context: any; userAgent: string }
+  clientConfig: { name: string; visitorData?: string; context: any; userAgent: string }
 ) {
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': clientConfig.userAgent,
+    };
+    if (clientConfig.visitorData) {
+      headers['X-Goog-Visitor-Id'] = clientConfig.visitorData;
+    }
+
     const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': clientConfig.userAgent,
-      },
+      headers,
       body: JSON.stringify({
         context: clientConfig.context,
         videoId,
+        contentCheckOk: true,
+        racyCheckOk: true,
       }),
       signal: AbortSignal.timeout(7000),
     });

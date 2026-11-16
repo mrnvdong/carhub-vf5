@@ -463,21 +463,24 @@ export const App: React.FC = () => {
   return (
     <div
       style={{ zoom: zoomFactor }}
-      className={`min-h-screen text-slate-100 flex flex-col pb-12 transition-colors duration-200 ${
-        viewMode === 'ytmusic' ? 'bg-[#030303]' : 'bg-car-bg'
+      className={`min-h-screen text-slate-100 flex flex-col transition-colors duration-200 ${
+        viewMode === 'ytmusic' ? 'bg-[#050507] pb-4' : 'bg-car-bg pb-12'
       }`}
     >
-      <Header
-        onSearch={handleSearch}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        searchQuery={searchQuery}
-        uiScale={uiScale}
-        onChangeUiScale={setUiScale}
-        onOpenSearchModal={() => setIsSearchModalOpen(true)}
-        viewMode={viewMode}
-        onChangeViewMode={handleViewModeChange}
-      />
+      {/* Ở chế độ Apple Music (khi đã có bài hát), dùng Vertical Liquid Glass Rail bên trái thay cho Header trên cùng */}
+      {(viewMode === 'classic' || !currentVideo) && (
+        <Header
+          onSearch={handleSearch}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          searchQuery={searchQuery}
+          uiScale={uiScale}
+          onChangeUiScale={setUiScale}
+          onOpenSearchModal={() => setIsSearchModalOpen(true)}
+          viewMode={viewMode}
+          onChangeViewMode={handleViewModeChange}
+        />
+      )}
 
       {/* Ở chế độ Xem Video (Classic) hoặc khi chưa có bài hát nào phát thì hiện thanh chủ đề ở trên */}
       {(viewMode === 'classic' || !currentVideo) && activeTab === 'explore' && (
@@ -489,7 +492,11 @@ export const App: React.FC = () => {
       )}
 
       {/* Main Container */}
-      <main className="flex-1 max-w-[1600px] mx-auto w-full px-3 sm:px-6 pt-3">
+      <main
+        className={`flex-1 max-w-[1600px] mx-auto w-full ${
+          viewMode === 'ytmusic' && currentVideo ? 'px-2 sm:px-4 pt-2' : 'px-3 sm:px-6 pt-3'
+        }`}
+      >
         {currentVideo ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
             {/* Giữ cùng 1 vị trí cây DOM cho VideoPlayer để chuyển đổi giữa YT Music và Video không bị ngắt nhạc */}
@@ -575,6 +582,9 @@ export const App: React.FC = () => {
                 onChangeTab={setActiveTab}
                 favoritesCount={favorites.length}
                 historyCount={history.length}
+                onOpenSearchModal={() => setIsSearchModalOpen(true)}
+                uiScale={uiScale}
+                onChangeUiScale={setUiScale}
               />
             </div>
 
