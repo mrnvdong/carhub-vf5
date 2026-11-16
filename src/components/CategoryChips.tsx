@@ -1,8 +1,10 @@
 import React from 'react';
+import { ViewMode } from '../types';
 
 interface CategoryChipsProps {
   selectedCategory: string;
   onSelectCategory: (cat: string, query: string) => void;
+  variant?: ViewMode;
 }
 
 const CATEGORIES = [
@@ -18,12 +20,32 @@ const CATEGORIES = [
 export const CategoryChips: React.FC<CategoryChipsProps> = ({
   selectedCategory,
   onSelectCategory,
+  variant = 'classic',
 }) => {
+  const isYtMusic = variant === 'ytmusic';
+
   return (
     <div className="overflow-x-auto no-scrollbar py-3 px-3 sm:px-6">
-      <div className="flex items-center gap-3 min-w-max">
+      <div className="flex items-center gap-2.5 sm:gap-3 min-w-max">
         {CATEGORIES.map((cat) => {
           const isSelected = selectedCategory === cat.id;
+
+          if (isYtMusic) {
+            return (
+              <button
+                key={cat.id}
+                onClick={() => onSelectCategory(cat.id, cat.query)}
+                className={`h-12 sm:h-13 px-4 sm:px-5 rounded-full text-sm sm:text-base font-bold transition-all whitespace-nowrap active:scale-95 flex items-center justify-center border ${
+                  isSelected
+                    ? 'bg-white text-black border-white shadow-lg shadow-white/20'
+                    : 'bg-zinc-900/90 text-zinc-300 hover:text-white border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800'
+                }`}
+              >
+                {cat.label}
+              </button>
+            );
+          }
+
           return (
             <button
               key={cat.id}

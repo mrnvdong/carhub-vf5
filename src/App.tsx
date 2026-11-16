@@ -5,9 +5,10 @@ import { VideoPlayer } from './components/VideoPlayer';
 import { VideoList } from './components/VideoList';
 import { SuggestedList } from './components/SuggestedList';
 import { CarSearchModal } from './components/CarSearchModal';
-import { VideoItem, StreamData, PlayerMode, UiScale } from './types';
+import { VideoItem, StreamData, PlayerMode, UiScale, ViewMode, RepeatMode } from './types';
 import { searchVideos, getVideoDetails } from './services/api';
 import { AlertCircle, RefreshCw, SkipForward } from 'lucide-react';
+import { useCarHardwareControls } from './hooks/useCarHardwareControls';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'explore' | 'history' | 'favorites'>('explore');
@@ -26,6 +27,54 @@ export const App: React.FC = () => {
       return 'large';
     } catch {
       return 'large';
+    }
+  });
+
+  // View Mode: 'classic' (CarHub Video) or 'ytmusic' (YouTube Music UI)
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const urlParams = new URLSearchParams(window.location.search);
+        const modeParam = urlParams.get('mode');
+        if (modeParam === 'ytmusic' || modeParam === 'music') return 'ytmusic';
+        if (modeParam === 'classic' || modeParam === 'video') return 'classic';
+      }
+      const saved = localStorage.getItem('carhub_view_mode') as ViewMode | null;
+      if (saved === 'classic' || saved === 'ytmusic') return saved;
+      return 'ytmusic'; // Default to YouTube Music layout for automotive music experience
+    } catch {
+      return 'ytmusic';
+    }
+  });
+
+  const handleViewModeChange = (mode: ViewMode) => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem('carhub_view_mode', mode);
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.set('mode', mode);
+        window.history.replaceState({}, '', url.toString());
+      }
+    } catch {}
+  };
+
+  // Playback modes: Shuffle and Repeat (off | all | one)
+  const [isShuffle, setIsShuffle] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('carhub_shuffle') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_repeat') as RepeatMode | null;
+      if (saved === 'off' || saved === 'all' || saved === 'one') return saved;
+      return 'all';
+    } catch {
+      return 'all';
     }
   });
 
@@ -79,6 +128,30 @@ export const App: React.FC = () => {
       console.error(e);
     }
   }, [uiScale]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_view_mode', viewMode);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_shuffle', String(isShuffle));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [isShuffle]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_repeat', repeatMode);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [repeatMode]);
 
   useEffect(() => {
     try {
@@ -139,7 +212,7 @@ export const App: React.FC = () => {
 
     // Add to recent searches
     setRecentSearches((prev) => {
-      const filtered = prev.filter((s) => s.toLowerCase() !== cleanQuery.toLowerCase());
+      const filtered = prev.filter((item) => item.toLowerCase() !== cleanQuery.toLowerCase());
       return [cleanQuery, ...filtered].slice(0, 10);
     });
 
@@ -189,14 +262,27 @@ export const App: React.FC = () => {
     return map[catId] || 'nhạc hay';
   };
 
+  // Seamless video switching: Update metadata without destroying DOM media elements
   const playVideo = useCallback(
     async (video: VideoItem, noCache = false) => {
       const reqId = ++requestCounterRef.current;
 
-      setStreamData(null);
       setStreamErrorMessage(null);
       setCurrentVideo(video);
       setIsLoadingStream(true);
+
+      // Keep streamData populated with incoming video details so <VideoPlayer> is NOT unmounted
+      setStreamData((prev) => ({
+        id: video.id,
+        title: video.title,
+        uploader: video.uploaderName,
+        thumbnailUrl: video.thumbnail,
+        duration: video.duration || prev?.duration || 0,
+        playbackType: prev?.playbackType || 'direct',
+        source: prev?.source || 'init',
+        videoStreams: prev?.videoStreams || [],
+        audioStreams: prev?.audioStreams || [],
+      }));
 
       setHistory((prev) => {
         const filtered = prev.filter((item) => item.id !== video.id);
@@ -240,8 +326,21 @@ export const App: React.FC = () => {
   const handleNext = () => {
     const list = activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
     const currentIndex = getCurrentIndex();
+
+    // Shuffle mode
+    if (isShuffle && list.length > 1) {
+      let randIdx = Math.floor(Math.random() * list.length);
+      if (randIdx === currentIndex) {
+        randIdx = (currentIndex + 1) % list.length;
+      }
+      playVideo(list[randIdx]);
+      return;
+    }
+
     if (currentIndex >= 0 && currentIndex < list.length - 1) {
       playVideo(list[currentIndex + 1]);
+    } else if (repeatMode === 'all' && list.length > 0) {
+      playVideo(list[0]);
     } else if (streamData?.relatedStreams && streamData.relatedStreams.length > 0) {
       playVideo(streamData.relatedStreams[0]);
     } else if (nextContinuation) {
@@ -256,6 +355,34 @@ export const App: React.FC = () => {
       playVideo(list[currentIndex - 1]);
     }
   };
+
+  const handleToggleRepeat = () => {
+    setRepeatMode((prev) => {
+      if (prev === 'off') return 'all';
+      if (prev === 'all') return 'one';
+      return 'off';
+    });
+  };
+
+  // Fallback hardware steering wheel keys if no video is playing yet
+  useCarHardwareControls({
+    streamData: null,
+    isPlaying: false,
+    currentTime: 0,
+    duration: 0,
+    onPlay: () => {
+      if (!currentVideo && videos.length > 0) playVideo(videos[0]);
+    },
+    onPause: () => {},
+    onTogglePlay: () => {
+      if (!currentVideo && videos.length > 0) playVideo(videos[0]);
+    },
+    onNext: () => {
+      if (!currentVideo && videos.length > 0) playVideo(videos[0]);
+    },
+    onPrev: () => {},
+    onSeekRelative: () => {},
+  });
 
   const isFavorite = currentVideo ? favorites.some((f) => f.id === currentVideo.id) : false;
 
@@ -291,7 +418,13 @@ export const App: React.FC = () => {
     activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
 
   const activeColumnTitle =
-    activeTab === 'favorites'
+    viewMode === 'ytmusic'
+      ? activeTab === 'favorites'
+        ? 'Bài hát yêu thích'
+        : activeTab === 'history'
+        ? 'Vừa nghe gần đây'
+        : 'Tiếp theo (Up Next)'
+      : activeTab === 'favorites'
       ? 'Danh sách yêu thích'
       : activeTab === 'history'
       ? 'Lịch sử vừa nghe'
@@ -302,7 +435,9 @@ export const App: React.FC = () => {
   return (
     <div
       style={{ zoom: zoomFactor }}
-      className="min-h-screen bg-car-bg text-slate-100 flex flex-col pb-16 transition-all duration-200"
+      className={`min-h-screen text-slate-100 flex flex-col pb-16 transition-all duration-200 ${
+        viewMode === 'ytmusic' ? 'bg-[#030303]' : 'bg-car-bg'
+      }`}
     >
       <Header
         onSearch={handleSearch}
@@ -312,12 +447,15 @@ export const App: React.FC = () => {
         uiScale={uiScale}
         onChangeUiScale={setUiScale}
         onOpenSearchModal={() => setIsSearchModalOpen(true)}
+        viewMode={viewMode}
+        onChangeViewMode={handleViewModeChange}
       />
 
       {activeTab === 'explore' && (
         <CategoryChips
           selectedCategory={selectedCategory}
           onSelectCategory={loadCategory}
+          variant={viewMode}
         />
       )}
 
@@ -327,20 +465,6 @@ export const App: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
             {/* LEFT COLUMN: Player & Car Controls */}
             <div className="lg:col-span-7 xl:col-span-8 space-y-4">
-              {isLoadingStream && (
-                <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-car-border flex flex-col items-center justify-center gap-4 p-6 text-center shadow-2xl">
-                  <div className="w-12 h-12 border-4 border-car-accent border-t-transparent rounded-full animate-spin"></div>
-                  <div className="max-w-md">
-                    <p className="text-base sm:text-xl font-bold text-white line-clamp-1">
-                      {currentVideo.title}
-                    </p>
-                    <p className="text-sm text-slate-300 font-semibold mt-1">
-                      Đang chuẩn bị luồng phát mới...
-                    </p>
-                  </div>
-                </div>
-              )}
-
               {streamErrorMessage && !isLoadingStream && (
                 <div className="w-full aspect-video bg-car-card rounded-3xl border-2 border-rose-500/40 p-6 flex flex-col items-center justify-center text-center gap-4 shadow-2xl">
                   <AlertCircle className="w-14 h-14 text-rose-500" />
@@ -373,25 +497,41 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              {streamData && !isLoadingStream && !streamErrorMessage && (
-                <VideoPlayer
-                  key={streamData.id}
-                  streamData={streamData}
-                  isLoading={isLoadingStream}
-                  playerMode={playerMode}
-                  onPlayerModeChange={setPlayerMode}
-                  onNext={handleNext}
-                  onPrev={handlePrev}
-                  onRetry={() => playVideo(currentVideo, true)}
-                  hasNext={hasNext}
-                  hasPrev={hasPrev}
-                  isFavorite={isFavorite}
-                  onToggleFavorite={toggleFavorite}
-                />
-              )}
+              {/* PERSISTENT VIDEO PLAYER: Component stays alive across songs to preserve iOS/CarPlay audio session */}
+              <VideoPlayer
+                streamData={
+                  streamData || {
+                    id: currentVideo.id,
+                    title: currentVideo.title,
+                    uploader: currentVideo.uploaderName,
+                    thumbnailUrl: currentVideo.thumbnail,
+                    duration: currentVideo.duration || 0,
+                    playbackType: 'direct',
+                    source: 'init',
+                    videoStreams: [],
+                    audioStreams: [],
+                  }
+                }
+                isLoading={isLoadingStream}
+                playerMode={playerMode}
+                onPlayerModeChange={setPlayerMode}
+                onNext={handleNext}
+                onPrev={handlePrev}
+                onRetry={() => playVideo(currentVideo, true)}
+                hasNext={hasNext}
+                hasPrev={hasPrev}
+                isFavorite={isFavorite}
+                onToggleFavorite={toggleFavorite}
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
+                isShuffle={isShuffle}
+                onToggleShuffle={() => setIsShuffle((s) => !s)}
+                repeatMode={repeatMode}
+                onToggleRepeat={handleToggleRepeat}
+              />
             </div>
 
-            {/* RIGHT COLUMN: YouTube Suggested Playlist Column */}
+            {/* RIGHT COLUMN: Up Next Queue or Suggested List */}
             <div className="lg:col-span-5 xl:col-span-4 min-h-0 sticky top-24">
               <SuggestedList
                 videos={activeSuggestedList}
@@ -402,6 +542,7 @@ export const App: React.FC = () => {
                 isLoadingMore={isLoadingMore}
                 onLoadMore={handleLoadMore}
                 title={activeColumnTitle}
+                variant={viewMode}
               />
             </div>
           </div>
@@ -415,6 +556,7 @@ export const App: React.FC = () => {
                 hasMore={Boolean(nextContinuation)}
                 isLoadingMore={isLoadingMore}
                 onLoadMore={handleLoadMore}
+                variant={viewMode}
                 title={
                   selectedCategory
                     ? 'Danh sách phát đề xuất'
@@ -427,6 +569,7 @@ export const App: React.FC = () => {
               <VideoList
                 videos={history}
                 onSelectVideo={(v) => playVideo(v)}
+                variant={viewMode}
                 title="Lịch sử bài hát vừa nghe trên xe"
               />
             )}
@@ -435,6 +578,7 @@ export const App: React.FC = () => {
               <VideoList
                 videos={favorites}
                 onSelectVideo={(v) => playVideo(v)}
+                variant={viewMode}
                 title="Danh sách bài hát yêu thích"
               />
             )}

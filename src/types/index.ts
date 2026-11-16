@@ -53,3 +53,5 @@ export interface StreamData {
 
 export type PlayerMode = 'video' | 'audio';
 export type UiScale = 'normal' | 'large' | 'xlarge';
+export type ViewMode = 'classic' | 'ytmusic';
+export type RepeatMode = 'off' | 'all' | 'one';

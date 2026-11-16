@@ -17,12 +17,19 @@ Website nghe nhạc & xem video YouTube tối ưu chuyên biệt cho màn hình 
      - *Lưu ý*: Với nguồn nhúng Embed, quảng cáo và giao diện hiển thị do YouTube kiểm soát; các nút điều khiển tùy biến (tua 10s, MediaSession vô lăng, chế độ chỉ nghe nhạc) sẽ tự động ẩn/khóa để tránh gây nhầm lẫn cho người lái.
 
 2. **Thiết kế tối ưu cho màn hình cảm ứng VinFast VF5**:
-   * **Dark Mode OLED**: Nền đen tuyền chống chói lóa mắt khi lái xe ban đêm.
-   * **Cụm điều khiển cảm ứng lớn**: Nút Play/Pause (60px), tua lùi/tới 10s, chuyển bài to rõ, dễ thao tác 1 chạm khi dừng đèn đỏ.
+   * **Hai phiên bản giao diện linh hoạt (Chuyển đổi 1-chạm)**:
+     - 🎵 **Giao diện YouTube Music**: Chuyên biệt cho nghe nhạc khi lái xe với nền đen sâu OLED (`#030303`), hiệu ứng Ambient Glow phát sáng theo ảnh bìa album, ảnh bìa vuông sắc nét, nút chuyển đổi nhanh giữa `[Bài hát]` và `[Video]`, nút Play/Pause trắng khổng lồ chuẩn YouTube Music, và hàng đợi phát (Up Next) có sóng nhạc equalizer động.
+     - 🎬 **Giao diện CarHub Video (Classic)**: Chuyên biệt để xem video ca nhạc, MV với khung hình lớn và cụm điều khiển đầy đủ.
+     - Chuyển đổi qua lại ngay trên thanh Header mà **không làm ngắt bài nhạc đang phát**.
+   * **Tương thích toàn diện phím cứng & phím vô lăng VinFast VF5**:
+     - **Apple CarPlay qua APTV**: Duy trì Audio Session liên tục qua `navigator.mediaSession` (không unmount khi đổi bài), hỗ trợ đầy đủ lệnh Play, Pause, Next bài, Prev bài, Tua 10s từ phím bấm vô lăng xe VF5.
+     - **Android Box / Màn Android**: Bắt trọn vẹn các sự kiện bàn phím phần cứng (`MediaTrackNext`, `MediaTrackPrevious`, `MediaPlayPause`, phím mũi tên, phím Space).
+     - **Khởi động nhanh**: Nếu vừa lên xe chưa chọn bài, chỉ cần bấm phím Next hoặc Play trên vô lăng là xe tự động phát ngay bài đầu tiên trong danh sách đề xuất.
+   * **Cụm điều khiển cảm ứng lớn**: Nút Play/Pause (72-88px), tua lùi/tới 10s, chuyển bài to rõ, dễ thao tác 1 chạm khi dừng đèn đỏ.
    * **Tìm kiếm giọng nói tiếng Việt**: Bấm nút Micro và nói tên bài hát thay vì phải gõ bàn phím.
-   * **Chế độ "Chỉ nghe nhạc" (Audio-Only Mode)**: Chỉ khả dụng khi video có luồng âm thanh riêng biệt. Tắt video, hiển thị đĩa than xoay giúp tập trung lái xe và tiết kiệm hơn 80% dung lượng 4G/eSIM của xe.
-   * **Tương thích phím bấm vô lăng**: Tích hợp HTML5 `MediaSession API` giúp bạn có thể bấm nút Next/Previous/Play trên vô lăng xe VinFast VF5 để điều khiển các luồng Direct/HLS.
-   * **Phân trang vô hạn (Infinite / Load More)**: Tải trước 35 - 40 bài, hỗ trợ nút "Tải thêm video khác" để duyệt hàng trăm bài hát liên tục.
+   * **Chế độ phát ngẫu nhiên (Shuffle) & Lặp lại (Repeat)**: Hỗ trợ phát ngẫu nhiên danh sách và lặp lại 1 bài hoặc toàn bộ danh sách.
+   * **Chế độ "Chỉ nghe nhạc" (Audio-Only Mode)**: Tắt video, hiển thị album art/đĩa than giúp tập trung lái xe và tiết kiệm hơn 80% dung lượng 4G/eSIM của xe.
+   * **Phân trang vô hạn (Infinite / Load More)**: Tải trước 35 - 40 bài, hỗ trợ nút "Tải thêm bài hát khác" để duyệt hàng trăm bài hát liên tục.
 
 ---
 
