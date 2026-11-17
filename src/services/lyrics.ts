@@ -11,13 +11,38 @@ export interface LyricsResult {
 
 const lyricsCache = new Map<string, LyricsResult | null>();
 
-function cleanYouTubeTitle(rawTitle: string): string {
-  return rawTitle
-    .replace(/\[.*?\]|\(.*?\)|【.*?】/g, ' ')
-    .replace(/\b(official|music video|mv|lyrics|lyric|audio|remix|nonstop|vinahouse|bass|full hd|4k|hd|live|cover|karaoke)\b/gi, ' ')
-    .replace(/[|•·\-–—]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function buildSearchCandidates(rawTitle: string, rawArtist: string): string[] {
+  const candidates = new Set<string>();
+  const stripTags = (s: string) =>
+    s
+      .replace(/\[.*?\]|\(.*?\)|【.*?】/g, ' ')
+      .replace(
+        /\b(official|music video|mv|lyrics|lyric|audio|remix|nonstop|vinahouse|bass|full hd|4k|hd|live|cover|karaoke|ver\.?|version|ft\.?|feat\.?|prod\.?)\b/gi,
+        ' '
+      )
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const fullClean = stripTags(rawTitle);
+  const cleanArtist = stripTags(rawArtist);
+
+  if (fullClean && cleanArtist) candidates.add(`${fullClean} ${cleanArtist}`);
+  if (fullClean) candidates.add(fullClean);
+
+  const parts = rawTitle
+    .split(/[|•·\-–—]/)
+    .map((p) => stripTags(p))
+    .filter((p) => p.length >= 3 && !/^\d{4}$/.test(p));
+
+  for (const part of parts) {
+    if (cleanArtist && !part.toLowerCase().includes(cleanArtist.toLowerCase())) {
+      candidates.add(`${part} ${cleanArtist}`);
+    }
+    candidates.add(part);
+  }
+
+  return Array.from(candidates).slice(0, 4);
 }
 
 export function parseLrc(lrcText: string): LyricLine[] {
@@ -49,26 +74,46 @@ export async function fetchSyncedLyrics(
     return lyricsCache.get(videoId) || null;
   }
 
-  const cleanedTitle = cleanYouTubeTitle(title);
-  const queries = [
-    `${cleanedTitle} ${artist}`.trim(),
-    cleanedTitle,
-  ].filter((q) => q.length >= 2);
+  // 1. Primary: Call our Cloudflare Edge /api/lyrics (combines LRCLIB + YouTube TimedText Captions)
+  try {
+    const apiRes = await fetch(
+      `/api/lyrics?id=${encodeURIComponent(videoId)}&title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`,
+      { signal: AbortSignal.timeout(6000) }
+    );
+    if (apiRes.ok) {
+      const data = await apiRes.json();
+      if (Array.isArray(data?.lines) && data.lines.length > 0) {
+        const result: LyricsResult = {
+          lines: data.lines,
+          isSynced: Boolean(data.isSynced),
+          source: data.source || 'API',
+        };
+        lyricsCache.set(videoId, result);
+        return result;
+      }
+    }
+  } catch {
+    // Fallback to client-side LRCLIB if backend route is unavailable
+  }
 
+  // 2. Client-side fallback: LRCLIB
+  const queries = buildSearchCandidates(title, artist);
   for (const q of queries) {
     try {
       const res = await fetch(
         `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`,
-        { signal: AbortSignal.timeout(4000) }
+        { signal: AbortSignal.timeout(3500) }
       );
       if (!res.ok) continue;
       const items = await res.json();
       if (!Array.isArray(items) || items.length === 0) continue;
 
-      const syncedMatch = items.find((it: any) => typeof it.syncedLyrics === 'string' && it.syncedLyrics.trim().length > 0);
+      const syncedMatch = items.find(
+        (it: any) => typeof it.syncedLyrics === 'string' && it.syncedLyrics.trim().length > 0
+      );
       if (syncedMatch) {
         const parsed = parseLrc(syncedMatch.syncedLyrics);
-        if (parsed.length > 0) {
+        if (parsed.length > 3) {
           const result: LyricsResult = {
             lines: parsed,
             isSynced: true,
@@ -79,14 +124,16 @@ export async function fetchSyncedLyrics(
         }
       }
 
-      const plainMatch = items.find((it: any) => typeof it.plainLyrics === 'string' && it.plainLyrics.trim().length > 0);
+      const plainMatch = items.find(
+        (it: any) => typeof it.plainLyrics === 'string' && it.plainLyrics.trim().length > 0
+      );
       if (plainMatch) {
         const plainLines = plainMatch.plainLyrics
           .split('\n')
           .map((t: string) => t.trim())
           .filter(Boolean)
           .map((text: string) => ({ time: -1, text }));
-        if (plainLines.length > 0) {
+        if (plainLines.length > 3) {
           const result: LyricsResult = {
             lines: plainLines,
             isSynced: false,
@@ -97,7 +144,7 @@ export async function fetchSyncedLyrics(
         }
       }
     } catch {
-      // Ignore network errors
+      continue;
     }
   }
 

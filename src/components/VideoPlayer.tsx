@@ -1293,8 +1293,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   </div>
 
                   {lyricsData && rightPaneTab === 'lyrics' && (
-                    <span className="text-[11px] font-bold text-white/45">
-                      {lyricsData.isSynced ? 'Đồng bộ thời gian thực' : 'Lời tĩnh'}
+                    <span className="text-[11px] font-bold text-white/55">
+                      {lyricsData.source}
                     </span>
                   )}
                 </div>
