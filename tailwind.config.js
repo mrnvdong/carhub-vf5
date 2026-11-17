@@ -6,6 +6,20 @@ export default {
   ],
   theme: {
     extend: {
+      spacing: {
+        13: '3.25rem',
+        15: '3.75rem',
+        18: '4.5rem',
+        22: '5.5rem',
+        68: '17rem',
+      },
+      scale: {
+        98: '0.98',
+        99: '0.99',
+      },
+      backdropBlur: {
+        xs: '2px',
+      },
       colors: {
         car: {
           bg: '#0a0d14',

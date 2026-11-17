@@ -395,13 +395,13 @@ export const App: React.FC = () => {
 
   return (
     <div
-      style={{ zoom: zoomFactor }}
+      style={{ zoom: zoomFactor, '--ui-zoom': zoomFactor } as React.CSSProperties}
       className={`min-h-screen text-slate-100 flex flex-col transition-colors duration-200 ${
-        viewMode === 'ytmusic' ? 'bg-[#050507] pb-4' : 'bg-car-bg pb-12'
+        viewMode === 'ytmusic' ? 'bg-[#050507] pb-2' : 'bg-car-bg pb-12'
       }`}
     >
-      {/* Ở chế độ Apple Music (khi đã có bài hát), dùng Vertical Liquid Glass Rail bên trái thay cho Header trên cùng */}
-      {(viewMode === 'classic' || !currentVideo) && (
+      {/* Ở chế độ Apple Music, dùng Vertical Liquid Glass Rail bên trái thay cho Header trên cùng */}
+      {viewMode === 'classic' && (
         <Header
           onSearch={handleSearch}
           activeTab={activeTab}
@@ -415,8 +415,8 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Ở chế độ Xem Video (Classic) hoặc khi chưa có bài hát nào phát thì hiện thanh chủ đề ở trên */}
-      {(viewMode === 'classic' || !currentVideo) && activeTab === 'explore' && (
+      {/* Ở chế độ Xem Video (Classic) hiện thanh chủ đề ở trên */}
+      {viewMode === 'classic' && activeTab === 'explore' && (
         <CategoryChips
           selectedCategory={selectedCategory}
           onSelectCategory={loadCategory}
@@ -427,7 +427,7 @@ export const App: React.FC = () => {
       {/* Main Container */}
       <main
         className={`flex-1 max-w-[1600px] mx-auto w-full ${
-          viewMode === 'ytmusic' && currentVideo ? 'px-2 sm:px-4 pt-2' : 'px-3 sm:px-6 pt-3'
+          viewMode === 'ytmusic' ? 'px-2 sm:px-3 pt-2' : 'px-3 sm:px-6 pt-3'
         }`}
       >
         {currentVideo ? (
@@ -537,6 +537,11 @@ export const App: React.FC = () => {
                 />
               </div>
             )}
+          </div>
+        ) : viewMode === 'ytmusic' ? (
+          <div className="h-[calc((100dvh-16px)/var(--ui-zoom,1))] rounded-3xl bg-[#07070a] border border-white/10 flex flex-col items-center justify-center gap-4 text-center p-6">
+            <div className="w-12 h-12 border-4 border-rose-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-base font-bold text-white/80">Đang tải danh sách nhạc Apple Music...</p>
           </div>
         ) : (
           <div>

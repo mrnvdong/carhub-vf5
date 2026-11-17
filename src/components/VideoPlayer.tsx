@@ -403,7 +403,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const remainingTime = Math.max(0, (duration || 0) - currentTime);
 
     return (
-      <div className="relative w-full min-h-[calc(100vh-16px)] md:h-[calc(100vh-16px)] rounded-3xl overflow-hidden bg-[#07070a] text-white select-none flex flex-col md:flex-row shadow-2xl border border-white/10">
+      <div className="relative w-full min-h-[calc((100dvh-16px)/var(--ui-zoom,1))] md:h-[calc((100dvh-16px)/var(--ui-zoom,1))] rounded-3xl overflow-hidden bg-[#07070a] text-white select-none flex flex-col md:flex-row shadow-2xl border border-white/10">
         {persistentEmbedNode}
 
         {/* FULL-BLEED LIVING COLOR FIELD BACKDROP */}
@@ -554,17 +554,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </aside>
 
         {/* MAIN CONTENT CANVAS */}
-        <div className="relative z-10 flex-1 flex flex-col min-w-0 p-4 sm:p-6 md:p-8 overflow-hidden">
+        <div className="relative z-10 flex-1 flex flex-col min-w-0 min-h-0 p-3 sm:p-5 md:p-6 overflow-hidden">
           {railSection === 'nowPlaying' ? (
             <div
               key="now-playing-sheet"
-              className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-10 items-center max-w-6xl mx-auto w-full animate-ios-sheet-in"
+              className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 gap-5 lg:gap-8 items-center max-w-6xl mx-auto w-full animate-ios-sheet-in"
             >
               {/* LEFT PANE: Square Artwork + Title + Scrubber + Transport */}
-              <div className="lg:col-span-5 flex flex-col items-center justify-center w-full max-w-md mx-auto">
+              <div className="md:col-span-5 flex flex-col items-center justify-center w-full max-w-sm mx-auto">
                 <div
                   onClick={togglePlay}
-                  className={`relative w-56 h-56 sm:w-72 sm:h-72 lg:w-80 lg:h-80 rounded-3xl overflow-hidden shadow-[0_24px_65px_rgba(0,0,0,0.75)] border border-white/15 cursor-pointer ios-spring ${
+                  className={`relative w-44 h-44 sm:w-52 sm:h-52 lg:w-64 lg:h-64 xl:w-72 xl:h-72 rounded-3xl overflow-hidden shadow-[0_24px_65px_rgba(0,0,0,0.75)] border border-white/15 cursor-pointer ios-spring ${
                     isPlaying && !isBuffering ? 'scale-100' : 'scale-[0.91]'
                   }`}
                 >
@@ -696,7 +696,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
 
               {/* RIGHT PANE: Sliding Pill [Lời bài hát | Tiếp theo] + Synced Lyrics */}
-              <div className="lg:col-span-7 flex flex-col h-[420px] sm:h-[480px] lg:h-[540px] bg-white/[0.04] backdrop-blur-xl rounded-3xl border border-white/10 overflow-hidden shadow-xl">
+              <div className="md:col-span-7 flex flex-col h-[380px] md:h-full min-h-0 max-h-full bg-white/[0.04] backdrop-blur-xl rounded-3xl border border-white/10 overflow-hidden shadow-xl">
                 <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 border-b border-white/10">
                   <div className="relative grid grid-cols-2 bg-black/35 p-1 rounded-full border border-white/10 min-w-[250px] sm:min-w-[280px]">
                     <div
