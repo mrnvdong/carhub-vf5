@@ -1139,6 +1139,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   );
                 })
               )}
+
+              {railSection === 'browse' && hasMoreQueue && onLoadMoreQueue && (
+                <div className="col-span-full pt-2 pb-4 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={onLoadMoreQueue}
+                    disabled={isLoadingMoreQueue}
+                    className="w-full sm:max-w-md h-13 rounded-2xl bg-white/12 hover:bg-white/20 backdrop-blur-xl border border-white/20 text-white font-extrabold text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-lg ios-spring-fast active:scale-95 disabled:opacity-50"
+                  >
+                    {isLoadingMoreQueue ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin text-white" />
+                        <span>Đang tải thêm...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-5 h-5 text-white" />
+                        <span>Xem thêm {isVideoMode ? 'video' : 'bài hát'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* FLOATING LIQUID GLASS MINI PLAYER (Căn giữa đồng bộ với lưới thẻ, đủ Prev / Play / Next) */}
