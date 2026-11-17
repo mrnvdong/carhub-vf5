@@ -1050,9 +1050,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {railSection !== 'nowPlaying' && (
           <div
             key={`browse-${railSection}-${viewMode}`}
-            className="flex-1 flex flex-col min-h-0 max-w-6xl mx-auto w-full pb-20 animate-ios-browse-in"
+            className="flex-1 flex flex-col min-h-0 max-w-6xl mx-auto w-full animate-ios-browse-in"
           >
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-3 shrink-0">
               <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
                 {railSection === 'favorites'
                   ? isVideoMode
@@ -1064,10 +1064,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   ? 'Khám phá Video'
                   : 'Khám phá âm nhạc'}
               </h2>
+              <span className="text-xs font-mono font-bold text-white/50 bg-white/10 px-3 py-1 rounded-full border border-white/10">
+                {queueVideos.length} mục
+              </span>
             </div>
 
             {railSection === 'browse' && onSelectCategory && (
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-4 shrink-0">
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-3.5 shrink-0">
                 {MEDIA_CATEGORIES.map((cat) => {
                   const isSelected = selectedCategory === cat.id;
                   return (
@@ -1088,7 +1091,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
             )}
 
-            <div className="flex-1 overflow-y-auto no-scrollbar grid grid-cols-1 md:grid-cols-2 gap-3 content-start">
+            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar grid grid-cols-1 md:grid-cols-2 gap-3.5 content-start pb-3">
               {isLoadingQueue && queueVideos.length === 0 ? (
                 <div className="col-span-full py-16 text-center">
                   <Loader2 className="w-10 h-10 text-white animate-spin mx-auto" />
@@ -1105,41 +1108,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       }}
                       className={`flex items-center gap-3.5 p-3 rounded-2xl border backdrop-blur-xl ios-spring-fast cursor-pointer active:scale-98 ${
                         isCurrent
-                          ? 'bg-white/20 border-white/30'
-                          : 'bg-white/[0.06] border-white/10 hover:bg-white/15'
+                          ? 'bg-white/20 border-white/35 shadow-lg'
+                          : 'bg-white/[0.06] border-white/10 hover:bg-white/14'
                       }`}
                     >
-                      <img
-                        src={item.thumbnail}
-                        alt={item.title}
-                        loading="lazy"
-                        className={`${
-                          isVideoMode ? 'w-28 aspect-video' : 'w-16 h-16'
-                        } rounded-xl object-cover shrink-0 shadow`}
-                      />
-                      <div className="min-w-0 flex-1">
+                      <div className="relative shrink-0">
+                        <img
+                          src={item.thumbnail}
+                          alt={item.title}
+                          loading="lazy"
+                          className={`${
+                            isVideoMode ? 'w-32 aspect-video' : 'w-16 h-16'
+                          } rounded-xl object-cover shadow`}
+                        />
+                        {item.durationText && (
+                          <span className="absolute bottom-1 right-1 bg-black/80 backdrop-blur-md text-white text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-md border border-white/10">
+                            {item.durationText}
+                          </span>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1 pr-1">
                         <h4 className="text-sm sm:text-base font-bold text-white line-clamp-2 leading-snug">
                           {item.title}
                         </h4>
-                        <p className="text-xs text-white/60 truncate mt-1">
+                        <p className="text-xs text-white/60 truncate mt-1.5">
                           {item.uploaderName}
                         </p>
                       </div>
-                      {item.durationText && (
-                        <span className="text-xs font-mono font-bold text-white/50 shrink-0">
-                          {item.durationText}
-                        </span>
-                      )}
                     </div>
                   );
                 })
               )}
             </div>
 
-            {/* FLOATING LIQUID GLASS MINI PLAYER */}
+            {/* FLOATING LIQUID GLASS MINI PLAYER (Căn giữa đồng bộ với lưới thẻ, đủ Prev / Play / Next) */}
             <div
               onClick={() => setRailSection('nowPlaying')}
-              className="fixed bottom-4 left-4 right-4 md:left-28 md:right-8 z-30 bg-white/15 backdrop-blur-2xl border border-white/25 rounded-2xl px-4 py-2.5 flex items-center justify-between gap-3 shadow-2xl cursor-pointer hover:bg-white/20 ios-spring-fast animate-ios-mini-up active:scale-[0.98]"
+              className="shrink-0 mt-3 bg-white/15 backdrop-blur-2xl border border-white/25 rounded-2xl px-3.5 sm:px-4 py-2.5 flex items-center justify-between gap-3 shadow-2xl cursor-pointer hover:bg-white/20 ios-spring-fast animate-ios-mini-up active:scale-[0.99]"
             >
               <div className="flex items-center gap-3 min-w-0 flex-1">
                 <img
@@ -1158,13 +1163,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
 
               <div
-                className="flex items-center gap-2 shrink-0"
+                className="flex items-center gap-1.5 sm:gap-2 shrink-0"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
                   type="button"
+                  onClick={onPrev}
+                  disabled={!hasPrev}
+                  className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
+                  title="Bài trước"
+                >
+                  <SkipBack className="w-5 h-5 fill-current" />
+                </button>
+                <button
+                  type="button"
                   onClick={togglePlay}
-                  className="w-11 h-11 rounded-full bg-white text-black flex items-center justify-center shadow active:scale-90 transition"
+                  className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-white hover:bg-white/90 text-black flex items-center justify-center shadow active:scale-90 transition"
+                  title={isPlaying ? 'Tạm dừng' : 'Phát'}
                 >
                   {isPlaying ? (
                     <Pause className="w-5 h-5 fill-black" />
@@ -1175,7 +1190,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <button
                   type="button"
                   onClick={onNext}
-                  className="w-11 h-11 rounded-full bg-white/15 text-white flex items-center justify-center active:scale-90 transition"
+                  disabled={!hasNext}
+                  className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
+                  title="Bài tiếp theo"
                 >
                   <SkipForward className="w-5 h-5 fill-current" />
                 </button>
