@@ -18,6 +18,12 @@ export const App: React.FC = () => {
 
   // Search Modal state
   const [isSearchModalOpen, setIsSearchModalOpen] = useState<boolean>(false);
+  const [startVoiceOnOpen, setStartVoiceOnOpen] = useState<boolean>(false);
+
+  const handleOpenSearchModal = (startVoice = false) => {
+    setStartVoiceOnOpen(startVoice);
+    setIsSearchModalOpen(true);
+  };
 
   // UI scale preset: default to 'normal' or 'large' for VinFast VF5
   const [uiScale, setUiScale] = useState<UiScale>(() => {
@@ -476,7 +482,7 @@ export const App: React.FC = () => {
           searchQuery={searchQuery}
           uiScale={uiScale}
           onChangeUiScale={setUiScale}
-          onOpenSearchModal={() => setIsSearchModalOpen(true)}
+          onOpenSearchModal={handleOpenSearchModal}
           viewMode={viewMode}
           onChangeViewMode={handleViewModeChange}
         />
@@ -582,7 +588,7 @@ export const App: React.FC = () => {
                 onChangeTab={setActiveTab}
                 favoritesCount={favorites.length}
                 historyCount={history.length}
-                onOpenSearchModal={() => setIsSearchModalOpen(true)}
+                onOpenSearchModal={handleOpenSearchModal}
                 uiScale={uiScale}
                 onChangeUiScale={setUiScale}
               />
@@ -647,12 +653,18 @@ export const App: React.FC = () => {
 
       <CarSearchModal
         isOpen={isSearchModalOpen}
-        onClose={() => setIsSearchModalOpen(false)}
+        onClose={() => {
+          setIsSearchModalOpen(false);
+          setStartVoiceOnOpen(false);
+        }}
         onSearch={handleSearch}
         initialQuery={searchQuery}
         recentSearches={recentSearches}
         onClearRecentSearches={handleClearRecentSearches}
         onRemoveRecentSearch={handleRemoveRecentSearch}
+        variant={viewMode}
+        startVoice={startVoiceOnOpen}
+        artworkBackdrop={streamData?.thumbnailUrl || currentVideo?.thumbnail}
       />
     </div>
   );

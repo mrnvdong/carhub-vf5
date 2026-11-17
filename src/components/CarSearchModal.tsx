@@ -5,14 +5,13 @@ import {
   MicOff,
   X,
   Clock,
-  TrendingUp,
   Sparkles,
   ArrowUpRight,
   Flame,
-  Radio,
   Trash2,
   User,
 } from 'lucide-react';
+import { ViewMode } from '../types';
 
 interface CarSearchModalProps {
   isOpen: boolean;
@@ -22,6 +21,9 @@ interface CarSearchModalProps {
   recentSearches: string[];
   onClearRecentSearches: () => void;
   onRemoveRecentSearch: (query: string) => void;
+  variant?: ViewMode;
+  startVoice?: boolean;
+  artworkBackdrop?: string;
 }
 
 const CAR_TRENDING_QUERIES = [
@@ -55,6 +57,9 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
   recentSearches,
   onClearRecentSearches,
   onRemoveRecentSearch,
+  variant = 'ytmusic',
+  startVoice = false,
+  artworkBackdrop,
 }) => {
   const [query, setQuery] = useState(initialQuery);
   const [isListening, setIsListening] = useState(false);
@@ -64,7 +69,8 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Check speech recognition support
+  const isAppleGlass = variant === 'ytmusic';
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const SpeechRecognition =
@@ -75,23 +81,27 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
     }
   }, []);
 
-  // Sync initial query and focus when opened
   useEffect(() => {
     if (isOpen) {
       setQuery(initialQuery);
       setInterimTranscript('');
       setIsListening(false);
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 150);
+      if (startVoice) {
+        setTimeout(() => {
+          toggleVoiceSearch();
+        }, 200);
+      } else {
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 180);
+      }
     } else {
       if (recognitionRef.current) {
         recognitionRef.current.abort();
       }
     }
-  }, [isOpen, initialQuery]);
+  }, [isOpen, initialQuery, startVoice]);
 
-  // Fetch auto-complete suggestions as user types
   useEffect(() => {
     if (!query.trim() || query.trim().length < 2) {
       setSuggestions([]);
@@ -113,7 +123,6 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Voice Search Handler (Web Speech API)
   const toggleVoiceSearch = () => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -159,7 +168,6 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
       if (finalStr.trim()) {
         setQuery(finalStr.trim());
         setIsListening(false);
-        // Auto search after speaking finishes
         setTimeout(() => {
           handleExecuteSearch(finalStr.trim());
         }, 500);
@@ -192,109 +200,155 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col p-3 sm:p-6 overflow-y-auto">
-      {/* Top Bar with Input & Close */}
-      <div className="max-w-4xl w-full mx-auto flex flex-col gap-4">
+    <div
+      onClick={onClose}
+      className={`fixed inset-0 z-50 flex flex-col p-3 sm:p-6 overflow-y-auto no-scrollbar ${
+        isAppleGlass
+          ? 'bg-black/65 backdrop-blur-2xl'
+          : 'bg-black/90 backdrop-blur-md'
+      }`}
+    >
+      {/* Dynamic Ambient Color Backdrop for Apple Music Search */}
+      {isAppleGlass && artworkBackdrop && (
+        <div
+          className="fixed inset-0 pointer-events-none opacity-35 blur-[100px] scale-125"
+          style={{
+            backgroundImage: `url(${artworkBackdrop})`,
+            backgroundPosition: 'center',
+            backgroundSize: 'cover',
+          }}
+        />
+      )}
+
+      {/* Animated Spring Sheet Container */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`relative z-10 max-w-4xl w-full mx-auto flex flex-col gap-4 my-auto py-2 ${
+          isAppleGlass ? 'animate-ios-sheet-in' : ''
+        }`}
+      >
+        {/* Top Bar with Liquid Glass Input & Close */}
         <div className="flex items-center gap-3">
           <form onSubmit={handleFormSubmit} className="flex-1 relative flex items-center">
-            <Search className="w-7 h-7 absolute left-4 text-car-accent pointer-events-none" />
+            <Search
+              className={`w-6 h-6 absolute left-4 pointer-events-none ${
+                isAppleGlass ? 'text-white/60' : 'text-car-accent'
+              }`}
+            />
             <input
               ref={inputRef}
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Nhập tên bài hát hoặc bấm Micro để nói..."
-              className="w-full h-16 sm:h-18 bg-car-card text-white text-lg sm:text-2xl font-bold pl-14 pr-24 rounded-2xl border-2 border-car-border focus:border-car-accent focus:outline-none shadow-2xl"
+              placeholder="Nhập tên bài hát, ca sĩ hoặc bấm Micro..."
+              className={`w-full h-14 sm:h-16 text-white text-base sm:text-xl font-bold pl-12 pr-24 focus:outline-none ios-spring-fast ${
+                isAppleGlass
+                  ? 'bg-white/[0.1] backdrop-blur-2xl rounded-full border border-white/20 focus:border-white/45 focus:bg-white/[0.14] placeholder-white/45 shadow-2xl'
+                  : 'bg-car-card rounded-2xl border-2 border-car-border focus:border-car-accent shadow-2xl'
+              }`}
             />
             {query && (
               <button
                 type="button"
                 onClick={() => setQuery('')}
-                className="absolute right-14 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-slate-400 hover:text-white"
+                className="absolute right-16 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-white/60 hover:text-white rounded-full hover:bg-white/10 transition"
               >
-                <X className="w-6 h-6" />
+                <X className="w-5 h-5" />
               </button>
             )}
             <button
               type="submit"
-              className="absolute right-2 top-1/2 -translate-y-1/2 h-12 px-4 rounded-xl bg-car-accent hover:bg-car-accentHover text-white font-extrabold text-sm sm:text-base flex items-center gap-1 active:scale-95 shadow-md"
+              className={`absolute right-2 top-1/2 -translate-y-1/2 h-10 sm:h-12 px-4 sm:px-5 font-extrabold text-sm flex items-center gap-1 active:scale-95 ios-spring-fast ${
+                isAppleGlass
+                  ? 'rounded-full bg-white text-black hover:bg-white/90 shadow-lg'
+                  : 'rounded-xl bg-car-accent hover:bg-car-accentHover text-white shadow-md'
+              }`}
             >
               Tìm
             </button>
           </form>
 
-          {/* Big Close Button */}
+          {/* Liquid Glass Close Button */}
           <button
             onClick={onClose}
-            className="h-16 w-16 sm:h-18 sm:w-18 bg-slate-800 hover:bg-slate-700 rounded-2xl border-2 border-slate-700 text-slate-200 flex flex-col items-center justify-center active:scale-95 shrink-0 shadow-lg"
+            className={`h-14 w-14 sm:h-16 sm:w-16 flex items-center justify-center active:scale-90 shrink-0 ios-spring-fast ${
+              isAppleGlass
+                ? 'rounded-full bg-white/[0.1] hover:bg-white/[0.2] backdrop-blur-2xl border border-white/20 text-white shadow-xl'
+                : 'rounded-2xl bg-slate-800 hover:bg-slate-700 border-2 border-slate-700 text-slate-200 shadow-lg'
+            }`}
             title="Đóng tìm kiếm"
           >
-            <X className="w-8 h-8" />
-            <span className="text-[11px] font-bold">Đóng</span>
+            <X className="w-7 h-7" />
           </button>
         </div>
 
-        {/* GIANT AUTOMOTIVE VOICE SEARCH HERO SECTION */}
+        {/* VOICE SEARCH HERO SECTION */}
         {speechSupported && (
           <div
-            className={`w-full p-4 sm:p-5 rounded-3xl border-2 transition-all flex items-center gap-4 cursor-pointer active:scale-98 shadow-xl ${
-              isListening
-                ? 'bg-rose-950/60 border-rose-500 ring-2 ring-rose-500/50'
-                : 'bg-gradient-to-r from-blue-950/50 to-car-card border-blue-500/40 hover:border-blue-400'
-            }`}
             onClick={toggleVoiceSearch}
+            className={`w-full p-4 sm:p-5 flex items-center gap-4 cursor-pointer active:scale-[0.98] ios-spring-fast ${
+              isAppleGlass
+                ? `rounded-3xl backdrop-blur-2xl border shadow-xl ${
+                    isListening
+                      ? 'bg-rose-500/25 border-rose-400/60 shadow-rose-500/20'
+                      : 'bg-white/[0.08] hover:bg-white/[0.12] border-white/15'
+                  }`
+                : `rounded-3xl border-2 shadow-xl ${
+                    isListening
+                      ? 'bg-rose-950/60 border-rose-500 ring-2 ring-rose-500/50'
+                      : 'bg-gradient-to-r from-blue-950/50 to-car-card border-blue-500/40 hover:border-blue-400'
+                  }`
+            }`}
           >
-            {/* Giant Pulsing Mic Icon (80px) */}
             <div
-              className={`w-18 h-18 sm:w-20 sm:h-20 rounded-full flex items-center justify-center shrink-0 shadow-2xl transition-all ${
+              className={`w-16 h-16 sm:w-18 sm:h-18 rounded-full flex items-center justify-center shrink-0 shadow-2xl ios-spring-fast ${
                 isListening
-                  ? 'bg-rose-600 text-white animate-pulse shadow-rose-600/60 ring-4 ring-rose-400'
-                  : 'bg-car-accent text-white shadow-car-accent/40 hover:scale-105'
+                  ? 'bg-rose-500 text-white animate-pulse ring-4 ring-rose-400/50'
+                  : isAppleGlass
+                  ? 'bg-gradient-to-br from-rose-500 to-pink-600 text-white border border-white/25'
+                  : 'bg-car-accent text-white'
               }`}
             >
               {isListening ? (
-                <MicOff className="w-9 h-9 sm:w-10 sm:h-10" />
+                <MicOff className="w-8 h-8" />
               ) : (
-                <Mic className="w-9 h-9 sm:w-10 sm:h-10" />
+                <Mic className="w-8 h-8" />
               )}
             </div>
 
-            {/* Voice Status & Transcript */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span
-                  className={`inline-block w-2.5 h-2.5 rounded-full ${
-                    isListening ? 'bg-rose-500 animate-ping' : 'bg-emerald-400'
+                  className={`inline-block w-2 h-2 rounded-full ${
+                    isListening ? 'bg-rose-400 animate-ping' : 'bg-emerald-400'
                   }`}
                 ></span>
-                <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-300">
-                  {isListening ? 'ĐANG LẮNG NGHE GIỌNG NÓI TIẾNG VIỆT...' : 'TÌM KIẾM BẰNG GIỌNG NÓI'}
+                <span className="text-xs font-extrabold uppercase tracking-wider text-white/60">
+                  {isListening ? 'ĐANG LẮNG NGHE TIẾNG VIỆT...' : 'TÌM KIẾM BẰNG GIỌNG NÓI'}
                 </span>
               </div>
-              <p
-                className={`text-lg sm:text-2xl font-black mt-1 truncate ${
-                  isListening
-                    ? 'text-rose-200'
-                    : interimTranscript
-                    ? 'text-white'
-                    : 'text-slate-100'
-                }`}
-              >
+              <p className="text-lg sm:text-xl font-extrabold text-white mt-1 truncate">
                 {interimTranscript ||
                   (isListening
                     ? 'Hãy nói tên bài hát hoặc ca sĩ...'
-                    : 'Chạm vào đây để nói tên bài hát (Không cần gõ phím)')}
+                    : 'Chạm để nói tên bài hát (Không cần gõ)')}
               </p>
             </div>
           </div>
         )}
 
-        {/* Real-time YouTube Search Auto-Complete Suggestions */}
+        {/* REAL-TIME AUTO-COMPLETE SUGGESTIONS */}
         {suggestions.length > 0 && (
-          <div className="bg-car-card rounded-3xl border-2 border-car-border p-3 sm:p-4 shadow-xl">
-            <h4 className="text-xs sm:text-sm font-bold text-car-textMuted uppercase tracking-wider mb-2 px-2 flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-car-accent" />
-              <span>Gợi ý hoàn tất</span>
+          <div
+            className={`p-3 sm:p-4 shadow-xl ${
+              isAppleGlass
+                ? 'bg-white/[0.07] backdrop-blur-2xl rounded-3xl border border-white/15 animate-ios-browse-in'
+                : 'bg-car-card rounded-3xl border-2 border-car-border'
+            }`}
+          >
+            <h4 className="text-xs sm:text-sm font-bold text-white/60 uppercase tracking-wider mb-2 px-2 flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-rose-400" />
+              <span>Gợi ý tìm kiếm</span>
             </h4>
             <div className="space-y-1.5">
               {suggestions.map((sug, i) => (
@@ -302,43 +356,57 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
                   key={i}
                   type="button"
                   onClick={() => handleExecuteSearch(sug)}
-                  className="w-full min-h-[52px] px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-left text-base sm:text-lg font-bold text-slate-100 flex items-center justify-between gap-3 active:scale-98 transition border border-slate-800"
+                  className={`w-full min-h-[48px] px-4 py-2.5 text-left text-base font-bold text-white flex items-center justify-between gap-3 active:scale-[0.98] ios-spring-fast ${
+                    isAppleGlass
+                      ? 'rounded-2xl bg-white/[0.06] hover:bg-white/[0.15] border border-white/10'
+                      : 'rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800'
+                  }`}
                 >
                   <span className="truncate">{sug}</span>
-                  <ArrowUpRight className="w-5 h-5 text-car-accent shrink-0" />
+                  <ArrowUpRight className="w-5 h-5 text-white/60 shrink-0" />
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {/* Recent Search History (Lịch sử tìm kiếm gần đây) */}
+        {/* RECENT SEARCHES */}
         {recentSearches.length > 0 && !query && (
-          <div className="bg-car-card rounded-3xl border-2 border-car-border p-4 shadow-xl">
+          <div
+            className={`p-4 shadow-xl ${
+              isAppleGlass
+                ? 'bg-white/[0.07] backdrop-blur-2xl rounded-3xl border border-white/15'
+                : 'bg-car-card rounded-3xl border-2 border-car-border'
+            }`}
+          >
             <div className="flex items-center justify-between mb-3 px-1">
               <h4 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
-                <Clock className="w-5 h-5 text-car-accent" />
+                <Clock className={`w-4 h-4 ${isAppleGlass ? 'text-rose-400' : 'text-car-accent'}`} />
                 <span>Tìm kiếm gần đây</span>
               </h4>
               <button
                 type="button"
                 onClick={onClearRecentSearches}
-                className="text-xs sm:text-sm font-bold text-car-textMuted hover:text-rose-400 flex items-center gap-1 px-2.5 py-1 rounded-lg"
+                className="text-xs sm:text-sm font-bold text-white/60 hover:text-rose-400 flex items-center gap-1 px-2.5 py-1 rounded-full hover:bg-white/10 transition"
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className="w-3.5 h-3.5" />
                 <span>Xóa lịch sử</span>
               </button>
             </div>
-            <div className="flex flex-wrap gap-2.5">
+            <div className="flex flex-wrap gap-2">
               {recentSearches.map((item, idx) => (
                 <div
                   key={idx}
-                  className="flex items-center gap-1 bg-slate-900 border-2 border-slate-700 hover:border-slate-500 rounded-2xl pl-4 pr-1.5 py-1.5 shadow-sm active:scale-95 transition"
+                  className={`flex items-center gap-1 rounded-full pl-4 pr-1.5 py-1.5 active:scale-95 ios-spring-fast ${
+                    isAppleGlass
+                      ? 'bg-white/[0.1] hover:bg-white/[0.18] border border-white/15'
+                      : 'bg-slate-900 border-2 border-slate-700 hover:border-slate-500'
+                  }`}
                 >
                   <button
                     type="button"
                     onClick={() => handleExecuteSearch(item)}
-                    className="text-sm sm:text-base font-bold text-slate-100 hover:text-white"
+                    className="text-sm font-bold text-white"
                   >
                     {item}
                   </button>
@@ -348,9 +416,9 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
                       e.stopPropagation();
                       onRemoveRecentSearch(item);
                     }}
-                    className="p-1.5 text-slate-400 hover:text-white rounded-lg"
+                    className="p-1 text-white/50 hover:text-white rounded-full"
                   >
-                    <X className="w-4 h-4" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ))}
@@ -358,45 +426,63 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
           </div>
         )}
 
-        {/* Trending Car Keywords (Từ khóa hay nghe trên xe) */}
+        {/* TRENDING CAR QUERIES */}
         {!query && (
-          <div className="bg-car-card rounded-3xl border-2 border-car-border p-4 shadow-xl">
+          <div
+            className={`p-4 shadow-xl ${
+              isAppleGlass
+                ? 'bg-white/[0.07] backdrop-blur-2xl rounded-3xl border border-white/15'
+                : 'bg-car-card rounded-3xl border-2 border-car-border'
+            }`}
+          >
             <h4 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2 mb-3 px-1">
-              <Flame className="w-5 h-5 text-amber-400" />
-              <span>Gợi ý nghe nhiều trên ô tô (Chạm để phát ngay)</span>
+              <Flame className="w-4 h-4 text-amber-400" />
+              <span>Gợi ý nghe nhiều trên ô tô</span>
             </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {CAR_TRENDING_QUERIES.map((item, idx) => (
                 <button
                   key={idx}
                   type="button"
                   onClick={() => handleExecuteSearch(item.text)}
-                  className="h-14 sm:h-15 px-4 rounded-2xl bg-slate-900 hover:bg-slate-800 text-left border-2 border-slate-700 hover:border-car-accent flex items-center gap-3 active:scale-95 transition shadow-sm"
+                  className={`h-13 px-4 text-left flex items-center gap-3 active:scale-95 ios-spring-fast ${
+                    isAppleGlass
+                      ? 'rounded-2xl bg-white/[0.08] hover:bg-white/[0.16] border border-white/12'
+                      : 'rounded-2xl bg-slate-900 hover:bg-slate-800 border-2 border-slate-700 hover:border-car-accent'
+                  }`}
                 >
-                  <span className="text-xl shrink-0">{item.icon}</span>
-                  <span className="text-sm sm:text-base font-bold text-slate-100 truncate">
-                    {item.text}
-                  </span>
+                  <span className="text-lg shrink-0">{item.icon}</span>
+                  <span className="text-sm font-bold text-white truncate">{item.text}</span>
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {/* Popular Vietnamese Artists (Ca sĩ thịnh hành) */}
+        {/* POPULAR ARTISTS */}
         {!query && (
-          <div className="bg-car-card rounded-3xl border-2 border-car-border p-4 shadow-xl">
+          <div
+            className={`p-4 shadow-xl ${
+              isAppleGlass
+                ? 'bg-white/[0.07] backdrop-blur-2xl rounded-3xl border border-white/15'
+                : 'bg-car-card rounded-3xl border-2 border-car-border'
+            }`}
+          >
             <h4 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2 mb-3 px-1">
-              <User className="w-5 h-5 text-blue-400" />
+              <User className="w-4 h-4 text-rose-400" />
               <span>Ca sĩ & Nghệ sĩ nổi bật</span>
             </h4>
-            <div className="flex flex-wrap gap-2.5">
+            <div className="flex flex-wrap gap-2">
               {POPULAR_ARTISTS.map((artist, idx) => (
                 <button
                   key={idx}
                   type="button"
                   onClick={() => handleExecuteSearch(`nhạc ${artist} hay nhất`)}
-                  className="h-12 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border-2 border-slate-700 hover:border-blue-400 text-sm sm:text-base font-bold text-slate-200 hover:text-white flex items-center gap-2 active:scale-95 transition"
+                  className={`h-11 px-4 text-sm font-bold flex items-center gap-2 active:scale-95 ios-spring-fast ${
+                    isAppleGlass
+                      ? 'rounded-full bg-white/[0.1] hover:bg-white/[0.2] border border-white/15 text-white'
+                      : 'rounded-xl bg-slate-900 hover:bg-slate-800 border-2 border-slate-700 hover:border-blue-400 text-slate-200'
+                  }`}
                 >
                   <span>{artist}</span>
                 </button>
