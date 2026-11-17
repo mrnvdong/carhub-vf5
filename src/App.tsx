@@ -1,13 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Header } from './components/Header';
-import { CategoryChips } from './components/CategoryChips';
+import React, { useState, useEffect, useCallback } from 'react';
 import { VideoPlayer } from './components/VideoPlayer';
-import { VideoList } from './components/VideoList';
-import { SuggestedList } from './components/SuggestedList';
 import { CarSearchModal } from './components/CarSearchModal';
 import { VideoItem, StreamData, PlayerMode, UiScale, ViewMode, RepeatMode } from './types';
 import { searchVideos } from './services/api';
-import { AlertCircle, RefreshCw, SkipForward } from 'lucide-react';
 import { useCarHardwareControls } from './hooks/useCarHardwareControls';
 
 export const App: React.FC = () => {
@@ -92,11 +87,7 @@ export const App: React.FC = () => {
   const [currentVideo, setCurrentVideo] = useState<VideoItem | null>(null);
   const [streamData, setStreamData] = useState<StreamData | null>(null);
   const [isLoadingStream, setIsLoadingStream] = useState<boolean>(false);
-  const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
-
-  const requestCounterRef = useRef<number>(0);
-  // Bộ nhớ đệm Pre-fetch giúp chuyển bài bằng phím vô lăng VF5 tức thì (0ms delay)
-  const streamCacheRef = useRef<Map<string, StreamData>>(new Map());
+  const [, setStreamErrorMessage] = useState<string | null>(null);
 
   // Local storage for history, favorites & recent searches
   const [history, setHistory] = useState<VideoItem[]>(() => {
@@ -396,189 +387,68 @@ export const App: React.FC = () => {
   return (
     <div
       style={{ zoom: zoomFactor, '--ui-zoom': zoomFactor } as React.CSSProperties}
-      className={`min-h-screen text-slate-100 flex flex-col transition-colors duration-200 ${
-        viewMode === 'ytmusic' ? 'bg-[#050507] pb-2' : 'bg-car-bg pb-12'
-      }`}
+      className="min-h-screen bg-[#050507] text-slate-100 flex flex-col pb-2 transition-colors duration-200"
     >
-      {/* Ở chế độ Apple Music, dùng Vertical Liquid Glass Rail bên trái thay cho Header trên cùng */}
-      {viewMode === 'classic' && (
-        <Header
-          onSearch={handleSearch}
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          searchQuery={searchQuery}
-          uiScale={uiScale}
-          onChangeUiScale={setUiScale}
-          onOpenSearchModal={handleOpenSearchModal}
-          viewMode={viewMode}
-          onChangeViewMode={handleViewModeChange}
-        />
-      )}
-
-      {/* Ở chế độ Xem Video (Classic) hiện thanh chủ đề ở trên */}
-      {viewMode === 'classic' && activeTab === 'explore' && (
-        <CategoryChips
-          selectedCategory={selectedCategory}
-          onSelectCategory={loadCategory}
-          variant={viewMode}
-        />
-      )}
-
-      {/* Main Container */}
-      <main
-        className={`flex-1 max-w-[1600px] mx-auto w-full ${
-          viewMode === 'ytmusic' ? 'px-2 sm:px-3 pt-2' : 'px-3 sm:px-6 pt-3'
-        }`}
-      >
+      {/* Main Container: Unified Apple iPhone Duo Liquid Glass Workspace for both Music & Video */}
+      <main className="flex-1 max-w-[1600px] mx-auto w-full px-2 sm:px-3 pt-2">
         {currentVideo ? (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-            {/* Giữ cùng 1 vị trí cây DOM cho VideoPlayer để chuyển đổi giữa YT Music và Video không bị ngắt nhạc */}
-            <div
-              className={
-                viewMode === 'ytmusic'
-                  ? 'lg:col-span-12'
-                  : 'lg:col-span-7 xl:col-span-8 space-y-4'
-              }
-            >
-              {streamErrorMessage && !isLoadingStream && (
-                <div className="w-full bg-car-card rounded-3xl border-2 border-rose-500/40 p-6 mb-4 flex flex-col items-center justify-center text-center gap-4 shadow-2xl">
-                  <AlertCircle className="w-12 h-12 text-rose-500" />
-                  <div className="max-w-md">
-                    <h4 className="text-base sm:text-xl font-bold text-white line-clamp-1">
-                      {currentVideo.title}
-                    </h4>
-                    <p className="text-sm text-rose-300 font-semibold mt-1">
-                      {streamErrorMessage}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-center gap-3">
-                    <button
-                      onClick={() => playVideo(currentVideo, true)}
-                      className="h-12 px-5 bg-slate-800 hover:bg-slate-700 text-sm font-bold rounded-2xl text-white border border-car-border flex items-center gap-2 active:scale-95"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                      <span>Thử tải lại</span>
-                    </button>
-                    {hasNext && (
-                      <button
-                        onClick={handleNext}
-                        className="h-12 px-5 bg-rose-600 hover:bg-rose-500 text-sm font-bold rounded-2xl text-white flex items-center gap-2 active:scale-95"
-                      >
-                        <SkipForward className="w-4 h-4" />
-                        <span>Bài tiếp theo</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <VideoPlayer
-                streamData={
-                  streamData || {
-                    id: currentVideo.id,
-                    title: currentVideo.title,
-                    uploader: currentVideo.uploaderName,
-                    thumbnailUrl: currentVideo.thumbnail,
-                    duration: currentVideo.duration || 0,
-                    playbackType: 'direct',
-                    source: 'init',
-                    videoStreams: [],
-                    audioStreams: [],
-                  }
+          <div className="w-full">
+            <VideoPlayer
+              streamData={
+                streamData || {
+                  id: currentVideo.id,
+                  title: currentVideo.title,
+                  uploader: currentVideo.uploaderName,
+                  thumbnailUrl: currentVideo.thumbnail,
+                  duration: currentVideo.duration || 0,
+                  playbackType: 'embed',
+                  source: 'youtube-embed',
+                  videoStreams: [],
+                  audioStreams: [],
                 }
-                isLoading={isLoadingStream}
-                playerMode={playerMode}
-                onPlayerModeChange={setPlayerMode}
-                onNext={handleNext}
-                onPrev={handlePrev}
-                onRetry={() => playVideo(currentVideo, true)}
-                hasNext={hasNext}
-                hasPrev={hasPrev}
-                isFavorite={isFavorite}
-                onToggleFavorite={toggleFavorite}
-                viewMode={viewMode}
-                onViewModeChange={handleViewModeChange}
-                isShuffle={isShuffle}
-                onToggleShuffle={() => setIsShuffle((s) => !s)}
-                repeatMode={repeatMode}
-                onToggleRepeat={handleToggleRepeat}
-                queueVideos={activeSuggestedList}
-                currentVideoId={currentVideo.id}
-                onSelectVideo={(v) => playVideo(v)}
-                isLoadingQueue={isLoadingVideos}
-                hasMoreQueue={Boolean(nextContinuation)}
-                isLoadingMoreQueue={isLoadingMore}
-                onLoadMoreQueue={handleLoadMore}
-                selectedCategory={selectedCategory}
-                onSelectCategory={loadCategory}
-                activeTab={activeTab}
-                onChangeTab={setActiveTab}
-                favoritesCount={favorites.length}
-                historyCount={history.length}
-                onOpenSearchModal={handleOpenSearchModal}
-                uiScale={uiScale}
-                onChangeUiScale={setUiScale}
-              />
-            </div>
-
-            {/* Cột phải chỉ hiển thị ở chế độ Xem Video (vì chế độ YT Music đã tích hợp sẵn bảng Tab danh sách bên trong) */}
-            {viewMode === 'classic' && (
-              <div className="lg:col-span-5 xl:col-span-4 min-h-0 sticky top-20">
-                <SuggestedList
-                  videos={activeSuggestedList}
-                  currentVideoId={currentVideo?.id}
-                  onSelectVideo={(v) => playVideo(v)}
-                  isLoading={isLoadingVideos}
-                  hasMore={Boolean(nextContinuation)}
-                  isLoadingMore={isLoadingMore}
-                  onLoadMore={handleLoadMore}
-                  title={activeColumnTitle}
-                  variant={viewMode}
-                />
-              </div>
-            )}
-          </div>
-        ) : viewMode === 'ytmusic' ? (
-          <div className="h-[calc((100dvh-16px)/var(--ui-zoom,1))] rounded-3xl bg-[#07070a] border border-white/10 flex flex-col items-center justify-center gap-4 text-center p-6">
-            <div className="w-12 h-12 border-4 border-rose-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-base font-bold text-white/80">Đang tải danh sách nhạc Apple Music...</p>
+              }
+              isLoading={isLoadingStream}
+              playerMode={playerMode}
+              onPlayerModeChange={setPlayerMode}
+              onNext={handleNext}
+              onPrev={handlePrev}
+              onRetry={() => playVideo(currentVideo, true)}
+              hasNext={hasNext}
+              hasPrev={hasPrev}
+              isFavorite={isFavorite}
+              onToggleFavorite={toggleFavorite}
+              viewMode={viewMode}
+              onViewModeChange={handleViewModeChange}
+              isShuffle={isShuffle}
+              onToggleShuffle={() => setIsShuffle((s) => !s)}
+              repeatMode={repeatMode}
+              onToggleRepeat={handleToggleRepeat}
+              queueVideos={activeSuggestedList}
+              currentVideoId={currentVideo.id}
+              onSelectVideo={(v) => playVideo(v)}
+              isLoadingQueue={isLoadingVideos}
+              hasMoreQueue={Boolean(nextContinuation)}
+              isLoadingMoreQueue={isLoadingMore}
+              onLoadMoreQueue={handleLoadMore}
+              selectedCategory={selectedCategory}
+              onSelectCategory={loadCategory}
+              activeTab={activeTab}
+              onChangeTab={setActiveTab}
+              favoritesCount={favorites.length}
+              historyCount={history.length}
+              onOpenSearchModal={handleOpenSearchModal}
+              uiScale={uiScale}
+              onChangeUiScale={setUiScale}
+            />
           </div>
         ) : (
-          <div>
-            {activeTab === 'explore' && (
-              <VideoList
-                videos={videos}
-                onSelectVideo={(v) => playVideo(v)}
-                isLoading={isLoadingVideos}
-                hasMore={Boolean(nextContinuation)}
-                isLoadingMore={isLoadingMore}
-                onLoadMore={handleLoadMore}
-                variant={viewMode}
-                title={
-                  selectedCategory
-                    ? 'Danh sách phát đề xuất'
-                    : `Kết quả tìm kiếm cho "${searchQuery}"`
-                }
-              />
-            )}
-
-            {activeTab === 'history' && (
-              <VideoList
-                videos={history}
-                onSelectVideo={(v) => playVideo(v)}
-                variant={viewMode}
-                title="Lịch sử bài hát vừa nghe trên xe"
-              />
-            )}
-
-            {activeTab === 'favorites' && (
-              <VideoList
-                videos={favorites}
-                onSelectVideo={(v) => playVideo(v)}
-                variant={viewMode}
-                title="Danh sách bài hát yêu thích"
-              />
-            )}
+          <div className="h-[calc((100dvh-16px)/var(--ui-zoom,1))] rounded-3xl bg-[#07070a] border border-white/10 flex flex-col items-center justify-center gap-4 text-center p-6">
+            <div className="w-12 h-12 border-4 border-rose-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-base font-bold text-white/80">
+              {viewMode === 'classic'
+                ? 'Đang chuẩn bị trình phát Video...'
+                : 'Đang tải danh sách nhạc...'}
+            </p>
           </div>
         )}
       </main>
@@ -594,7 +464,7 @@ export const App: React.FC = () => {
         recentSearches={recentSearches}
         onClearRecentSearches={handleClearRecentSearches}
         onRemoveRecentSearch={handleRemoveRecentSearch}
-        variant={viewMode}
+        variant="ytmusic"
         startVoice={startVoiceOnOpen}
         artworkBackdrop={streamData?.thumbnailUrl || currentVideo?.thumbnail}
       />
