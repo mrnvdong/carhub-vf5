@@ -11,6 +11,131 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
+
+  /* Apple iOS 27 / iPhone Duo fluid spring curves */
+  .ios-spring {
+    transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+    transition-duration: 520ms;
+  }
+  .ios-spring-fast {
+    transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+    transition-duration: 320ms;
+  }
+  .ios-lyric-ease {
+    transition-property: transform, opacity, filter, color;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+    transition-duration: 600ms;
+  }
+}
+
+@keyframes ambientDrift {
+  0% {
+    transform: scale(1.25) translate3d(0%, 0%, 0) rotate(0deg);
+  }
+  33% {
+    transform: scale(1.38) translate3d(3%, -2%, 0) rotate(2deg);
+  }
+  66% {
+    transform: scale(1.3) translate3d(-3%, 2%, 0) rotate(-2deg);
+  }
+  100% {
+    transform: scale(1.25) translate3d(0%, 0%, 0) rotate(0deg);
+  }
+}
+
+@keyframes iosSheetIn {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 26px, 0) scale(0.965);
+    filter: blur(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0px);
+  }
+}
+
+@keyframes iosBrowseIn {
+  0% {
+    opacity: 0;
+    transform: translate3d(18px, 0, 0) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes iosArtworkEnter {
+  0% {
+    opacity: 0.45;
+    transform: scale(0.92);
+    filter: blur(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0px);
+  }
+}
+
+@keyframes iosMiniPlayerUp {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.animate-ambient-drift {
+  animation: ambientDrift 20s ease-in-out infinite;
+  will-change: transform;
+}
+
+.animate-ios-sheet-in {
+  animation: iosSheetIn 520ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.animate-ios-browse-in {
+  animation: iosBrowseIn 420ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.animate-artwork-enter {
+  animation: iosArtworkEnter 580ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-ios-mini-up {
+  animation: iosMiniPlayerUp 450ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+/* Apple Music sleek range slider override */
+input[type=range].apple-scrubber {
+  background: rgba(255, 255, 255, 0.18);
+  height: 7px;
+  transition: height 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+input[type=range].apple-scrubber:hover,
+input[type=range].apple-scrubber:active {
+  height: 10px;
+}
+
+input[type=range].apple-scrubber::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  background: #ffffff;
+  border: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+input[type=range].apple-scrubber::-webkit-slider-thumb:active {
+  transform: scale(1.35);
+  background: #ffffff;
 }
 
 :root {

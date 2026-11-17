@@ -921,16 +921,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <div className="relative w-full min-h-[calc(100vh-16px)] rounded-3xl overflow-hidden bg-[#07070a] text-white select-none flex flex-col md:flex-row shadow-2xl border border-white/10">
         {persistentMediaNode}
 
-        {/* FULL-BLEED DYNAMIC COLOR FIELD BACKDROP (Lấy màu từ ảnh bìa bài hát) */}
+        {/* FULL-BLEED LIVING COLOR FIELD BACKDROP (Apple Music Ambient Drift) */}
         <div
-          className="absolute inset-0 pointer-events-none transition-all duration-1000 scale-125 opacity-60 blur-[95px]"
+          key={`bg-${streamData.id}`}
+          className="absolute inset-0 pointer-events-none opacity-65 blur-[95px] animate-ambient-drift transition-opacity duration-1000"
           style={{
             backgroundImage: `url(${streamData.thumbnailUrl})`,
             backgroundPosition: 'center',
             backgroundSize: 'cover',
           }}
         />
-        <div className="absolute inset-0 pointer-events-none bg-gradient-to-br from-black/55 via-black/45 to-black/80" />
+        <div className="absolute inset-0 pointer-events-none bg-gradient-to-br from-black/50 via-black/40 to-black/80" />
 
         {/* Toast thông báo phím cứng vô lăng VF5 / SponsorBlock */}
         {(hardwareNotice || sponsorSkippedNotice || modeNotice) && (
@@ -1074,22 +1075,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div className="relative z-10 flex-1 flex flex-col min-w-0 p-4 sm:p-6 md:p-8 overflow-hidden">
           {railSection === 'nowPlaying' ? (
             /* ===============================================================
-               TWO-PANE LANDSCAPE NOW PLAYING + TIME-SYNCED LYRICS
+               TWO-PANE LANDSCAPE NOW PLAYING + TIME-SYNCED LYRICS (iPhone Duo Spring)
                =============================================================== */
-            <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-10 items-center max-w-6xl mx-auto w-full">
+            <div
+              key="now-playing-sheet"
+              className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-10 items-center max-w-6xl mx-auto w-full animate-ios-sheet-in"
+            >
               {/* LEFT PANE (5/12): Full-Bleed Square Artwork + Title + Scrubber + Transport */}
               <div className="lg:col-span-5 flex flex-col items-center justify-center w-full max-w-md mx-auto">
-                {/* Artwork with Apple Music scale-on-play physics */}
+                {/* Artwork with Apple Music spring scale-on-play physics */}
                 <div
                   onClick={togglePlay}
-                  className={`relative w-56 h-56 sm:w-72 sm:h-72 lg:w-80 lg:h-80 rounded-3xl overflow-hidden shadow-[0_24px_65px_rgba(0,0,0,0.75)] border border-white/15 cursor-pointer transition-transform duration-500 ease-out ${
-                    isPlaying && !isBuffering ? 'scale-100' : 'scale-[0.93]'
+                  className={`relative w-56 h-56 sm:w-72 sm:h-72 lg:w-80 lg:h-80 rounded-3xl overflow-hidden shadow-[0_24px_65px_rgba(0,0,0,0.75)] border border-white/15 cursor-pointer ios-spring ${
+                    isPlaying && !isBuffering ? 'scale-100' : 'scale-[0.91]'
                   }`}
                 >
                   <img
+                    key={`art-${streamData.id}`}
                     src={streamData.thumbnailUrl}
                     alt={streamData.title}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover animate-artwork-enter"
                   />
 
                   {(isLoading || isBuffering) && (
@@ -1144,7 +1149,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     value={currentTime}
                     disabled={Boolean(playbackError)}
                     onChange={handleSeekChange}
-                    className="w-full h-2 rounded-full cursor-pointer accent-white bg-white/20"
+                    className="w-full rounded-full cursor-pointer apple-scrubber"
                   />
                   <div className="flex justify-between text-xs font-mono font-bold text-white/55">
                     <span>{formatSeconds(currentTime)}</span>
@@ -1263,16 +1268,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
               {/* RIGHT PANE (7/12): Segmented Pill [Lời bài hát | Tiếp theo] + Time-Synced Lyrics */}
               <div className="lg:col-span-7 flex flex-col h-[420px] sm:h-[480px] lg:h-[540px] bg-white/[0.04] backdrop-blur-xl rounded-3xl border border-white/10 overflow-hidden shadow-xl">
-                {/* Segmented Pill Switcher */}
+                {/* Segmented Pill Switcher with Smooth Sliding Thumb */}
                 <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 border-b border-white/10">
-                  <div className="flex items-center bg-black/30 p-1 rounded-full border border-white/10">
+                  <div className="relative grid grid-cols-2 bg-black/35 p-1 rounded-full border border-white/10 min-w-[250px] sm:min-w-[280px]">
+                    <div
+                      className={`absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full bg-white shadow-md ios-spring-fast ${
+                        rightPaneTab === 'queue' ? 'translate-x-full' : 'translate-x-0'
+                      }`}
+                    />
                     <button
                       type="button"
                       onClick={() => setRightPaneTab('lyrics')}
-                      className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold transition ${
+                      className={`relative z-10 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs sm:text-sm font-bold ios-spring-fast ${
                         rightPaneTab === 'lyrics'
-                          ? 'bg-white text-black shadow'
-                          : 'text-white/65 hover:text-white'
+                          ? 'text-black'
+                          : 'text-white/70 hover:text-white'
                       }`}
                     >
                       <Quote className="w-3.5 h-3.5" />
@@ -1281,10 +1291,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     <button
                       type="button"
                       onClick={() => setRightPaneTab('queue')}
-                      className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold transition ${
+                      className={`relative z-10 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs sm:text-sm font-bold ios-spring-fast ${
                         rightPaneTab === 'queue'
-                          ? 'bg-white text-black shadow'
-                          : 'text-white/65 hover:text-white'
+                          ? 'text-black'
+                          : 'text-white/70 hover:text-white'
                       }`}
                     >
                       <ListMusic className="w-3.5 h-3.5" />
@@ -1301,7 +1311,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
                 {/* RIGHT PANE BODY */}
                 {rightPaneTab === 'lyrics' ? (
-                  <div className="flex-1 overflow-y-auto px-6 sm:px-8 py-8 no-scrollbar space-y-5">
+                  <div
+                    key={`lyrics-${streamData.id}`}
+                    className="flex-1 overflow-y-auto px-6 sm:px-8 py-8 no-scrollbar space-y-5 animate-ios-browse-in"
+                  >
                     {isLoadingLyrics ? (
                       <div className="h-full flex flex-col items-center justify-center gap-3 text-white/60">
                         <Loader2 className="w-8 h-8 animate-spin text-white/80" />
@@ -1319,12 +1332,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             onClick={() => {
                               if (line.time >= 0) handleSeekTo(line.time);
                             }}
-                            className={`block w-full text-left font-extrabold tracking-tight transition-all duration-500 ease-out origin-left ${
+                            className={`block w-full text-left font-extrabold tracking-tight ios-lyric-ease origin-left ${
                               isActive
-                                ? 'text-2xl sm:text-3xl text-white scale-100 blur-0 drop-shadow-[0_2px_12px_rgba(255,255,255,0.35)]'
+                                ? 'text-2xl sm:text-3xl text-white scale-[1.03] blur-0 drop-shadow-[0_2px_16px_rgba(255,255,255,0.45)]'
                                 : isPast
-                                ? 'text-lg sm:text-xl text-white/25 blur-[0.7px] hover:blur-0 hover:text-white/70'
-                                : 'text-lg sm:text-xl text-white/45 blur-[0.4px] hover:blur-0 hover:text-white/85'
+                                ? 'text-lg sm:text-xl text-white/25 scale-100 blur-[0.8px] hover:blur-0 hover:text-white/75'
+                                : 'text-lg sm:text-xl text-white/45 scale-100 blur-[0.45px] hover:blur-0 hover:text-white/85'
                             }`}
                           >
                             {line.text}
@@ -1353,7 +1366,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     )}
                   </div>
                 ) : (
-                  <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-1.5 no-scrollbar">
+                  <div
+                    key="queue-pane"
+                    className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-1.5 no-scrollbar animate-ios-browse-in"
+                  >
                     {queueVideos.map((item, idx) => {
                       const isCurrent = (currentVideoId || streamData.id) === item.id;
                       return (
@@ -1425,7 +1441,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             /* ===============================================================
                BROWSE / FAVORITES / HISTORY VIEW + FLOATING LIQUID GLASS MINI PLAYER
                =============================================================== */
-            <div className="flex-1 flex flex-col min-h-0 max-w-6xl mx-auto w-full pb-20">
+            <div
+              key={`browse-${railSection}`}
+              className="flex-1 flex flex-col min-h-0 max-w-6xl mx-auto w-full pb-20 animate-ios-browse-in"
+            >
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
                   {railSection === 'favorites'
@@ -1507,7 +1526,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {/* FLOATING LIQUID GLASS MINI PLAYER */}
               <div
                 onClick={() => setRailSection('nowPlaying')}
-                className="fixed bottom-4 left-4 right-4 md:left-28 md:right-8 z-30 bg-white/15 backdrop-blur-2xl border border-white/25 rounded-2xl px-4 py-2.5 flex items-center justify-between gap-3 shadow-2xl cursor-pointer hover:bg-white/20 transition"
+                className="fixed bottom-4 left-4 right-4 md:left-28 md:right-8 z-30 bg-white/15 backdrop-blur-2xl border border-white/25 rounded-2xl px-4 py-2.5 flex items-center justify-between gap-3 shadow-2xl cursor-pointer hover:bg-white/20 ios-spring-fast animate-ios-mini-up active:scale-[0.98]"
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <img
