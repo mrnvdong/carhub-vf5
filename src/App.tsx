@@ -6,7 +6,7 @@ import { VideoList } from './components/VideoList';
 import { SuggestedList } from './components/SuggestedList';
 import { CarSearchModal } from './components/CarSearchModal';
 import { VideoItem, StreamData, PlayerMode, UiScale, ViewMode, RepeatMode } from './types';
-import { searchVideos, getVideoDetails } from './services/api';
+import { searchVideos } from './services/api';
 import { AlertCircle, RefreshCw, SkipForward } from 'lucide-react';
 import { useCarHardwareControls } from './hooks/useCarHardwareControls';
 
@@ -257,103 +257,30 @@ export const App: React.FC = () => {
     return map[catId] || 'nhạc hay';
   };
 
-  // Phát bài hát (Ưu tiên lấy ngay từ bộ nhớ đệm Pre-fetch để chuyển bài bằng vô lăng 0ms)
-  const playVideo = useCallback(
-    async (video: VideoItem, noCache = false) => {
-      const reqId = ++requestCounterRef.current;
+  // Phát bài hát tức thì 0ms qua YouTube Embed (bỏ hoàn toàn 4G Proxy / Direct để không lag)
+  const playVideo = useCallback((video: VideoItem, _noCache = false) => {
+    setStreamErrorMessage(null);
+    setCurrentVideo(video);
+    setIsLoadingStream(false);
 
-      setStreamErrorMessage(null);
-      setCurrentVideo(video);
+    setHistory((prev) => {
+      const filtered = prev.filter((item) => item.id !== video.id);
+      return [video, ...filtered].slice(0, 50);
+    });
 
-      setHistory((prev) => {
-        const filtered = prev.filter((item) => item.id !== video.id);
-        return [video, ...filtered].slice(0, 50);
-      });
-
-      // Nếu đã được Pre-fetch trong RAM -> Phát ngay lập tức trong 0ms (giữ nguyên kết nối CarPlay)!
-      const cached = !noCache ? streamCacheRef.current.get(video.id) : undefined;
-      if (cached && cached.playbackType !== 'unplayable') {
-        setStreamData(cached);
-        setIsLoadingStream(false);
-        return;
-      }
-
-      setIsLoadingStream(true);
-      setStreamData({
-        id: video.id,
-        title: video.title,
-        uploader: video.uploaderName,
-        thumbnailUrl: video.thumbnail,
-        duration: video.duration || 0,
-        playbackType: 'direct',
-        source: 'init',
-        videoStreams: [],
-        audioStreams: [],
-      });
-
-      try {
-        const details = await getVideoDetails(video.id, noCache);
-        if (reqId !== requestCounterRef.current) return;
-
-        if (details && details.playbackType !== 'unplayable') {
-          const enriched: StreamData = {
-            ...details,
-            title: details.title || video.title,
-            uploader: details.uploader || video.uploaderName,
-          };
-          streamCacheRef.current.set(video.id, enriched);
-          setStreamData(enriched);
-        } else {
-          setStreamErrorMessage(
-            details?.error || 'Không tìm thấy luồng phát hợp lệ cho bài hát này.'
-          );
-        }
-      } catch (err) {
-        if (reqId !== requestCounterRef.current) return;
-        console.error('Failed to fetch stream details', err);
-        setStreamErrorMessage('Lỗi kết nối mạng khi tải bài hát.');
-      } finally {
-        if (reqId === requestCounterRef.current) {
-          setIsLoadingStream(false);
-        }
-      }
-    },
-    []
-  );
-
-  // Tự động Pre-fetch ngầm bài tiếp theo và bài trước đó để bấm vô lăng VF5 nhảy bài tức thì
-  useEffect(() => {
-    if (!currentVideo) return;
-    const list =
-      activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
-    const idx = list.findIndex((v) => v.id === currentVideo.id);
-    if (idx === -1) return;
-
-    const candidates: VideoItem[] = [];
-    if (idx + 1 < list.length) candidates.push(list[idx + 1]);
-    if (idx + 2 < list.length) candidates.push(list[idx + 2]);
-    if (idx - 1 >= 0) candidates.push(list[idx - 1]);
-
-    const timer = setTimeout(() => {
-      for (const item of candidates) {
-        if (!streamCacheRef.current.has(item.id)) {
-          getVideoDetails(item.id)
-            .then((details) => {
-              if (details && details.playbackType !== 'unplayable') {
-                streamCacheRef.current.set(item.id, {
-                  ...details,
-                  title: details.title || item.title,
-                  uploader: details.uploader || item.uploaderName,
-                });
-              }
-            })
-            .catch(() => {});
-        }
-      }
-    }, 600);
-
-    return () => clearTimeout(timer);
-  }, [currentVideo, activeTab, videos, favorites, history]);
+    setStreamData({
+      id: video.id,
+      title: video.title,
+      uploader: video.uploaderName,
+      thumbnailUrl: video.thumbnail,
+      duration: video.duration || 0,
+      playbackType: 'embed',
+      source: 'youtube-embed',
+      embedUrl: `https://www.youtube-nocookie.com/embed/${video.id}?enablejsapi=1&autoplay=1&playsinline=1&modestbranding=1&rel=0`,
+      videoStreams: [],
+      audioStreams: [],
+    });
+  }, []);
 
   const getCurrentIndex = () => {
     if (!currentVideo) return -1;
