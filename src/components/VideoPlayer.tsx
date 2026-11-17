@@ -138,6 +138,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const hlsRef = useRef<Hls | null>(null);
   const prevTimeRef = useRef<number>(0);
   const activeLyricRef = useRef<HTMLButtonElement | null>(null);
+  const lyricsContainerRef = useRef<HTMLDivElement | null>(null);
 
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isBuffering, setIsBuffering] = useState<boolean>(true);
@@ -262,14 +263,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return idx;
   }, [lyricsData, currentTime]);
 
-  // Auto-scroll active lyric line into center
+  // Auto-scroll active lyric line strictly inside lyricsContainerRef (never scrolls outer page!)
   useEffect(() => {
-    if (rightPaneTab === 'lyrics' && railSection === 'nowPlaying' && activeLyricRef.current) {
-      activeLyricRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
-    }
+    if (rightPaneTab !== 'lyrics' || railSection !== 'nowPlaying') return;
+    const container = lyricsContainerRef.current;
+    const el = activeLyricRef.current;
+    if (!container || !el) return;
+
+    const targetTop = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
+    container.scrollTo({
+      top: Math.max(0, targetTop),
+      behavior: 'smooth',
+    });
   }, [activeLyricIndex, rightPaneTab, railSection]);
 
   // Sync source when actual streamData resolves
@@ -918,7 +923,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const remainingTime = Math.max(0, (duration || 0) - currentTime);
 
     return (
-      <div className="relative w-full min-h-[calc(100vh-16px)] rounded-3xl overflow-hidden bg-[#07070a] text-white select-none flex flex-col md:flex-row shadow-2xl border border-white/10">
+      <div className="relative w-full min-h-[calc(100vh-16px)] md:h-[calc(100vh-16px)] rounded-3xl overflow-hidden bg-[#07070a] text-white select-none flex flex-col md:flex-row shadow-2xl border border-white/10">
         {persistentMediaNode}
 
         {/* FULL-BLEED LIVING COLOR FIELD BACKDROP (Apple Music Ambient Drift) */}
@@ -1312,8 +1317,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 {/* RIGHT PANE BODY */}
                 {rightPaneTab === 'lyrics' ? (
                   <div
+                    ref={lyricsContainerRef}
                     key={`lyrics-${streamData.id}`}
-                    className="flex-1 overflow-y-auto px-6 sm:px-8 py-8 no-scrollbar space-y-5 animate-ios-browse-in"
+                    className="relative flex-1 overflow-y-auto px-6 sm:px-8 py-8 no-scrollbar space-y-5 animate-ios-browse-in"
                   >
                     {isLoadingLyrics ? (
                       <div className="h-full flex flex-col items-center justify-center gap-3 text-white/60">
