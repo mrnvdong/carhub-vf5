@@ -25,10 +25,16 @@ import {
 } from 'lucide-react';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
 
-type MapTheme = 'nav' | 'night' | 'vector3d' | 'satellite';
+type MapTheme = 'vector3d' | 'dark3d' | 'osm' | 'satellite';
 
-// Inline Zero-Latency Style Specs (không phụ thuộc tải style.json hay font .pbf ngoài -> hiển thị tức thì 100% trên mọi mạng 4G!)
-function buildRasterStyle(theme: 'nav' | 'night' | 'satellite'): StyleSpecification {
+// 100% Free Forever, Zero-API-Key Map Styles (OpenFreeMap Vector 3D + Official OpenStreetMap + Esri Satellite)
+function getStyleForTheme(theme: MapTheme): string | StyleSpecification {
+  if (theme === 'vector3d') {
+    return 'https://tiles.openfreemap.org/styles/liberty';
+  }
+  if (theme === 'dark3d') {
+    return 'https://tiles.openfreemap.org/styles/dark';
+  }
   if (theme === 'satellite') {
     return {
       version: 8,
@@ -46,80 +52,37 @@ function buildRasterStyle(theme: 'nav' | 'night' | 'satellite'): StyleSpecificat
           id: 'sat-layer',
           type: 'raster',
           source: 'sat',
-          paint: { 'raster-contrast': 0.1 },
+          paint: { 'raster-contrast': 0.08 },
         },
       ],
     };
   }
 
-  if (theme === 'night') {
-    return {
-      version: 8,
-      sources: {
-        cartoDark: {
-          type: 'raster',
-          tiles: [
-            'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-            'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-            'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          ],
-          tileSize: 256,
-        },
-      },
-      layers: [
-        {
-          id: 'carto-dark-layer',
-          type: 'raster',
-          source: 'cartoDark',
-          // Tăng độ tương phản & độ sáng vạch đường để nhìn rõ cả ban ngày lẫn ban đêm trên màn VF5
-          paint: {
-            'raster-brightness-min': 0.08,
-            'raster-contrast': 0.28,
-            'raster-saturation': 0.2,
-          },
-        },
-      ],
-    };
-  }
-
-  // Default 'nav': Bản đồ giao thông màu sắc rõ nét cao (Voyager @2x Retina)
+  // 'osm': Official Free OpenStreetMap Street Tiles
   return {
     version: 8,
     sources: {
-      cartoVoyager: {
+      osm: {
         type: 'raster',
-        tiles: [
-          'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-        ],
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
         tileSize: 256,
+        attribution: '© OpenStreetMap contributors',
       },
     },
     layers: [
       {
-        id: 'carto-voyager-layer',
+        id: 'osm-layer',
         type: 'raster',
-        source: 'cartoVoyager',
-        paint: {
-          'raster-contrast': 0.08,
-        },
+        source: 'osm',
       },
     ],
   };
 }
 
-function getStyleForTheme(theme: MapTheme): string | StyleSpecification {
-  if (theme === 'vector3d') {
-    return 'https://tiles.openfreemap.org/styles/liberty';
-  }
-  return buildRasterStyle(theme);
-}
-
 const THEME_LABELS: Record<MapTheme, string> = {
-  nav: 'Rõ nét',
-  night: 'Đêm',
-  vector3d: ' Nhà 3D',
+  vector3d: '3D Sáng',
+  dark3d: '3D Đêm',
+  osm: 'OSM Chuẩn',
   satellite: 'Vệ tinh',
 };
 
@@ -185,7 +148,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
 
   const [mapTheme, setMapTheme] = useState<MapTheme>(() => {
     const hr = new Date().getHours();
-    return hr >= 18 || hr < 6 ? 'night' : 'nav';
+    return hr >= 18 || hr < 6 ? 'dark3d' : 'vector3d';
   });
   const appliedThemeRef = useRef<MapTheme>(mapTheme);
 
@@ -469,10 +432,10 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
 
   const cycleMapTheme = () => {
     setMapTheme((prev) => {
-      if (prev === 'nav') return 'night';
-      if (prev === 'night') return 'vector3d';
-      if (prev === 'vector3d') return 'satellite';
-      return 'nav';
+      if (prev === 'vector3d') return 'dark3d';
+      if (prev === 'dark3d') return 'osm';
+      if (prev === 'osm') return 'satellite';
+      return 'vector3d';
     });
   };
 
