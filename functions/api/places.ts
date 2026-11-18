@@ -58,11 +58,8 @@ async function fetchOverpassNearby(
     return [];
   }
 
-  const query = `[out:json][timeout:4];(${filter});out center 18;`;
-  const endpoints = [
-    'https://overpass-api.de/api/interpreter',
-    'https://lz4.overpass-api.de/api/interpreter',
-  ];
+  const query = `[out:json][timeout:2];(${filter});out center 15;`;
+  const endpoints = ['https://overpass-api.de/api/interpreter'];
 
   for (const ep of endpoints) {
     try {
@@ -70,10 +67,10 @@ async function fetchOverpassNearby(
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          'User-Agent': 'CarHub-VF5-Places/2.0 (https://carhub-vf5.pages.dev)',
+          'User-Agent': 'CarHub-VF5-Places/2.1 (https://carhub-vf5.pages.dev)',
         },
         body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(3500),
+        signal: AbortSignal.timeout(1800),
       });
       if (!res.ok) continue;
       const data: any = await res.json();
@@ -267,7 +264,7 @@ export async function onRequestGet(context: any) {
 
   const cache = (caches as any).default;
   const cacheKey = new Request(
-    `https://carhub-places.internal/v2?m=${encodeURIComponent(mode)}&q=${encodeURIComponent(
+    `https://carhub-places.internal/v3?m=${encodeURIComponent(mode)}&q=${encodeURIComponent(
       q.toLowerCase()
     )}&lat=${validLat.toFixed(2)}&lon=${validLon.toFixed(2)}`
   );
@@ -284,10 +281,20 @@ export async function onRequestGet(context: any) {
   if (mode) {
     tasks.push(fetchOverpassNearby(mode, validLat, validLon));
     if (mode === 'ev') {
+      tasks.push(fetchPhoton('VinFast', validLat, validLon));
       tasks.push(fetchNominatim('Trạm sạc VinFast', validLat, validLon, false));
+    } else if (mode === 'parking') {
+      tasks.push(fetchPhoton('Bãi đỗ xe', validLat, validLon));
+      tasks.push(fetchPhoton('Parking', validLat, validLon));
+      tasks.push(fetchNominatim('Bãi đỗ xe', validLat, validLon, true));
+    } else if (mode === 'cafe') {
+      tasks.push(fetchPhoton('Cafe', validLat, validLon));
+      tasks.push(fetchPhoton('Highlands Coffee', validLat, validLon));
+      tasks.push(fetchPhoton('Cộng Cà Phê', validLat, validLon));
     } else if (mode === 'mall') {
       tasks.push(fetchPhoton('Vincom', validLat, validLon));
       tasks.push(fetchPhoton('Aeon Mall', validLat, validLon));
+      tasks.push(fetchPhoton('Big C', validLat, validLon));
     }
   } else if (q) {
     tasks.push(fetchNominatim(q, validLat, validLon, false));
