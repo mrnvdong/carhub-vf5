@@ -37,104 +37,150 @@ type MapTheme = 'vector3d' | 'dark3d' | 'osm' | 'satellite';
 
 const LIBERTY_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 let cachedLibertyBaseJson: any = null;
-let cachedDark3DStyle: StyleSpecification | null = null;
+let cachedLight3DTemplate: StyleSpecification | null = null;
+let cachedDark3DTemplate: StyleSpecification | null = null;
 
-// Biến đổi trực tiếp bộ layer 3D Liberty sang giao diện "3D Đêm" độ tương phản cao chuẩn màn ô tô
-// (Giữ nguyên khối nhà nổi 3D building-3d + đường cao tốc vàng cam + đường phố xanh xám sáng rõ!)
-async function buildAutomotiveDark3DStyle(): Promise<StyleSpecification | string> {
-  if (cachedDark3DStyle) return cachedDark3DStyle;
+async function ensureLibertyBaseJson(): Promise<any> {
+  if (cachedLibertyBaseJson) return cachedLibertyBaseJson;
+  const res = await fetch(LIBERTY_STYLE_URL);
+  if (!res.ok) throw new Error('Failed to load Liberty base style');
+  cachedLibertyBaseJson = await res.json();
+  return cachedLibertyBaseJson;
+}
 
+// Chế độ "3D Sáng" chuẩn màn ô tô: Chữ đen đậm (#0f172a) + viền trắng dày sắc nét, font đường in đậm dễ đọc ngoài nắng
+async function buildAutomotiveLight3DStyle(): Promise<StyleSpecification | string> {
   try {
-    if (!cachedLibertyBaseJson) {
-      const res = await fetch(LIBERTY_STYLE_URL);
-      if (!res.ok) throw new Error('Failed to load Liberty base style');
-      cachedLibertyBaseJson = await res.json();
-    }
+    if (!cachedLight3DTemplate) {
+      const base = await ensureLibertyBaseJson();
+      const spec = JSON.parse(JSON.stringify(base));
 
-    const spec = JSON.parse(JSON.stringify(cachedLibertyBaseJson));
-    for (const layer of spec.layers || []) {
-      const id = String(layer.id || '');
-      const type = String(layer.type || '');
-      layer.paint = layer.paint || {};
+      for (const layer of spec.layers || []) {
+        const id = String(layer.id || '');
+        const type = String(layer.type || '');
+        if (type !== 'symbol') continue;
 
-      if (type === 'background') {
-        layer.paint['background-color'] = '#0b1220';
-      } else if (id === 'natural_earth') {
-        layer.paint['raster-opacity'] = 0;
-      } else if (layer.paint['fill-pattern']) {
-        layer.paint['fill-opacity'] = 0.12;
-      } else if (id.includes('water') && type === 'fill') {
-        layer.paint['fill-color'] = '#0a2e4d';
-      } else if (id.includes('waterway') && type === 'line') {
-        layer.paint['line-color'] = '#0f416c';
-      } else if (id === 'park_outline' && type === 'line') {
-        layer.paint['line-color'] = '#13332a';
-      } else if (
-        type === 'fill' &&
-        (id.includes('park') ||
-          id.includes('wood') ||
-          id.includes('grass') ||
-          id.includes('wetland') ||
-          id.includes('pitch') ||
-          id.includes('cemetery'))
-      ) {
-        layer.paint['fill-color'] = '#0d2620';
-        layer.paint['fill-opacity'] = 0.8;
-        if (layer.paint['fill-outline-color']) {
-          layer.paint['fill-outline-color'] = '#14382f';
-        }
-      } else if (
-        type === 'fill' &&
-        (id.includes('landuse') ||
-          id.includes('sand') ||
-          id.includes('ice') ||
-          id.includes('aeroway'))
-      ) {
-        layer.paint['fill-color'] = '#0f1829';
-        layer.paint['fill-opacity'] = 0.75;
-      } else if (id === 'building' && type === 'fill') {
-        layer.paint['fill-color'] = '#162238';
-        layer.paint['fill-outline-color'] = '#223352';
-      } else if (id === 'building-3d' && type === 'fill-extrusion') {
-        layer.paint['fill-extrusion-color'] = '#1e304f';
-        layer.paint['fill-extrusion-opacity'] = 0.88;
-      } else if (type === 'line' && id.includes('casing')) {
-        layer.paint['line-color'] = '#060a12';
-      } else if (type === 'line' && id.includes('motorway')) {
-        layer.paint['line-color'] = '#f59e0b';
-      } else if (type === 'line' && id.includes('trunk_primary')) {
-        layer.paint['line-color'] = '#4b6999';
-      } else if (type === 'line' && (id.includes('secondary_tertiary') || id.includes('link'))) {
-        layer.paint['line-color'] = '#385076';
-      } else if (type === 'line' && id.includes('rail')) {
-        layer.paint['line-color'] = '#29374d';
-      } else if (
-        type === 'line' &&
-        (id.includes('minor') ||
-          id.includes('street') ||
-          id.includes('service') ||
-          id.includes('pedestrian') ||
-          id.includes('path') ||
-          id.includes('aeroway'))
-      ) {
-        layer.paint['line-color'] = '#283a56';
-      } else if (type === 'line' && id.includes('boundary')) {
-        layer.paint['line-color'] = '#334155';
-      } else if (type === 'symbol') {
-        if (layer.layout?.['text-field']) {
+        layer.paint = layer.paint || {};
+        layer.layout = layer.layout || {};
+
+        if (layer.layout['text-field'] && !id.includes('shield')) {
+          if (id.includes('highway-name')) {
+            layer.layout['text-font'] = ['Noto Sans Bold'];
+          }
           layer.paint['text-color'] = id.includes('water')
-            ? '#7dd3fc'
+            ? '#1d4ed8'
             : id.includes('poi')
-            ? '#cbd5e1'
-            : '#f8fafc';
-          layer.paint['text-halo-color'] = '#060a12';
-          layer.paint['text-halo-width'] = 2;
+            ? '#1e293b'
+            : '#0f172a';
+          layer.paint['text-halo-color'] = '#ffffff';
+          layer.paint['text-halo-width'] = 2.2;
+          layer.paint['text-halo-blur'] = 0.2;
         }
       }
+      cachedLight3DTemplate = spec;
     }
+    // Luôn trả bản sao mới để MapLibre không ghi đè làm hỏng style gốc khi chuyển qua lại Sáng/Đêm
+    return JSON.parse(JSON.stringify(cachedLight3DTemplate));
+  } catch {
+    return LIBERTY_STYLE_URL;
+  }
+}
 
-    cachedDark3DStyle = spec;
-    return spec;
+// Chế độ "3D Đêm" chuẩn màn ô tô: Nền đêm sâu #0b1220, nhà 3D nổi #1e304f, chữ trắng tinh #ffffff viền tối dày sắc nét
+async function buildAutomotiveDark3DStyle(): Promise<StyleSpecification | string> {
+  try {
+    if (!cachedDark3DTemplate) {
+      const base = await ensureLibertyBaseJson();
+      const spec = JSON.parse(JSON.stringify(base));
+
+      for (const layer of spec.layers || []) {
+        const id = String(layer.id || '');
+        const type = String(layer.type || '');
+        layer.paint = layer.paint || {};
+        layer.layout = layer.layout || {};
+
+        if (type === 'background') {
+          layer.paint['background-color'] = '#0b1220';
+        } else if (id === 'natural_earth') {
+          layer.paint['raster-opacity'] = 0;
+        } else if (layer.paint['fill-pattern']) {
+          layer.paint['fill-opacity'] = 0.12;
+        } else if (id.includes('water') && type === 'fill') {
+          layer.paint['fill-color'] = '#0a2e4d';
+        } else if (id.includes('waterway') && type === 'line') {
+          layer.paint['line-color'] = '#0f416c';
+        } else if (id === 'park_outline' && type === 'line') {
+          layer.paint['line-color'] = '#13332a';
+        } else if (
+          type === 'fill' &&
+          (id.includes('park') ||
+            id.includes('wood') ||
+            id.includes('grass') ||
+            id.includes('wetland') ||
+            id.includes('pitch') ||
+            id.includes('cemetery'))
+        ) {
+          layer.paint['fill-color'] = '#0d2620';
+          layer.paint['fill-opacity'] = 0.8;
+          if (layer.paint['fill-outline-color']) {
+            layer.paint['fill-outline-color'] = '#14382f';
+          }
+        } else if (
+          type === 'fill' &&
+          (id.includes('landuse') ||
+            id.includes('sand') ||
+            id.includes('ice') ||
+            id.includes('aeroway'))
+        ) {
+          layer.paint['fill-color'] = '#0f1829';
+          layer.paint['fill-opacity'] = 0.75;
+        } else if (id === 'building' && type === 'fill') {
+          layer.paint['fill-color'] = '#162238';
+          layer.paint['fill-outline-color'] = '#223352';
+        } else if (id === 'building-3d' && type === 'fill-extrusion') {
+          layer.paint['fill-extrusion-color'] = '#1e304f';
+          layer.paint['fill-extrusion-opacity'] = 0.88;
+        } else if (type === 'line' && id.includes('casing')) {
+          layer.paint['line-color'] = '#060a12';
+        } else if (type === 'line' && id.includes('motorway')) {
+          layer.paint['line-color'] = '#f59e0b';
+        } else if (type === 'line' && id.includes('trunk_primary')) {
+          layer.paint['line-color'] = '#4b6999';
+        } else if (type === 'line' && (id.includes('secondary_tertiary') || id.includes('link'))) {
+          layer.paint['line-color'] = '#385076';
+        } else if (type === 'line' && id.includes('rail')) {
+          layer.paint['line-color'] = '#29374d';
+        } else if (
+          type === 'line' &&
+          (id.includes('minor') ||
+            id.includes('street') ||
+            id.includes('service') ||
+            id.includes('pedestrian') ||
+            id.includes('path') ||
+            id.includes('aeroway'))
+        ) {
+          layer.paint['line-color'] = '#283a56';
+        } else if (type === 'line' && id.includes('boundary')) {
+          layer.paint['line-color'] = '#334155';
+        } else if (type === 'symbol') {
+          if (layer.layout['text-field'] && !id.includes('shield')) {
+            if (id.includes('highway-name')) {
+              layer.layout['text-font'] = ['Noto Sans Bold'];
+            }
+            layer.paint['text-color'] = id.includes('water')
+              ? '#7dd3fc'
+              : id.includes('poi')
+              ? '#e2e8f0'
+              : '#ffffff';
+            layer.paint['text-halo-color'] = '#020617';
+            layer.paint['text-halo-width'] = 2.4;
+            layer.paint['text-halo-blur'] = 0.2;
+          }
+        }
+      }
+      cachedDark3DTemplate = spec;
+    }
+    return JSON.parse(JSON.stringify(cachedDark3DTemplate));
   } catch {
     return LIBERTY_STYLE_URL;
   }
@@ -142,7 +188,7 @@ async function buildAutomotiveDark3DStyle(): Promise<StyleSpecification | string
 
 async function resolveStyleForTheme(theme: MapTheme): Promise<string | StyleSpecification> {
   if (theme === 'vector3d') {
-    return LIBERTY_STYLE_URL;
+    return await buildAutomotiveLight3DStyle();
   }
   if (theme === 'dark3d') {
     return await buildAutomotiveDark3DStyle();
@@ -293,16 +339,21 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
   // Quick Navigation / EV Charging search state
   const [navDrawerOpen, setNavDrawerOpen] = useState<boolean>(false);
   const [placeQuery, setPlaceQuery] = useState<string>('');
+  const [activePlaceMode, setActivePlaceMode] = useState<string>('ev');
   const [placeResults, setPlaceResults] = useState<PlaceItem[]>([]);
   const [isSearchingPlaces, setIsSearchingPlaces] = useState<boolean>(false);
   const [activeRoute, setActiveRoute] = useState<ActiveRoute | null>(null);
   const [isRouting, setIsRouting] = useState<boolean>(false);
   const [routeError, setRouteError] = useState<string | null>(null);
 
+  const isLightMap = mapTheme === 'vector3d' || mapTheme === 'osm';
+  const isLightMapRef = useRef<boolean>(isLightMap);
+  isLightMapRef.current = isLightMap;
+
   const activeRouteRef = useRef<ActiveRoute | null>(activeRoute);
   activeRouteRef.current = activeRoute;
 
-  // Đồng bộ vệt dẫn đường lên MapLibre đảm bảo 100% hiển thị cả sau khi đổi style Sáng/Đêm
+  // Đồng bộ vệt dẫn đường lên MapLibre (tự động đổi màu Xanh Hoàng Gia trên nền Sáng & Xanh Neon trên nền Đêm)
   const syncRouteDataToMap = useCallback((map: MapLibreMap) => {
     const apply = () => {
       try {
@@ -311,9 +362,19 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           ? { type: 'Feature', properties: {}, geometry: route.geometry }
           : { type: 'FeatureCollection', features: [] };
 
+        const light = isLightMapRef.current;
+        const lineColor = light ? '#2563eb' : '#22d3ee';
+        const casingColor = light ? '#1e3a8a' : '#0369a1';
+
         const existing = map.getSource('carhub-route') as GeoJSONSource | undefined;
         if (existing) {
           existing.setData(geojsonData);
+          if (map.getLayer('carhub-route-casing')) {
+            map.setPaintProperty('carhub-route-casing', 'line-color', casingColor);
+          }
+          if (map.getLayer('carhub-route-line')) {
+            map.setPaintProperty('carhub-route-line', 'line-color', lineColor);
+          }
         } else {
           map.addSource('carhub-route', {
             type: 'geojson',
@@ -326,9 +387,9 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             source: 'carhub-route',
             layout: { 'line-join': 'round', 'line-cap': 'round' },
             paint: {
-              'line-color': '#0369a1',
+              'line-color': casingColor,
               'line-width': 12,
-              'line-opacity': 0.75,
+              'line-opacity': 0.8,
             },
           });
 
@@ -338,7 +399,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             source: 'carhub-route',
             layout: { 'line-join': 'round', 'line-cap': 'round' },
             paint: {
-              'line-color': '#22d3ee',
+              'line-color': lineColor,
               'line-width': 6.5,
               'line-opacity': 1,
             },
@@ -497,7 +558,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     }
   }, [suppressResizeObserver, mapWidthPct, mapSide, isMapExpanded]);
 
-  // Đổi lớp bản đồ (Sáng 3D / Đêm 3D / OSM / Vệ tinh)
+  // Đổi lớp bản đồ (Sáng 3D / Đêm 3D / OSM / Vệ tinh) — dùng { diff: false } để không bị lem màu chữ cũ!
   useEffect(() => {
     const map = mapRef.current;
     if (!map || appliedThemeRef.current === mapTheme) return;
@@ -506,7 +567,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     let cancelled = false;
     resolveStyleForTheme(mapTheme).then((style) => {
       if (cancelled || !mapRef.current) return;
-      mapRef.current.setStyle(style);
+      mapRef.current.setStyle(style, { diff: false });
       mapRef.current.once('idle', () => {
         if (mapRef.current) syncRouteDataToMap(mapRef.current);
       });
@@ -655,6 +716,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     async (queryText: string, mode = '') => {
       setIsSearchingPlaces(true);
       setRouteError(null);
+      setActivePlaceMode(mode);
       try {
         const url = `/api/places?lat=${position.lat.toFixed(4)}&lon=${position.lon.toFixed(4)}${
           mode ? `&mode=${encodeURIComponent(mode)}` : `&q=${encodeURIComponent(queryText)}`
@@ -775,7 +837,11 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     : null;
 
   return (
-    <div className="cockpit-pane-cq relative w-full h-[320px] xs:h-[360px] car:h-full rounded-2xl sm:rounded-3xl overflow-hidden border border-white/15 shadow-2xl bg-[#0b1220]">
+    <div
+      className={`cockpit-pane-cq relative w-full h-[320px] xs:h-[360px] car:h-full rounded-2xl sm:rounded-3xl overflow-hidden border shadow-2xl ${
+        isLightMap ? 'bg-[#f8f4f0] border-slate-300' : 'bg-[#0b1220] border-white/15'
+      }`}
+    >
       {/* KHUNG BẢN ĐỒ WEBGL 3D */}
       {webglError ? (
         <iframe
@@ -812,40 +878,66 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
       )}
 
       {/* =====================================================================
-          1. CỤM HUD TỐC ĐỘ & BIỂN BÁO P.127 GÓC TRÊN BÊN TRÁI
+          1. CỤM HUD TỐC ĐỘ & BIỂN BÁO P.127 GÓC TRÊN BÊN TRÁI (Tự đồng bộ Sáng / Đêm)
          ===================================================================== */}
       <div
         onClick={gpsStatus !== 'active' ? requestGps : undefined}
-        className={`absolute top-2 left-2 z-20 backdrop-blur-xl rounded-2xl border px-2.5 py-1.5 flex items-center gap-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.75)] transition-colors ${
+        className={`absolute top-2 left-2 z-20 backdrop-blur-xl rounded-2xl border px-2.5 py-1.5 flex items-center gap-2.5 transition-colors ${
           isDangerOverLimit
-            ? 'bg-rose-950/90 border-rose-500 ring-2 ring-rose-500/50'
-            : 'bg-black/80 border-white/25'
+            ? 'bg-rose-600 border-rose-300 ring-2 ring-rose-400/60 shadow-2xl'
+            : isLightMap
+            ? 'bg-white/96 border-slate-300 shadow-[0_8px_24px_rgba(15,23,42,0.2)]'
+            : 'bg-[#0b1220]/94 border-slate-600 shadow-[0_10px_30px_rgba(0,0,0,0.8)]'
         } ${gpsStatus !== 'active' ? 'cursor-pointer' : ''}`}
       >
         <div className="flex flex-col">
           <div className="flex items-baseline gap-1">
             <span
               className={`text-3xl sm:text-4xl short:text-3xl font-black tabular-nums tracking-tighter leading-none ${
-                speedKmh === null
+                isDangerOverLimit
                   ? 'text-white'
-                  : isDangerOverLimit
-                  ? 'text-rose-400'
+                  : speedKmh === null
+                  ? isLightMap
+                    ? 'text-slate-900'
+                    : 'text-white'
                   : isOverLimit
-                  ? 'text-amber-300'
+                  ? isLightMap
+                    ? 'text-amber-600'
+                    : 'text-amber-300'
+                  : isLightMap
+                  ? 'text-emerald-700'
                   : 'text-emerald-300'
               }`}
             >
               {speedKmh !== null ? speedKmh : '0'}
             </span>
-            <span className="text-[10px] font-black text-white/70">KM/H</span>
+            <span
+              className={`text-[10px] font-black ${
+                isDangerOverLimit
+                  ? 'text-rose-100'
+                  : isLightMap
+                  ? 'text-slate-600'
+                  : 'text-slate-300'
+              }`}
+            >
+              KM/H
+            </span>
           </div>
           <div className="flex items-center gap-1 mt-0.5">
             <span
               className={`inline-block w-1.5 h-1.5 rounded-full ${
-                gpsStatus === 'active' ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'
+                gpsStatus === 'active' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
               }`}
             />
-            <span className="text-[9px] font-extrabold uppercase tracking-wider text-white/75 cq-hide-sm">
+            <span
+              className={`text-[9px] font-extrabold uppercase tracking-wider cq-hide-sm ${
+                isDangerOverLimit
+                  ? 'text-white'
+                  : isLightMap
+                  ? 'text-slate-700'
+                  : 'text-slate-300'
+              }`}
+            >
               {gpsStatus === 'active'
                 ? isDangerOverLimit
                   ? 'QUÁ TỐC!'
@@ -860,7 +952,15 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
               }}
               aria-label="Bật hoặc tắt chuông cảnh báo quá tốc độ"
               className={`p-0.5 rounded-full ${
-                speedAlertSound ? 'text-emerald-300' : 'text-white/40'
+                isDangerOverLimit
+                  ? 'text-white'
+                  : speedAlertSound
+                  ? isLightMap
+                    ? 'text-emerald-700'
+                    : 'text-emerald-300'
+                  : isLightMap
+                  ? 'text-slate-400'
+                  : 'text-slate-500'
               }`}
             >
               {speedAlertSound ? <Bell className="w-3 h-3" /> : <BellOff className="w-3 h-3" />}
@@ -871,8 +971,8 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
         {activeLimit !== null && (
           <div className="flex flex-col items-center shrink-0">
             <div
-              className={`w-11 h-11 sm:w-12 sm:h-12 short:w-10 short:h-10 rounded-full bg-white text-black border-[4px] border-[#e11d48] flex items-center justify-center shadow-lg ${
-                isDangerOverLimit ? 'scale-110 ring-2 ring-rose-400 animate-pulse' : ''
+              className={`w-11 h-11 sm:w-12 sm:h-12 short:w-10 short:h-10 rounded-full bg-white text-slate-950 border-[4px] border-[#e11d48] flex items-center justify-center shadow-md ${
+                isDangerOverLimit ? 'scale-110 ring-2 ring-white animate-pulse' : ''
               }`}
             >
               <span className="text-sm sm:text-base short:text-sm font-black tracking-tighter leading-none">
@@ -881,7 +981,15 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             </div>
             <span
               className={`text-[8px] font-extrabold uppercase mt-0.5 ${
-                roadInfo?.isVerifiedLimit ? 'text-emerald-300' : 'text-amber-200'
+                isDangerOverLimit
+                  ? 'text-white'
+                  : roadInfo?.isVerifiedLimit
+                  ? isLightMap
+                    ? 'text-emerald-700'
+                    : 'text-emerald-300'
+                  : isLightMap
+                  ? 'text-amber-700'
+                  : 'text-amber-200'
               }`}
             >
               {roadInfo?.isVerifiedLimit ? 'OSM' : 'T.Khảo'}
@@ -909,8 +1017,12 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           title="Tìm đường & Trạm sạc VinFast"
           className={`min-h-[36px] short:min-h-[32px] px-2.5 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition ${
             navDrawerOpen
-              ? 'bg-white text-black border-white'
-              : 'bg-black/80 hover:bg-black/95 text-sky-200 border-white/25'
+              ? isLightMap
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-sky-400 text-slate-950 border-sky-300'
+              : isLightMap
+              ? 'bg-white/96 hover:bg-white text-blue-700 border-slate-300'
+              : 'bg-[#0b1220]/94 hover:bg-slate-900 text-sky-300 border-slate-600'
           }`}
         >
           <Navigation className="w-3.5 h-3.5 shrink-0" />
@@ -925,9 +1037,17 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             setIsFollowing(true);
           }}
           title="Đổi góc nhìn 3D Mũi xe / 2D Hướng Bắc"
-          className="min-h-[36px] short:min-h-[32px] px-2 rounded-xl bg-black/80 hover:bg-black/95 backdrop-blur-xl border border-white/25 text-white text-xs font-black flex items-center gap-1 shadow-lg active:scale-95 transition"
+          className={`min-h-[36px] short:min-h-[32px] px-2 rounded-xl backdrop-blur-xl border text-xs font-black flex items-center gap-1 shadow-lg active:scale-95 transition ${
+            isLightMap
+              ? 'bg-white/96 hover:bg-white border-slate-300 text-slate-900'
+              : 'bg-[#0b1220]/94 hover:bg-slate-900 border-slate-600 text-white'
+          }`}
         >
-          <Compass className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+          <Compass
+            className={`w-3.5 h-3.5 shrink-0 ${
+              isLightMap ? 'text-emerald-600' : 'text-emerald-300'
+            }`}
+          />
           <span>{is3DHeadingUp ? '3D' : '2D'}</span>
         </button>
 
@@ -935,9 +1055,15 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           type="button"
           onClick={cycleMapTheme}
           title="Đổi lớp bản đồ: 3D Sáng / 3D Đêm / OSM / Vệ tinh"
-          className="min-h-[36px] short:min-h-[32px] px-2 rounded-xl bg-black/80 hover:bg-black/95 backdrop-blur-xl border border-white/25 text-white text-xs font-extrabold flex items-center gap-1 shadow-lg active:scale-95 transition"
+          className={`min-h-[36px] short:min-h-[32px] px-2 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1 shadow-lg active:scale-95 transition ${
+            isLightMap
+              ? 'bg-white/96 hover:bg-white border-slate-300 text-slate-900'
+              : 'bg-[#0b1220]/94 hover:bg-slate-900 border-slate-600 text-white'
+          }`}
         >
-          <Layers className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+          <Layers
+            className={`w-3.5 h-3.5 shrink-0 ${isLightMap ? 'text-amber-600' : 'text-amber-300'}`}
+          />
           <span className="cq-hide-md">{THEME_LABELS[mapTheme]}</span>
         </button>
 
@@ -951,8 +1077,12 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           title="Đổi vị trí Trái/Phải & Chỉnh độ rộng Bản đồ"
           className={`min-h-[36px] short:min-h-[32px] px-2 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1 shadow-lg active:scale-95 transition ${
             layoutMenuOpen
-              ? 'bg-white text-black border-white'
-              : 'bg-black/80 hover:bg-black/95 text-emerald-200 border-white/25'
+              ? isLightMap
+                ? 'bg-emerald-600 text-white border-emerald-600'
+                : 'bg-emerald-400 text-slate-950 border-emerald-300'
+              : isLightMap
+              ? 'bg-white/96 hover:bg-white text-emerald-700 border-slate-300'
+              : 'bg-[#0b1220]/94 hover:bg-slate-900 text-emerald-300 border-slate-600'
           }`}
         >
           <Columns2 className="w-3.5 h-3.5 shrink-0" />
@@ -963,13 +1093,13 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           type="button"
           onClick={onToggleExpandMap}
           aria-label={isMapExpanded ? 'Thu gọn bản đồ về chia đôi' : 'Mở rộng bản đồ toàn màn hình'}
-          className="w-9 h-9 short:w-8 short:h-8 rounded-xl bg-black/80 hover:bg-black/95 backdrop-blur-xl border border-white/25 text-white flex items-center justify-center shadow-lg active:scale-95 transition"
+          className={`w-9 h-9 short:w-8 short:h-8 rounded-xl backdrop-blur-xl border flex items-center justify-center shadow-lg active:scale-95 transition ${
+            isLightMap
+              ? 'bg-white/96 hover:bg-white border-slate-300 text-blue-700'
+              : 'bg-[#0b1220]/94 hover:bg-slate-900 border-slate-600 text-sky-300'
+          }`}
         >
-          {isMapExpanded ? (
-            <Minimize2 className="w-4 h-4 text-sky-300" />
-          ) : (
-            <Maximize2 className="w-4 h-4 text-sky-300" />
-          )}
+          {isMapExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
         </button>
       </div>
 
@@ -977,22 +1107,42 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           2B. BẢNG TÙY BIẾN VỊ TRÍ (TRÁI / PHẢI) & KÍCH THƯỚC BỀ NGANG COCKPIT
          ===================================================================== */}
       {layoutMenuOpen && (
-        <div className="absolute right-2 top-13 short:top-11 z-30 w-[275px] max-w-[calc(100%-16px)] bg-black/92 backdrop-blur-2xl border border-white/25 rounded-2xl p-3 space-y-2.5 shadow-2xl animate-ios-sheet-in">
+        <div
+          className={`absolute right-2 top-13 short:top-11 z-30 w-[280px] max-w-[calc(100%-16px)] backdrop-blur-2xl border rounded-2xl p-3 space-y-2.5 shadow-2xl animate-ios-sheet-in ${
+            isLightMap
+              ? 'bg-white/98 border-slate-300 text-slate-900'
+              : 'bg-[#0b1220]/98 border-slate-600 text-white'
+          }`}
+        >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-black uppercase tracking-wider text-white/80">
+            <span
+              className={`text-xs font-black uppercase tracking-wider ${
+                isLightMap ? 'text-slate-800' : 'text-slate-200'
+              }`}
+            >
               Tùy chỉnh bố cục Cockpit
             </span>
             <button
               type="button"
               onClick={() => setLayoutMenuOpen(false)}
-              className="w-6 h-6 rounded-full bg-white/10 text-white/75 flex items-center justify-center"
+              className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                isLightMap
+                  ? 'bg-slate-200 hover:bg-slate-300 text-slate-800'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+              }`}
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
 
           <div className="space-y-1">
-            <span className="text-[11px] font-bold text-white/60">Vị trí hiển thị</span>
+            <span
+              className={`text-[11px] font-bold ${
+                isLightMap ? 'text-slate-600' : 'text-slate-300'
+              }`}
+            >
+              Vị trí hiển thị
+            </span>
             <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
@@ -1001,8 +1151,10 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                 }}
                 className={`min-h-[38px] px-2 rounded-xl border text-[11px] font-extrabold flex items-center justify-center gap-1 active:scale-95 transition ${
                   mapSide === 'left' && !isMapExpanded
-                    ? 'bg-emerald-500 text-black border-emerald-300 shadow'
-                    : 'bg-white/10 text-white/80 border-white/15 hover:bg-white/20'
+                    ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow'
+                    : isLightMap
+                    ? 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
+                    : 'bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700'
                 }`}
               >
                 <span>🗺️ Trái • 🎵 Phải</span>
@@ -1014,8 +1166,10 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                 }}
                 className={`min-h-[38px] px-2 rounded-xl border text-[11px] font-extrabold flex items-center justify-center gap-1 active:scale-95 transition ${
                   mapSide === 'right' && !isMapExpanded
-                    ? 'bg-emerald-500 text-black border-emerald-300 shadow'
-                    : 'bg-white/10 text-white/80 border-white/15 hover:bg-white/20'
+                    ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow'
+                    : isLightMap
+                    ? 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
+                    : 'bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700'
                 }`}
               >
                 <span>🎵 Trái • 🗺️ Phải</span>
@@ -1025,8 +1179,14 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
 
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-[11px] font-bold">
-              <span className="text-white/60">Độ rộng Bản đồ</span>
-              <span className="text-emerald-300 font-mono font-extrabold">
+              <span className={isLightMap ? 'text-slate-600' : 'text-slate-300'}>
+                Độ rộng Bản đồ
+              </span>
+              <span
+                className={`font-mono font-extrabold ${
+                  isLightMap ? 'text-emerald-700' : 'text-emerald-300'
+                }`}
+              >
                 {isMapExpanded ? '100% (Toàn màn)' : `Map ${mapWidthPct}% • Nhạc ${100 - mapWidthPct}%`}
               </span>
             </div>
@@ -1042,8 +1202,12 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                   }}
                   className={`min-h-[32px] rounded-lg border text-[11px] font-extrabold active:scale-95 transition ${
                     !isMapExpanded && Math.abs(mapWidthPct - pct) <= 2
-                      ? 'bg-white text-black border-white'
-                      : 'bg-white/10 text-white/80 border-white/15 hover:bg-white/20'
+                      ? isLightMap
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-slate-950 border-white'
+                      : isLightMap
+                      ? 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
+                      : 'bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700'
                   }`}
                 >
                   {pct}%
@@ -1056,8 +1220,12 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                 }}
                 className={`min-h-[32px] rounded-lg border text-[11px] font-extrabold active:scale-95 transition ${
                   isMapExpanded
-                    ? 'bg-sky-400 text-black border-sky-300'
-                    : 'bg-white/10 text-white/80 border-white/15 hover:bg-white/20'
+                    ? isLightMap
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-sky-400 text-slate-950 border-sky-300'
+                    : isLightMap
+                    ? 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
+                    : 'bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700'
                 }`}
               >
                 Full
@@ -1082,7 +1250,11 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
               />
             )}
 
-            <p className="text-[10px] text-white/45 flex items-center gap-1">
+            <p
+              className={`text-[10px] font-semibold flex items-center gap-1 ${
+                isLightMap ? 'text-slate-600' : 'text-slate-400'
+              }`}
+            >
               <ArrowLeftRight className="w-3 h-3 shrink-0" />
               <span>Kéo nút cầm ở giữa 2 khung để chỉnh mượt!</span>
             </p>
@@ -1094,7 +1266,13 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           3. THẺ HƯỚNG DẪN RẼ TIẾP THEO & LỘ TRÌNH ĐANG CHẠY
          ===================================================================== */}
       {activeRoute && !navDrawerOpen && !layoutMenuOpen && (
-        <div className="absolute top-13 short:top-11 right-2 z-20 max-w-[265px] bg-sky-950/95 backdrop-blur-xl border border-sky-400/60 rounded-2xl p-2.5 flex flex-col gap-1.5 shadow-2xl">
+        <div
+          className={`absolute top-13 short:top-11 right-2 z-20 max-w-[270px] backdrop-blur-xl border rounded-2xl p-2.5 flex flex-col gap-1.5 shadow-2xl ${
+            isLightMap
+              ? 'bg-blue-700 text-white border-blue-500'
+              : 'bg-sky-950/96 text-white border-sky-400/70'
+          }`}
+        >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               {nextTurn && (
@@ -1103,7 +1281,11 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                   {nextTurn.distM > 0 ? ` (${nextTurn.distM}m)` : ''}
                 </p>
               )}
-              <div className="flex items-center gap-1 text-[11px] font-bold text-sky-300 truncate mt-0.5">
+              <div
+                className={`flex items-center gap-1 text-[11px] font-bold truncate mt-0.5 ${
+                  isLightMap ? 'text-sky-100' : 'text-sky-300'
+                }`}
+              >
                 <Flag className="w-3 h-3 shrink-0" />
                 <span className="truncate">
                   {activeRoute.destinationName} • ~{remainingRouteKm ?? activeRoute.distanceKm} km (
@@ -1115,7 +1297,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
               type="button"
               onClick={() => setActiveRoute(null)}
               aria-label="Hủy lộ trình"
-              className="w-7 h-7 rounded-full bg-white/15 hover:bg-rose-500 text-white flex items-center justify-center shrink-0 transition"
+              className="w-7 h-7 rounded-full bg-white/20 hover:bg-rose-500 text-white flex items-center justify-center shrink-0 transition"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -1128,9 +1310,9 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                 setIsRouteOverview(false);
                 setIsFollowing(true);
               }}
-              className="w-full min-h-[32px] rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black flex items-center justify-center gap-1.5 shadow active:scale-95 transition"
+              className="w-full min-h-[32px] rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 text-xs font-black flex items-center justify-center gap-1.5 shadow active:scale-95 transition"
             >
-              <Play className="w-3.5 h-3.5 fill-black" />
+              <Play className="w-3.5 h-3.5 fill-slate-950" />
               <span>Bắt đầu đi (Bám mũi xe 3D)</span>
             </button>
           )}
@@ -1138,10 +1320,16 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
       )}
 
       {/* =====================================================================
-          4. HỘP TÌM ĐỊA ĐIỂM & TRẠM SẠC VINFAST NHANH
+          4. HỘP TÌM ĐỊA ĐIỂM & TRẠM SẠC VINFAST NHANH (TƯƠNG PHẢN CAO CẢ SÁNG LẪN ĐÊM!)
          ===================================================================== */}
       {navDrawerOpen && (
-        <div className="absolute inset-x-2 top-13 short:top-11 bottom-12 z-30 bg-black/94 backdrop-blur-2xl border border-white/25 rounded-2xl p-2.5 flex flex-col gap-2 shadow-2xl animate-ios-sheet-in">
+        <div
+          className={`absolute inset-x-2 top-13 short:top-11 bottom-12 z-30 backdrop-blur-2xl border rounded-2xl p-2.5 flex flex-col gap-2 animate-ios-sheet-in ${
+            isLightMap
+              ? 'bg-white/98 border-slate-300 text-slate-950 shadow-[0_16px_44px_rgba(15,23,42,0.3)]'
+              : 'bg-[#0b1220]/98 border-slate-600 text-white shadow-[0_16px_44px_rgba(0,0,0,0.88)]'
+          }`}
+        >
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -1150,70 +1338,135 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             className="flex items-center gap-1.5 shrink-0"
           >
             <div className="relative flex-1">
-              <Search className="w-4 h-4 text-white/50 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Search
+                className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none ${
+                  isLightMap ? 'text-slate-500' : 'text-slate-400'
+                }`}
+              />
               <input
                 type="search"
                 value={placeQuery}
                 onChange={(e) => setPlaceQuery(e.target.value)}
-                placeholder="Gõ tên đường, trung tâm thương mại, điểm đến..."
-                className="w-full h-9 pl-9 pr-3 rounded-xl bg-white/12 border border-white/20 text-xs sm:text-sm font-bold text-white placeholder-white/45 focus:outline-none focus:border-sky-400"
+                placeholder="Gõ điểm đến (có dấu hoặc không dấu: ho guom, vincom...)"
+                className={`w-full h-9 pl-9 pr-8 rounded-xl border text-xs sm:text-sm font-bold focus:outline-none transition-colors ${
+                  isLightMap
+                    ? 'bg-slate-100 border-slate-300 text-slate-950 placeholder-slate-500 focus:bg-white focus:border-blue-600'
+                    : 'bg-slate-800 border-slate-600 text-white placeholder-slate-400 focus:bg-slate-900 focus:border-sky-400'
+                }`}
               />
+              {placeQuery && (
+                <button
+                  type="button"
+                  onClick={() => setPlaceQuery('')}
+                  aria-label="Xóa từ khóa tìm kiếm"
+                  className={`w-6 h-6 rounded-full absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center justify-center ${
+                    isLightMap
+                      ? 'text-slate-500 hover:bg-slate-200 hover:text-slate-900'
+                      : 'text-slate-400 hover:bg-slate-700 hover:text-white'
+                  }`}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
             <button
               type="submit"
-              className="h-9 px-3 rounded-xl bg-sky-500 text-black font-extrabold text-xs shrink-0 active:scale-95"
+              className={`h-9 px-3.5 rounded-xl font-extrabold text-xs shrink-0 shadow-sm active:scale-95 transition ${
+                isLightMap
+                  ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                  : 'bg-sky-400 hover:bg-sky-300 text-slate-950'
+              }`}
             >
               Tìm
             </button>
             <button
               type="button"
               onClick={() => setNavDrawerOpen(false)}
-              className="h-9 w-9 rounded-xl bg-white/10 text-white flex items-center justify-center shrink-0"
+              aria-label="Đóng hộp tìm kiếm bản đồ"
+              className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 active:scale-95 transition ${
+                isLightMap
+                  ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
+                  : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-200'
+              }`}
             >
               <X className="w-4 h-4" />
             </button>
           </form>
 
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
-            <button
-              type="button"
-              onClick={() => runPlaceSearch('', 'ev')}
-              className="min-h-[30px] px-2.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/45 text-[11px] font-extrabold text-emerald-200 whitespace-nowrap flex items-center gap-1 active:scale-95"
-            >
-              <Zap className="w-3 h-3 fill-current" />
-              <span>Trạm sạc VinFast gần đây</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => runPlaceSearch('Bãi đỗ xe')}
-              className="min-h-[30px] px-2.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-[11px] font-bold text-white/85 whitespace-nowrap active:scale-95"
-            >
-              🅿️ Bãi đỗ xe
-            </button>
-            <button
-              type="button"
-              onClick={() => runPlaceSearch('Cà phê')}
-              className="min-h-[30px] px-2.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-[11px] font-bold text-white/85 whitespace-nowrap active:scale-95"
-            >
-              ☕ Cà phê
-            </button>
+            {[
+              { id: 'ev', label: 'Trạm sạc gần đây', icon: '⚡' },
+              { id: 'parking', label: 'Bãi đỗ xe', icon: '🅿️' },
+              { id: 'cafe', label: 'Cà phê', icon: '☕' },
+              { id: 'mall', label: 'TTTM / Vincom', icon: '🏬' },
+            ].map((chip) => {
+              const isChipActive = activePlaceMode === chip.id && !placeQuery.trim();
+              return (
+                <button
+                  key={chip.id}
+                  type="button"
+                  onClick={() => {
+                    setPlaceQuery('');
+                    runPlaceSearch('', chip.id);
+                  }}
+                  className={`min-h-[30px] px-2.5 rounded-full border text-[11px] font-extrabold whitespace-nowrap flex items-center gap-1 active:scale-95 transition ${
+                    isChipActive
+                      ? chip.id === 'ev'
+                        ? isLightMap
+                          ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm'
+                          : 'bg-emerald-400 border-emerald-300 text-slate-950 shadow-sm'
+                        : isLightMap
+                        ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                        : 'bg-sky-400 border-sky-300 text-slate-950 shadow-sm'
+                      : chip.id === 'ev'
+                      ? isLightMap
+                        ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-400 text-emerald-900'
+                        : 'bg-emerald-950 hover:bg-emerald-900 border-emerald-500/60 text-emerald-300'
+                      : isLightMap
+                      ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
+                      : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-100'
+                  }`}
+                >
+                  <span>{chip.icon}</span>
+                  <span>{chip.label}</span>
+                </button>
+              );
+            })}
           </div>
 
           {routeError && (
-            <div className="px-3 py-1.5 rounded-xl bg-rose-500/20 border border-rose-400/50 text-xs font-bold text-rose-200 shrink-0">
+            <div
+              className={`px-3 py-1.5 rounded-xl border text-xs font-bold shrink-0 ${
+                isLightMap
+                  ? 'bg-rose-50 border-rose-300 text-rose-800'
+                  : 'bg-rose-950/90 border-rose-500/60 text-rose-200'
+              }`}
+            >
               {routeError}
             </div>
           )}
 
-          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-1">
+          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-1.5">
             {isSearchingPlaces || isRouting ? (
-              <div className="h-full flex items-center justify-center gap-2 text-xs font-bold text-white/75">
-                <Loader2 className="w-4 h-4 animate-spin text-sky-400" />
+              <div
+                className={`h-full flex items-center justify-center gap-2 text-xs font-extrabold ${
+                  isLightMap ? 'text-slate-700' : 'text-slate-200'
+                }`}
+              >
+                <Loader2
+                  className={`w-4 h-4 animate-spin ${
+                    isLightMap ? 'text-blue-600' : 'text-sky-400'
+                  }`}
+                />
                 <span>{isRouting ? 'Đang tính lộ trình tối ưu...' : 'Đang tìm địa điểm...'}</span>
               </div>
             ) : placeResults.length === 0 ? (
-              <p className="text-center text-xs text-white/50 py-4">
-                Không tìm thấy địa điểm — Hãy thử gõ tên quận/đường rõ hơn
+              <p
+                className={`text-center text-xs font-semibold py-4 ${
+                  isLightMap ? 'text-slate-600' : 'text-slate-400'
+                }`}
+              >
+                Không tìm thấy địa điểm — Hãy thử gõ tên đường / quận rõ hơn
               </p>
             ) : (
               placeResults.map((pl, idx) => (
@@ -1221,15 +1474,37 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                   key={idx}
                   type="button"
                   onClick={() => startRouteTo(pl)}
-                  className="w-full text-left px-3 py-2 rounded-xl bg-white/[0.08] hover:bg-white/[0.18] border border-white/12 flex items-center justify-between gap-2 active:scale-99 transition"
+                  className={`w-full text-left px-3 py-2 rounded-xl border flex items-center justify-between gap-2 active:scale-99 transition ${
+                    isLightMap
+                      ? 'bg-slate-50 hover:bg-blue-50 border-slate-200/90'
+                      : 'bg-slate-900/95 hover:bg-slate-800 border-slate-700'
+                  }`}
                 >
                   <div className="min-w-0">
-                    <h5 className="text-xs font-extrabold text-white truncate">{pl.name}</h5>
+                    <h5
+                      className={`text-xs sm:text-[13px] font-extrabold truncate ${
+                        isLightMap ? 'text-slate-950' : 'text-white'
+                      }`}
+                    >
+                      {pl.name}
+                    </h5>
                     {pl.subtitle && (
-                      <p className="text-[10px] text-white/55 truncate">{pl.subtitle}</p>
+                      <p
+                        className={`text-[11px] font-semibold truncate mt-0.5 ${
+                          isLightMap ? 'text-slate-600' : 'text-slate-300'
+                        }`}
+                      >
+                        {pl.subtitle}
+                      </p>
                     )}
                   </div>
-                  <span className="px-2 py-0.5 rounded-lg bg-sky-500/20 text-[11px] font-mono font-extrabold text-sky-300 shrink-0">
+                  <span
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-black shrink-0 shadow-sm ${
+                      isLightMap
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-sky-400 text-slate-950'
+                    }`}
+                  >
                     Đi • {pl.distanceKm} km
                   </span>
                 </button>
@@ -1250,8 +1525,8 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                 key={i}
                 className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold flex items-center gap-1 border backdrop-blur-xl shadow-lg ${
                   hz.type === 'camera'
-                    ? 'bg-rose-600/95 border-rose-300 text-white animate-pulse'
-                    : 'bg-amber-600/95 border-amber-300 text-white'
+                    ? 'bg-rose-600 border-rose-300 text-white animate-pulse'
+                    : 'bg-amber-600 border-amber-300 text-white'
                 }`}
               >
                 {hz.type === 'camera' ? (
@@ -1271,7 +1546,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                 setIsRouteOverview(false);
                 setIsFollowing(true);
               }}
-              className="pointer-events-auto min-h-[34px] px-3 rounded-full bg-emerald-500 text-black text-xs font-black flex items-center gap-1.5 shadow-xl active:scale-95 transition"
+              className="pointer-events-auto min-h-[34px] px-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-xl active:scale-95 transition"
             >
               <LocateFixed className="w-3.5 h-3.5" />
               <span>Bám mũi xe</span>
@@ -1279,33 +1554,71 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           )}
         </div>
 
-        <div className="bg-black/85 backdrop-blur-xl border border-white/20 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 shadow-xl">
+        <div
+          className={`backdrop-blur-xl border rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 shadow-xl ${
+            isLightMap
+              ? 'bg-white/96 border-slate-300 text-slate-950'
+              : 'bg-[#0b1220]/94 border-slate-600 text-white'
+          }`}
+        >
           <div className="flex items-center gap-1.5 min-w-0">
             {roadInfo?.roadRef && (
-              <span className="px-1.5 py-0.2 rounded bg-sky-500/25 border border-sky-400/40 text-[10px] font-black text-sky-200 shrink-0">
+              <span
+                className={`px-1.5 py-0.5 rounded border text-[10px] font-black shrink-0 ${
+                  isLightMap
+                    ? 'bg-blue-100 border-blue-300 text-blue-900'
+                    : 'bg-sky-500/25 border-sky-400/50 text-sky-200'
+                }`}
+              >
                 {roadInfo.roadRef}
               </span>
             )}
-            <span className="text-xs font-extrabold text-white truncate">
+            <span
+              className={`text-xs font-extrabold truncate ${
+                isLightMap ? 'text-slate-900' : 'text-white'
+              }`}
+            >
               {roadInfo?.roadName ||
                 (gpsStatus === 'active'
                   ? 'Đang dò tên đường...'
                   : 'Bản đồ 3D VinFast VF5 (Chạm ô KM/H để bật GPS)')}
             </span>
             {roadInfo?.lanes && (
-              <span className="text-[10px] font-bold text-white/55 shrink-0 cq-hide-sm">
+              <span
+                className={`text-[10px] font-bold shrink-0 cq-hide-sm ${
+                  isLightMap ? 'text-slate-600' : 'text-slate-300'
+                }`}
+              >
                 • {roadInfo.lanes} làn
               </span>
             )}
           </div>
 
-          <div className="flex items-center gap-2 text-[11px] font-bold text-white/85 shrink-0">
+          <div
+            className={`flex items-center gap-2 text-[11px] font-bold shrink-0 ${
+              isLightMap ? 'text-slate-800' : 'text-slate-200'
+            }`}
+          >
             {weather && (
-              <span className={weather.isRainy ? 'text-sky-300' : 'text-white/85'}>
+              <span
+                className={
+                  weather.isRainy
+                    ? isLightMap
+                      ? 'text-blue-700'
+                      : 'text-sky-300'
+                    : isLightMap
+                    ? 'text-slate-800'
+                    : 'text-slate-200'
+                }
+              >
                 {weather.icon} {weather.temperature}°C
               </span>
             )}
-            <span className="font-mono font-black text-white">{clockTime}</span>
+            <span
+              className={`font-mono font-black ${isLightMap ? 'text-slate-950' : 'text-white'}`}
+            >
+              {clockTime}
+            </span>
           </div>
         </div>
       </div>
