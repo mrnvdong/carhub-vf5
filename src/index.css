@@ -41,6 +41,23 @@
   container-type: size;
 }
 
+/* Container queries cho các cột tùy biến bề ngang trong Cockpit HUD */
+.cockpit-pane-cq {
+  container-type: inline-size;
+}
+
+@container (max-width: 440px) {
+  .cq-hide-md {
+    display: none !important;
+  }
+}
+
+@container (max-width: 315px) {
+  .cq-hide-sm {
+    display: none !important;
+  }
+}
+
 .car-art-fit {
   width: min(100cqi, 100cqb, 17.5rem);
   height: min(100cqi, 100cqb, 17.5rem);

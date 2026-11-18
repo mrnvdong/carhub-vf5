@@ -1,4 +1,4 @@
-import React, { useState, Suspense } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import {
   Play,
   Pause,
@@ -11,6 +11,7 @@ import {
   Zap,
   Loader2,
   FolderPlus,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { StreamData, RepeatMode } from '../types';
 import { formatSeconds } from '../services/api';
@@ -89,7 +90,89 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
   gestureHandlers,
   heartBurst,
 }) => {
-  const [isMapExpanded, setIsMapExpanded] = useState<boolean>(false);
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
+
+  // Lưu tùy chọn vị trí Trái / Phải của Bản đồ & Nhạc
+  const [mapSide, setMapSide] = useState<'left' | 'right'>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_cockpit_map_side');
+      return saved === 'right' ? 'right' : 'left';
+    } catch {
+      return 'left';
+    }
+  });
+
+  // Lưu tùy chọn tỉ lệ bề ngang Bản đồ (34% -> 70%)
+  const [mapWidthPct, setMapWidthPct] = useState<number>(() => {
+    try {
+      const saved = parseInt(localStorage.getItem('carhub_cockpit_map_pct') || '58', 10);
+      if (!isNaN(saved) && saved >= 34 && saved <= 70) return saved;
+      return 58;
+    } catch {
+      return 58;
+    }
+  });
+
+  const [isMapExpanded, setIsMapExpanded] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('carhub_cockpit_map_expanded') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_cockpit_map_side', mapSide);
+    } catch {}
+  }, [mapSide]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_cockpit_map_pct', String(mapWidthPct));
+    } catch {}
+  }, [mapWidthPct]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_cockpit_map_expanded', String(isMapExpanded));
+    } catch {}
+  }, [isMapExpanded]);
+
+  const toggleMapSide = () => {
+    setMapSide((prev) => (prev === 'left' ? 'right' : 'left'));
+  };
+
+  // Kéo thanh ngăn trực tiếp bằng ngón tay trên màn hình cảm ứng VF5
+  const handleDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsDraggingSplit(true);
+  };
+
+  const handleDividerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingSplit || !splitContainerRef.current) return;
+    const rect = splitContainerRef.current.getBoundingClientRect();
+    if (rect.width <= 0) return;
+
+    const rawPct =
+      mapSide === 'left'
+        ? ((e.clientX - rect.left) / rect.width) * 100
+        : ((rect.right - e.clientX) / rect.width) * 100;
+
+    const clamped = Math.round(Math.max(34, Math.min(70, rawPct)));
+    setMapWidthPct(clamped);
+  };
+
+  const handleDividerPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isDraggingSplit) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+      setIsDraggingSplit(false);
+    }
+  };
 
   const currentLyricText =
     lyricsData?.isSynced && activeLyricIndex >= 0
@@ -105,20 +188,24 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
 
   return (
     <div
+      ref={splitContainerRef}
+      style={{ '--map-pct': `${mapWidthPct}%` } as React.CSSProperties}
       className={`flex-1 min-h-0 h-full w-full max-w-[1560px] mx-auto animate-ios-browse-in overflow-y-auto car:overflow-hidden no-scrollbar ${
         isMapExpanded
           ? 'flex flex-col gap-2'
-          : 'grid grid-cols-1 car:grid-cols-12 car:grid-rows-[minmax(0,1fr)] gap-2.5 sm:gap-3 items-stretch'
+          : `flex flex-col ${
+              mapSide === 'right' ? 'car:flex-row-reverse' : 'car:flex-row'
+            } gap-2.5 car:gap-0 items-stretch`
       }`}
     >
       {/* =====================================================================
-          CỘT TRÁI (7 CỘT HOẶC FULL MÀN HÌNH): BẢN ĐỒ 3D DẪN ĐƯỜNG + HUD TỐC ĐỘ & BIỂN BÁO
+          1. KHUNG BẢN ĐỒ 3D DẪN ĐƯỜNG & HUD TỐC ĐỘ (Tùy biến Trái/Phải & Độ rộng %)
          ===================================================================== */}
       <div
         className={
           isMapExpanded
             ? 'flex-1 min-h-[300px] car:min-h-0 w-full h-full'
-            : 'car:col-span-7 min-h-[320px] car:min-h-0 h-full'
+            : 'w-full car:w-[var(--map-pct)] shrink-0 min-h-[320px] car:min-h-0 h-full'
         }
       >
         <Suspense
@@ -136,12 +223,44 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
             clockTime={clockTime}
             isMapExpanded={isMapExpanded}
             onToggleExpandMap={() => setIsMapExpanded((v) => !v)}
+            mapSide={mapSide}
+            onToggleMapSide={toggleMapSide}
+            mapWidthPct={mapWidthPct}
+            onChangeMapWidthPct={setMapWidthPct}
           />
         </Suspense>
       </div>
 
       {/* =====================================================================
-          CỘT PHẢI (5 CỘT - KHI CHIA ĐÔI) HOẶC THANH MINI GỌN (KHI PHÓNG RỘNG BẢN ĐỒ)
+          2. THANH KÉO TÙY CHỈNH BỀ NGANG TRỰC TIẾP GIỮA 2 KHUNG (Chỉ hiện trên màn ngang)
+             - Kéo sang trái/phải để phóng to/thu nhỏ Bản đồ & Nhạc tức thì
+             - Chạm đúp thanh ngăn để đảo nhanh vị trí Trái <-> Phải!
+         ===================================================================== */}
+      {!isMapExpanded && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Kéo để chỉnh kích thước bề ngang Bản đồ và Nhạc, chạm đúp để đổi bên"
+          title="Kéo trái/phải để chỉnh kích thước • Chạm đúp để đổi bên Trái/Phải"
+          onPointerDown={handleDividerPointerDown}
+          onPointerMove={handleDividerPointerMove}
+          onPointerUp={handleDividerPointerUp}
+          onPointerCancel={handleDividerPointerUp}
+          onDoubleClick={toggleMapSide}
+          className="hidden car:flex flex-col items-center justify-center w-3.5 shrink-0 cursor-col-resize select-none touch-none group"
+        >
+          <div
+            className={`w-1.5 rounded-full transition-all duration-150 ${
+              isDraggingSplit
+                ? 'h-24 bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.9)]'
+                : 'h-14 bg-white/20 group-hover:bg-white/50 group-hover:h-20'
+            }`}
+          />
+        </div>
+      )}
+
+      {/* =====================================================================
+          3. KHUNG NHẠC + KARAOKE (Tự co giãn thông minh theo @container ở mọi bề ngang!)
          ===================================================================== */}
       {isMapExpanded ? (
         <div
@@ -200,7 +319,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
       ) : (
         <div
           {...gestureHandlers}
-          className="car:col-span-5 bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-3 sm:p-3.5 short:p-2.5 flex flex-col justify-between gap-2 short:gap-1.5 min-h-0 relative overflow-hidden shadow-2xl"
+          className="cockpit-pane-cq flex-1 min-w-0 min-h-0 h-full bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-3 sm:p-3.5 short:p-2.5 flex flex-col justify-between gap-2 short:gap-1.5 relative overflow-hidden shadow-2xl"
         >
           {heartBurst && (
             <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-black/20">
@@ -208,11 +327,11 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
             </div>
           )}
 
-          {/* Hàng 1: Ảnh bìa + Tên bài + Nút Mix / Playlist / Tim */}
+          {/* Hàng 1: Ảnh bìa + Tên bài + Nút Đổi bên nhanh (⇄) / Mix / Tim */}
           <div className="flex items-center gap-2.5 short:gap-2 shrink-0">
             <div
               onClick={onTogglePlay}
-              className="relative w-14 h-14 sm:w-16 sm:h-16 short:w-12 short:h-12 rounded-2xl overflow-hidden shrink-0 border border-white/15 shadow-lg cursor-pointer bg-black"
+              className="relative w-13 h-13 sm:w-15 sm:h-15 short:w-11 short:h-11 rounded-2xl overflow-hidden shrink-0 border border-white/15 shadow-lg cursor-pointer bg-black"
             >
               <img
                 src={streamData.thumbnailUrl}
@@ -227,10 +346,10 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
             </div>
 
             <div className="min-w-0 flex-1">
-              <span className="inline-block text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/10 text-white/65 mb-0.5">
+              <span className="cq-hide-sm inline-block text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/10 text-white/65 mb-0.5">
                 Vuốt ⇄ qua bài • Đúp ❤️
               </span>
-              <h3 className="text-sm sm:text-base short:text-xs font-extrabold text-white truncate">
+              <h3 className="text-sm sm:text-base short:text-xs font-extrabold text-white line-clamp-1">
                 {streamData.title}
               </h3>
               <p className="text-[11px] text-white/65 font-semibold truncate">
@@ -239,12 +358,23 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
+              {/* Nút 1 chạm Đổi vị trí Nhạc <-> Bản đồ ngay trên thẻ Nhạc */}
+              <button
+                type="button"
+                onClick={toggleMapSide}
+                aria-label="Đổi vị trí Trái Phải giữa Nhạc và Bản đồ"
+                title="Đổi bên Trái / Phải với Bản đồ"
+                className="hidden car:flex w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-300 items-center justify-center active:scale-90 transition"
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5" />
+              </button>
+
               <button
                 type="button"
                 onClick={onStartAutoMix}
                 disabled={isLoadingMix}
                 aria-label="Phát đài nhạc tương tự bài này"
-                className={`h-9 short:h-8 px-2 rounded-full border text-[11px] font-extrabold flex items-center gap-1 active:scale-90 transition ${
+                className={`cq-hide-sm h-8 px-2 rounded-full border text-[11px] font-extrabold flex items-center gap-1 active:scale-90 transition ${
                   isMixActive
                     ? 'bg-amber-400 text-black border-amber-300 shadow'
                     : 'bg-white/10 hover:bg-white/20 border-white/15 text-amber-200'
@@ -261,28 +391,28 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
                 type="button"
                 onClick={onOpenAddPlaylist}
                 aria-label="Lưu vào Playlist"
-                className="w-9 h-9 short:w-8 short:h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-white/80 flex items-center justify-center active:scale-90 transition"
+                className="cq-hide-md w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-white/80 flex items-center justify-center active:scale-90 transition"
               >
-                <FolderPlus className="w-4 h-4" />
+                <FolderPlus className="w-3.5 h-3.5" />
               </button>
 
               <button
                 type="button"
                 onClick={onToggleFavorite}
                 aria-label={isFavorite ? 'Bỏ lưu yêu thích' : 'Lưu yêu thích'}
-                className={`w-9 h-9 short:w-8 short:h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
+                className={`w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
                   isFavorite
                     ? 'bg-rose-500/25 border-rose-400/50 text-rose-400'
                     : 'bg-white/10 border-white/15 text-white/75'
                 }`}
               >
-                <Heart className={`w-4 h-4 ${isFavorite ? 'fill-rose-400' : ''}`} />
+                <Heart className={`w-3.5 h-3.5 ${isFavorite ? 'fill-rose-400' : ''}`} />
               </button>
             </div>
           </div>
 
           {/* Hàng 2: Khung lời bài hát Karaoke 2 dòng */}
-          <div className="flex-1 min-h-[48px] bg-black/35 rounded-2xl border border-white/10 px-3 py-2 short:py-1.5 flex flex-col justify-center text-center">
+          <div className="flex-1 min-h-[46px] bg-black/35 rounded-2xl border border-white/10 px-3 py-2 short:py-1.5 flex flex-col justify-center text-center">
             {currentLyricText ? (
               <>
                 <p className="text-xs sm:text-base short:text-xs font-extrabold text-white line-clamp-2 leading-snug">
@@ -295,13 +425,13 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
                 )}
               </>
             ) : (
-              <p className="text-xs font-bold text-white/45">
-                🎵 Vuốt ngang trên khung này để qua bài rảnh tay khi đang nhìn bản đồ
+              <p className="text-xs font-bold text-white/45 line-clamp-2">
+                🎵 Kéo thanh ngăn giữa để chỉnh độ rộng • Bấm ⇄ để đổi bên
               </p>
             )}
           </div>
 
-          {/* Hàng 3: Thanh tua + Nút điều khiển lớn */}
+          {/* Hàng 3: Thanh tua + Nút điều khiển lớn (Tự gọn còn Prev/Play/Next khi thu hẹp cột Nhạc!) */}
           <div className="shrink-0 space-y-1">
             <div>
               <input
@@ -324,12 +454,12 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center justify-between px-1">
+            <div className="flex items-center justify-around px-1">
               <button
                 type="button"
                 onClick={onToggleShuffle}
                 aria-label="Phát ngẫu nhiên"
-                className={`w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
+                className={`cq-hide-sm w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
                   isShuffle
                     ? 'bg-rose-500/30 border border-rose-400/50 text-rose-200'
                     : 'text-white/55'
@@ -377,7 +507,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
                 type="button"
                 onClick={onToggleRepeat}
                 aria-label="Chế độ lặp"
-                className={`w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
+                className={`cq-hide-sm w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
                   repeatMode !== 'off'
                     ? 'bg-white/20 border border-white/25 text-white'
                     : 'text-white/55'
