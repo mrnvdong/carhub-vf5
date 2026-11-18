@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useRef, Suspense, useCallback } from 'react';
 import {
   Play,
   Pause,
@@ -12,6 +12,7 @@ import {
   Loader2,
   FolderPlus,
   ArrowLeftRight,
+  GripVertical,
 } from 'lucide-react';
 import { StreamData, RepeatMode } from '../types';
 import { formatSeconds } from '../services/api';
@@ -91,9 +92,11 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
   heartBurst,
 }) => {
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  const badgeTextRef = useRef<HTMLSpanElement | null>(null);
+  const rafDragRef = useRef<number | null>(null);
+
   const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
 
-  // Lưu tùy chọn vị trí Trái / Phải của Bản đồ & Nhạc
   const [mapSide, setMapSide] = useState<'left' | 'right'>(() => {
     try {
       const saved = localStorage.getItem('carhub_cockpit_map_side');
@@ -103,7 +106,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
     }
   });
 
-  // Lưu tùy chọn tỉ lệ bề ngang Bản đồ (34% -> 70%)
   const [mapWidthPct, setMapWidthPct] = useState<number>(() => {
     try {
       const saved = parseInt(localStorage.getItem('carhub_cockpit_map_pct') || '58', 10);
@@ -113,6 +115,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
       return 58;
     }
   });
+  const livePctRef = useRef<number>(mapWidthPct);
 
   const [isMapExpanded, setIsMapExpanded] = useState<boolean>(() => {
     try {
@@ -123,12 +126,10 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
   });
 
   useEffect(() => {
-    try {
-      localStorage.setItem('carhub_cockpit_map_side', mapSide);
-    } catch {}
-  }, [mapSide]);
-
-  useEffect(() => {
+    livePctRef.current = mapWidthPct;
+    if (splitContainerRef.current) {
+      splitContainerRef.current.style.setProperty('--map-pct', `${mapWidthPct}%`);
+    }
     try {
       localStorage.setItem('carhub_cockpit_map_pct', String(mapWidthPct));
     } catch {}
@@ -136,42 +137,75 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
 
   useEffect(() => {
     try {
+      localStorage.setItem('carhub_cockpit_map_side', mapSide);
+    } catch {}
+  }, [mapSide]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem('carhub_cockpit_map_expanded', String(isMapExpanded));
     } catch {}
   }, [isMapExpanded]);
 
-  const toggleMapSide = () => {
+  const toggleMapSide = useCallback(() => {
     setMapSide((prev) => (prev === 'left' ? 'right' : 'left'));
-  };
+  }, []);
 
-  // Kéo thanh ngăn trực tiếp bằng ngón tay trên màn hình cảm ứng VF5
+  // Kéo thả 60fps siêu mượt: Cập nhật biến CSS trực tiếp trên DOM (0 lần re-render React khi đang kéo!)
+  const updateSplitFromClientX = useCallback(
+    (clientX: number) => {
+      const container = splitContainerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      if (rect.width <= 0) return;
+
+      const rawPct =
+        mapSide === 'left'
+          ? ((clientX - rect.left) / rect.width) * 100
+          : ((rect.right - clientX) / rect.width) * 100;
+
+      const clamped = Math.round(Math.max(34, Math.min(70, rawPct)));
+      livePctRef.current = clamped;
+
+      if (rafDragRef.current !== null) return;
+      rafDragRef.current = window.requestAnimationFrame(() => {
+        rafDragRef.current = null;
+        const pct = livePctRef.current;
+        container.style.setProperty('--map-pct', `${pct}%`);
+        if (badgeTextRef.current) {
+          badgeTextRef.current.textContent = `Bản đồ ${pct}% • Nhạc ${100 - pct}%`;
+        }
+      });
+    },
+    [mapSide]
+  );
+
   const handleDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
+    e.stopPropagation();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
     setIsDraggingSplit(true);
   };
 
   const handleDividerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDraggingSplit || !splitContainerRef.current) return;
-    const rect = splitContainerRef.current.getBoundingClientRect();
-    if (rect.width <= 0) return;
-
-    const rawPct =
-      mapSide === 'left'
-        ? ((e.clientX - rect.left) / rect.width) * 100
-        : ((rect.right - e.clientX) / rect.width) * 100;
-
-    const clamped = Math.round(Math.max(34, Math.min(70, rawPct)));
-    setMapWidthPct(clamped);
+    if (!isDraggingSplit) return;
+    e.preventDefault();
+    updateSplitFromClientX(e.clientX);
   };
 
-  const handleDividerPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (isDraggingSplit) {
-      try {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      } catch {}
-      setIsDraggingSplit(false);
+  const finishDividerDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingSplit) return;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+    if (rafDragRef.current !== null) {
+      window.cancelAnimationFrame(rafDragRef.current);
+      rafDragRef.current = null;
     }
+    setIsDraggingSplit(false);
+    setMapWidthPct(livePctRef.current);
   };
 
   const currentLyricText =
@@ -190,7 +224,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
     <div
       ref={splitContainerRef}
       style={{ '--map-pct': `${mapWidthPct}%` } as React.CSSProperties}
-      className={`flex-1 min-h-0 h-full w-full max-w-[1560px] mx-auto animate-ios-browse-in overflow-y-auto car:overflow-hidden no-scrollbar ${
+      className={`relative flex-1 min-h-0 h-full w-full max-w-[1560px] mx-auto animate-ios-browse-in overflow-y-auto car:overflow-hidden no-scrollbar ${
         isMapExpanded
           ? 'flex flex-col gap-2'
           : `flex flex-col ${
@@ -198,15 +232,24 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
             } gap-2.5 car:gap-0 items-stretch`
       }`}
     >
+      {/* Hiển thị nhãn % trực quan giữa màn hình khi đang kéo */}
+      {isDraggingSplit && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-1.5 rounded-full bg-emerald-500 text-black text-xs font-black shadow-2xl pointer-events-none">
+          <span ref={badgeTextRef}>
+            Bản đồ {livePctRef.current}% • Nhạc {100 - livePctRef.current}%
+          </span>
+        </div>
+      )}
+
       {/* =====================================================================
-          1. KHUNG BẢN ĐỒ 3D DẪN ĐƯỜNG & HUD TỐC ĐỘ (Tùy biến Trái/Phải & Độ rộng %)
+          1. KHUNG BẢN ĐỒ 3D DẪN ĐƯỜNG & HUD TỐC ĐỘ
          ===================================================================== */}
       <div
-        className={
+        className={`relative ${isDraggingSplit ? 'pointer-events-none select-none' : ''} ${
           isMapExpanded
             ? 'flex-1 min-h-[300px] car:min-h-0 w-full h-full'
             : 'w-full car:w-[var(--map-pct)] shrink-0 min-h-[320px] car:min-h-0 h-full'
-        }
+        }`}
       >
         <Suspense
           fallback={
@@ -227,40 +270,43 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
             onToggleMapSide={toggleMapSide}
             mapWidthPct={mapWidthPct}
             onChangeMapWidthPct={setMapWidthPct}
+            suppressResizeObserver={isDraggingSplit}
           />
         </Suspense>
       </div>
 
       {/* =====================================================================
-          2. THANH KÉO TÙY CHỈNH BỀ NGANG TRỰC TIẾP GIỮA 2 KHUNG (Chỉ hiện trên màn ngang)
-             - Kéo sang trái/phải để phóng to/thu nhỏ Bản đồ & Nhạc tức thì
-             - Chạm đúp thanh ngăn để đảo nhanh vị trí Trái <-> Phải!
+          2. TAY NẮM KÉO TỈ LỆ CẢM ỨNG RỘNG (44px vùng chạm thực tế, 60fps không giật!)
          ===================================================================== */}
       {!isMapExpanded && (
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Kéo để chỉnh kích thước bề ngang Bản đồ và Nhạc, chạm đúp để đổi bên"
-          title="Kéo trái/phải để chỉnh kích thước • Chạm đúp để đổi bên Trái/Phải"
-          onPointerDown={handleDividerPointerDown}
-          onPointerMove={handleDividerPointerMove}
-          onPointerUp={handleDividerPointerUp}
-          onPointerCancel={handleDividerPointerUp}
-          onDoubleClick={toggleMapSide}
-          className="hidden car:flex flex-col items-center justify-center w-3.5 shrink-0 cursor-col-resize select-none touch-none group"
-        >
+        <div className="hidden car:flex relative z-30 items-center justify-center w-3 shrink-0 select-none">
           <div
-            className={`w-1.5 rounded-full transition-all duration-150 ${
-              isDraggingSplit
-                ? 'h-24 bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.9)]'
-                : 'h-14 bg-white/20 group-hover:bg-white/50 group-hover:h-20'
-            }`}
-          />
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Kéo trái phải để chỉnh tỉ lệ Bản đồ và Nhạc, chạm đúp để đổi bên"
+            title="Kéo trái/phải để chỉnh độ rộng • Chạm đúp để đổi bên"
+            onPointerDown={handleDividerPointerDown}
+            onPointerMove={handleDividerPointerMove}
+            onPointerUp={finishDividerDrag}
+            onPointerCancel={finishDividerDrag}
+            onDoubleClick={toggleMapSide}
+            className="absolute inset-y-10 -inset-x-4 flex items-center justify-center cursor-col-resize select-none touch-none group"
+          >
+            <div
+              className={`w-5 h-14 shrink-0 rounded-full border flex items-center justify-center shadow-xl transition-transform ${
+                isDraggingSplit
+                  ? 'bg-emerald-400 border-white text-black scale-110'
+                  : 'bg-black/85 group-hover:bg-white/20 border-white/30 text-white/80'
+              }`}
+            >
+              <GripVertical className="w-3.5 h-3.5 shrink-0" />
+            </div>
+          </div>
         </div>
       )}
 
       {/* =====================================================================
-          3. KHUNG NHẠC + KARAOKE (Tự co giãn thông minh theo @container ở mọi bề ngang!)
+          3. KHUNG NHẠC + KARAOKE
          ===================================================================== */}
       {isMapExpanded ? (
         <div
@@ -319,7 +365,9 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
       ) : (
         <div
           {...gestureHandlers}
-          className="cockpit-pane-cq flex-1 min-w-0 min-h-0 h-full bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-3 sm:p-3.5 short:p-2.5 flex flex-col justify-between gap-2 short:gap-1.5 relative overflow-hidden shadow-2xl"
+          className={`cockpit-pane-cq flex-1 min-w-0 min-h-0 h-full bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-3 sm:p-3.5 short:p-2.5 flex flex-col justify-between gap-2 short:gap-1.5 relative overflow-hidden shadow-2xl ${
+            isDraggingSplit ? 'pointer-events-none select-none' : ''
+          }`}
         >
           {heartBurst && (
             <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-black/20">
@@ -327,7 +375,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
             </div>
           )}
 
-          {/* Hàng 1: Ảnh bìa + Tên bài + Nút Đổi bên nhanh (⇄) / Mix / Tim */}
           <div className="flex items-center gap-2.5 short:gap-2 shrink-0">
             <div
               onClick={onTogglePlay}
@@ -358,7 +405,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
-              {/* Nút 1 chạm Đổi vị trí Nhạc <-> Bản đồ ngay trên thẻ Nhạc */}
               <button
                 type="button"
                 onClick={toggleMapSide}
@@ -411,7 +457,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
             </div>
           </div>
 
-          {/* Hàng 2: Khung lời bài hát Karaoke 2 dòng */}
           <div className="flex-1 min-h-[46px] bg-black/35 rounded-2xl border border-white/10 px-3 py-2 short:py-1.5 flex flex-col justify-center text-center">
             {currentLyricText ? (
               <>
@@ -426,12 +471,11 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
               </>
             ) : (
               <p className="text-xs font-bold text-white/45 line-clamp-2">
-                🎵 Kéo thanh ngăn giữa để chỉnh độ rộng • Bấm ⇄ để đổi bên
+                🎵 Kéo tay nắm ở giữa để chỉnh độ rộng • Bấm ⇄ để đổi bên
               </p>
             )}
           </div>
 
-          {/* Hàng 3: Thanh tua + Nút điều khiển lớn (Tự gọn còn Prev/Play/Next khi thu hẹp cột Nhạc!) */}
           <div className="shrink-0 space-y-1">
             <div>
               <input
