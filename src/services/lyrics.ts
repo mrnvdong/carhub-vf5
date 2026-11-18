@@ -47,21 +47,31 @@ function buildSearchCandidates(rawTitle: string, rawArtist: string): string[] {
 
 export function parseLrc(lrcText: string): LyricLine[] {
   const lines: LyricLine[] = [];
-  const regex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)/;
+  const tagRegex = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
 
   for (const rawLine of lrcText.split('\n')) {
-    const match = rawLine.match(regex);
-    if (!match) continue;
-    const min = parseInt(match[1], 10);
-    const sec = parseInt(match[2], 10);
-    const msStr = (match[3] || '0').padEnd(3, '0').slice(0, 3);
-    const ms = parseInt(msStr, 10);
-    const time = min * 60 + sec + ms / 1000;
-    const text = match[4].trim();
-    if (text) {
+    const matches = Array.from(rawLine.matchAll(tagRegex));
+    if (matches.length === 0) continue;
+
+    // Strip all [mm:ss.xx] tags and enhanced LRC inline <mm:ss.xx> tags
+    const text = rawLine
+      .replace(tagRegex, '')
+      .replace(/<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!text) continue;
+
+    for (const match of matches) {
+      const min = parseInt(match[1], 10);
+      const sec = parseInt(match[2], 10);
+      const msStr = (match[3] || '0').padEnd(3, '0').slice(0, 3);
+      const ms = parseInt(msStr, 10);
+      const time = min * 60 + sec + ms / 1000;
       lines.push({ time, text });
     }
   }
+
   return lines.sort((a, b) => a.time - b.time);
 }
 
@@ -70,17 +80,21 @@ export async function fetchSyncedLyrics(
   title: string,
   artist: string
 ): Promise<LyricsResult | null> {
-  if (lyricsCache.has(videoId)) {
-    return lyricsCache.get(videoId) || null;
+  const cacheKey = `${videoId}::${title}`;
+  if (lyricsCache.has(cacheKey)) {
+    return lyricsCache.get(cacheKey) || null;
   }
 
-  // 1. Primary: Call our Cloudflare Edge /api/lyrics (combines LRCLIB + YouTube TimedText Captions)
+  // 1. Primary: Cloudflare Edge /api/lyrics (combines LRCLIB + YouTube TimedText Captions)
   try {
     const apiRes = await fetch(
-      `/api/lyrics?id=${encodeURIComponent(videoId)}&title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`,
+      `/api/lyrics?id=${encodeURIComponent(videoId)}&title=${encodeURIComponent(
+        title
+      )}&artist=${encodeURIComponent(artist)}`,
       { signal: AbortSignal.timeout(6000) }
     );
-    if (apiRes.ok) {
+    const contentType = apiRes.headers.get('content-type') || '';
+    if (apiRes.ok && contentType.includes('application/json')) {
       const data = await apiRes.json();
       if (Array.isArray(data?.lines) && data.lines.length > 0) {
         const result: LyricsResult = {
@@ -88,7 +102,7 @@ export async function fetchSyncedLyrics(
           isSynced: Boolean(data.isSynced),
           source: data.source || 'API',
         };
-        lyricsCache.set(videoId, result);
+        lyricsCache.set(cacheKey, result);
         return result;
       }
     }
@@ -100,10 +114,9 @@ export async function fetchSyncedLyrics(
   const queries = buildSearchCandidates(title, artist);
   for (const q of queries) {
     try {
-      const res = await fetch(
-        `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`,
-        { signal: AbortSignal.timeout(3500) }
-      );
+      const res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
+        signal: AbortSignal.timeout(3500),
+      });
       if (!res.ok) continue;
       const items = await res.json();
       if (!Array.isArray(items) || items.length === 0) continue;
@@ -119,7 +132,7 @@ export async function fetchSyncedLyrics(
             isSynced: true,
             source: 'LRCLIB Synced',
           };
-          lyricsCache.set(videoId, result);
+          lyricsCache.set(cacheKey, result);
           return result;
         }
       }
@@ -139,7 +152,7 @@ export async function fetchSyncedLyrics(
             isSynced: false,
             source: 'LRCLIB Plain',
           };
-          lyricsCache.set(videoId, result);
+          lyricsCache.set(cacheKey, result);
           return result;
         }
       }
@@ -148,6 +161,6 @@ export async function fetchSyncedLyrics(
     }
   }
 
-  lyricsCache.set(videoId, null);
+  lyricsCache.set(cacheKey, null);
   return null;
 }

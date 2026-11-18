@@ -9,23 +9,12 @@ export interface VideoItem {
   uploadedDate?: string;
 }
 
-export type PlaybackType = 'direct' | 'hls' | 'embed' | 'unplayable';
-export type ActiveSource = 'direct' | 'hls' | 'proxy' | 'embed';
+export type PlaybackType = 'embed' | 'direct' | 'hls' | 'unplayable';
 
-export interface VideoStreamItem {
-  url: string;
-  quality: string;
-  resolution: string;
-  mimeType: string;
-  fps?: number;
-  needsAudioSync?: boolean;
-}
-
-export interface AudioStreamItem {
-  url: string;
-  quality: string;
-  mimeType: string;
-  bitrate?: number;
+export interface SponsorSegment {
+  category: string;
+  start: number;
+  end: number;
 }
 
 export interface StreamData {
@@ -39,19 +28,20 @@ export interface StreamData {
   playbackType: PlaybackType;
   source: string;
   error?: string;
-  hlsUrl?: string | null;
   embedUrl?: string | null;
-  videoStreams: VideoStreamItem[];
-  audioStreams: AudioStreamItem[];
   relatedStreams?: VideoItem[];
-  sponsorSegments?: Array<{
-    category: string;
-    start: number;
-    end: number;
-  }>;
 }
 
-export type PlayerMode = 'video' | 'audio';
+export interface UserPlaylist {
+  id: string;
+  name: string;
+  icon: string;
+  items: VideoItem[];
+}
+
 export type UiScale = 'normal' | 'large' | 'xlarge';
 export type ViewMode = 'classic' | 'ytmusic';
 export type RepeatMode = 'off' | 'all' | 'one';
+export type NightMode = 'auto' | 'on' | 'off';
+export type RailSection = 'nowPlaying' | 'cockpit' | 'browse' | 'favorites' | 'history';
+export type QueueSource = 'explore' | 'mix' | 'favorites' | 'playlist' | 'history';

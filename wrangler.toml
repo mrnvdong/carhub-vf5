@@ -4,3 +4,7 @@ pages_build_output_dir = "./dist"
 
 [vars]
 ENVIRONMENT = "production"
+
+[[kv_namespaces]]
+binding = "CARHUB_KV"
+id = "599ef998d13140c2b85552e48c5b9b60"

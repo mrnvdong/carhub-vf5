@@ -31,7 +31,6 @@ function buildSearchCandidates(rawTitle: string, rawArtist: string): string[] {
     candidates.add(fullClean);
   }
 
-  // Split YouTube titles like "SƠN TÙNG M-TP | HÃY TRAO CHO ANH ft. Snoop Dogg | Official MV"
   const parts = rawTitle
     .split(/[|•·\-–—]/)
     .map((p) => stripTags(p))
@@ -49,18 +48,26 @@ function buildSearchCandidates(rawTitle: string, rawArtist: string): string[] {
 
 function parseLrc(lrcText: string): LyricLine[] {
   const lines: LyricLine[] = [];
-  const regex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)/;
+  const tagRegex = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
 
   for (const rawLine of lrcText.split('\n')) {
-    const match = rawLine.match(regex);
-    if (!match) continue;
-    const min = parseInt(match[1], 10);
-    const sec = parseInt(match[2], 10);
-    const msStr = (match[3] || '0').padEnd(3, '0').slice(0, 3);
-    const ms = parseInt(msStr, 10);
-    const time = min * 60 + sec + ms / 1000;
-    const text = match[4].trim();
-    if (text) {
+    const matches = Array.from(rawLine.matchAll(tagRegex));
+    if (matches.length === 0) continue;
+
+    const text = rawLine
+      .replace(tagRegex, '')
+      .replace(/<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!text) continue;
+
+    for (const match of matches) {
+      const min = parseInt(match[1], 10);
+      const sec = parseInt(match[2], 10);
+      const msStr = (match[3] || '0').padEnd(3, '0').slice(0, 3);
+      const ms = parseInt(msStr, 10);
+      const time = min * 60 + sec + ms / 1000;
       lines.push({ time, text });
     }
   }
@@ -73,7 +80,7 @@ async function queryLrcLib(title: string, artist: string) {
   for (const q of queries) {
     try {
       const res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
-        headers: { 'User-Agent': 'CarHub-VF5/1.0' },
+        headers: { 'User-Agent': 'CarHub-VF5/1.1' },
         signal: AbortSignal.timeout(3000),
       });
       if (!res.ok) continue;
@@ -168,7 +175,6 @@ async function queryYouTubeCaptions(videoId: string) {
     const tracks: any[] = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
     if (tracks.length === 0) return null;
 
-    // Priority: vi manual -> en manual -> vi asr -> any track
     const selectedTrack =
       tracks.find((t) => t.languageCode === 'vi' && t.kind !== 'asr') ||
       tracks.find((t) => t.languageCode?.startsWith('en') && t.kind !== 'asr') ||
@@ -228,24 +234,25 @@ export async function onRequestGet(context: any) {
   if (!id && !title) {
     return new Response(JSON.stringify({ lines: [], isSynced: false, source: 'none' }), {
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
         'Access-Control-Allow-Origin': '*',
       },
     });
   }
 
-  // Check Cloudflare Edge Cache
   const cache = (caches as any).default;
-  const cacheKey = new Request(`${url.origin}/api/lyrics?id=${encodeURIComponent(id)}&v=1`, request);
-  if (cache && id) {
+  const cacheKey = new Request(
+    `${url.origin}/api/lyrics?id=${encodeURIComponent(id)}&t=${encodeURIComponent(
+      title
+    )}&a=${encodeURIComponent(artist)}&v=2`
+  );
+  if (cache) {
     try {
       const cached = await cache.match(cacheKey);
       if (cached) return cached;
     } catch {}
   }
 
-  // Run LRCLIB and YouTube Captions in parallel; prefer LRCLIB if it has synced lyrics,
-  // otherwise use YouTube Captions (which covers Remixes, Nonstops, and Vietnamese MVs!)
   const [lrcResult, ytResult] = await Promise.all([
     title ? queryLrcLib(title, artist) : Promise.resolve(null),
     id ? queryYouTubeCaptions(id) : Promise.resolve(null),
@@ -263,13 +270,13 @@ export async function onRequestGet(context: any) {
   const payload = finalResult || { lines: [], isSynced: false, source: 'none' };
   const resp = new Response(JSON.stringify(payload), {
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': finalResult ? 'public, max-age=3600' : 'public, max-age=120',
       'Access-Control-Allow-Origin': '*',
     },
   });
 
-  if (cache && id && finalResult) {
+  if (cache && finalResult) {
     context.waitUntil(cache.put(cacheKey, resp.clone()));
   }
 

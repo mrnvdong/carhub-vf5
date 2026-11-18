@@ -1,26 +1,85 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { RefreshCw, Search, Mic, WifiOff } from 'lucide-react';
 import { VideoPlayer } from './components/VideoPlayer';
 import { CarSearchModal } from './components/CarSearchModal';
-import { VideoItem, StreamData, PlayerMode, UiScale, ViewMode, RepeatMode } from './types';
-import { searchVideos } from './services/api';
+import { PlaylistSyncModal } from './components/PlaylistSyncModal';
+import {
+  VideoItem,
+  StreamData,
+  UiScale,
+  ViewMode,
+  RepeatMode,
+  RailSection,
+  QueueSource,
+  UserPlaylist,
+  NightMode,
+} from './types';
+import { getCategoryQuery } from './constants/categories';
+import { searchVideos, fetchRadioMix } from './services/api';
+import { pullSyncData, pushSyncData, normalizeSyncCode } from './services/sync';
 import { useCarHardwareControls } from './hooks/useCarHardwareControls';
 
+const DEFAULT_PLAYLISTS: UserPlaylist[] = [
+  { id: 'pl-highway', name: 'Đi Cao Tốc', icon: '🚗', items: [] },
+  { id: 'pl-bolero', name: 'Bolero Chọn Lọc', icon: '📻', items: [] },
+  { id: 'pl-kids', name: 'Nhạc Cho Bé', icon: '👶', items: [] },
+];
+
+function buildEmbedStreamData(video: VideoItem): StreamData {
+  return {
+    id: video.id,
+    title: video.title,
+    uploader: video.uploaderName,
+    thumbnailUrl: video.thumbnail || `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
+    duration: video.duration || 0,
+    playbackType: 'embed',
+    source: 'youtube-embed',
+  };
+}
+
+function mergeUniqueTracks(incoming: VideoItem[], existing: VideoItem[]): VideoItem[] {
+  const seen = new Set<string>();
+  const out: VideoItem[] = [];
+  for (const v of [...incoming, ...existing]) {
+    if (!v?.id || seen.has(v.id)) continue;
+    seen.add(v.id);
+    out.push(v);
+  }
+  return out;
+}
+
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'explore' | 'history' | 'favorites'>('explore');
-  const [selectedCategory, setSelectedCategory] = useState<string>('remix');
+  const [railSection, setRailSection] = useState<RailSection>('nowPlaying');
+  const [queueSource, setQueueSource] = useState<QueueSource>('explore');
+
+  const [selectedCategory, setSelectedCategory] = useState<string>(() => {
+    try {
+      return localStorage.getItem('carhub_last_category') || 'remix';
+    } catch {
+      return 'remix';
+    }
+  });
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [playerMode, setPlayerMode] = useState<PlayerMode>('video');
 
   // Search Modal state
   const [isSearchModalOpen, setIsSearchModalOpen] = useState<boolean>(false);
   const [startVoiceOnOpen, setStartVoiceOnOpen] = useState<boolean>(false);
 
-  const handleOpenSearchModal = (startVoice = false) => {
+  // Sync & Playlist Modal state (Upgrade #2)
+  const [syncModalOpen, setSyncModalOpen] = useState<boolean>(false);
+  const [syncModalMode, setSyncModalMode] = useState<'sync' | 'addTrack'>('sync');
+
+  const handleOpenSearchModal = useCallback((startVoice = false) => {
     setStartVoiceOnOpen(startVoice);
     setIsSearchModalOpen(true);
-  };
+  }, []);
 
-  // UI scale preset: default to 'normal' or 'large' for VinFast VF5
+  const handleOpenSyncModal = useCallback((mode: 'sync' | 'addTrack') => {
+    setSyncModalMode(mode);
+    setSyncModalOpen(true);
+  }, []);
+
+  // UI Scale
   const [uiScale, setUiScale] = useState<UiScale>(() => {
     try {
       const saved = localStorage.getItem('carhub_ui_scale');
@@ -31,7 +90,7 @@ export const App: React.FC = () => {
     }
   });
 
-  // View Mode: 'ytmusic' (Chỉ phát âm thanh - Giao diện YouTube Music) hoặc 'classic' (Xem Video)
+  // View Mode
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     try {
       if (typeof window !== 'undefined') {
@@ -48,7 +107,7 @@ export const App: React.FC = () => {
     }
   });
 
-  const handleViewModeChange = (mode: ViewMode) => {
+  const handleViewModeChange = useCallback((mode: ViewMode) => {
     setViewMode(mode);
     try {
       localStorage.setItem('carhub_view_mode', mode);
@@ -58,9 +117,54 @@ export const App: React.FC = () => {
         window.history.replaceState({}, '', url.toString());
       }
     } catch {}
-  };
+  }, []);
 
-  // Playback modes: Shuffle and Repeat (off | all | one)
+  // Upgrade #1: SponsorBlock Auto-Skip ON by default
+  const [autoSkipEnabled, setAutoSkipEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_autoskip');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+
+  // Upgrade #4: Night Mode ('auto' dims between 18:00 and 05:30)
+  const [nightMode, setNightMode] = useState<NightMode>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_night_mode') as NightMode | null;
+      if (saved === 'auto' || saved === 'on' || saved === 'off') return saved;
+      return 'auto';
+    } catch {
+      return 'auto';
+    }
+  });
+
+  const [isAfterDusk, setIsAfterDusk] = useState<boolean>(() => {
+    const hr = new Date().getHours();
+    return hr >= 18 || hr < 6;
+  });
+
+  useEffect(() => {
+    const checkHour = () => {
+      const hr = new Date().getHours();
+      setIsAfterDusk(hr >= 18 || hr < 6);
+    };
+    const id = window.setInterval(checkHour, 60000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const isNightDimmed = nightMode === 'on' || (nightMode === 'auto' && isAfterDusk);
+
+  const handleCycleNightMode = useCallback(() => {
+    setNightMode((prev) => {
+      if (prev === 'auto') return 'on';
+      if (prev === 'on') return 'off';
+      return 'auto';
+    });
+  }, []);
+
+  // Playback modes: Shuffle & Repeat
   const [isShuffle, setIsShuffle] = useState<boolean>(() => {
     try {
       return localStorage.getItem('carhub_shuffle') === 'true';
@@ -79,17 +183,7 @@ export const App: React.FC = () => {
     }
   });
 
-  const [videos, setVideos] = useState<VideoItem[]>([]);
-  const [nextContinuation, setNextContinuation] = useState<string | null>(null);
-  const [isLoadingVideos, setIsLoadingVideos] = useState<boolean>(true);
-  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
-
-  const [currentVideo, setCurrentVideo] = useState<VideoItem | null>(null);
-  const [streamData, setStreamData] = useState<StreamData | null>(null);
-  const [isLoadingStream, setIsLoadingStream] = useState<boolean>(false);
-  const [, setStreamErrorMessage] = useState<string | null>(null);
-
-  // Local storage for history, favorites & recent searches
+  // Local storage: history, favorites, custom playlists & sync code
   const [history, setHistory] = useState<VideoItem[]>(() => {
     try {
       const saved = localStorage.getItem('carhub_history');
@@ -108,6 +202,62 @@ export const App: React.FC = () => {
     }
   });
 
+  const [playlists, setPlaylists] = useState<UserPlaylist[]>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_playlists');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return DEFAULT_PLAYLISTS;
+    } catch {
+      return DEFAULT_PLAYLISTS;
+    }
+  });
+
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>('favorites');
+  const [activeQueuePlaylistId, setActiveQueuePlaylistId] = useState<string>('');
+
+  const [syncCode, setSyncCode] = useState<string>(() => {
+    try {
+      return localStorage.getItem('carhub_sync_code') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const [videos, setVideos] = useState<VideoItem[]>(() => {
+    try {
+      const cached = localStorage.getItem('carhub_cached_videos');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Upgrade #5: Auto-Mix Queue state
+  const [mixVideos, setMixVideos] = useState<VideoItem[]>([]);
+  const [isLoadingMix, setIsLoadingMix] = useState<boolean>(false);
+
+  const [currentVideo, setCurrentVideo] = useState<VideoItem | null>(() => {
+    try {
+      const savedLast = localStorage.getItem('carhub_last_video');
+      if (savedLast) {
+        const parsed = JSON.parse(savedLast);
+        if (parsed && parsed.id) return parsed;
+      }
+    } catch {}
+    return null;
+  });
+
+  const [streamData, setStreamData] = useState<StreamData | null>(() =>
+    currentVideo ? buildEmbedStreamData(currentVideo) : null
+  );
+
+  const [nextContinuation, setNextContinuation] = useState<string | null>(null);
+  const [isLoadingVideos, setIsLoadingVideos] = useState<boolean>(true);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('carhub_recent_searches');
@@ -119,6 +269,64 @@ export const App: React.FC = () => {
     }
   });
 
+  const currentVideoRef = useRef<VideoItem | null>(currentVideo);
+  useEffect(() => {
+    currentVideoRef.current = currentVideo;
+  }, [currentVideo]);
+
+  // Responsive root font-size scaling for APTV & asCar
+  useEffect(() => {
+    const applyResponsiveRootScale = () => {
+      const h = window.innerHeight || 480;
+      const w = window.innerWidth || 800;
+
+      let basePx = 15.5;
+      if (h <= 400 || w <= 660) {
+        basePx = uiScale === 'normal' ? 13.5 : uiScale === 'large' ? 14.5 : 15.5;
+      } else if (h <= 520) {
+        basePx = uiScale === 'normal' ? 14.5 : uiScale === 'large' ? 16 : 17.25;
+      } else if (w >= 960) {
+        basePx = uiScale === 'normal' ? 16 : uiScale === 'large' ? 17.75 : 19.5;
+      } else {
+        basePx = uiScale === 'normal' ? 15.5 : uiScale === 'large' ? 16.5 : 18;
+      }
+
+      document.documentElement.style.fontSize = `${basePx}px`;
+    };
+
+    applyResponsiveRootScale();
+    window.addEventListener('resize', applyResponsiveRootScale);
+    window.visualViewport?.addEventListener('resize', applyResponsiveRootScale);
+    return () => {
+      window.removeEventListener('resize', applyResponsiveRootScale);
+      window.visualViewport?.removeEventListener('resize', applyResponsiveRootScale);
+    };
+  }, [uiScale]);
+
+  // Screen Wake Lock
+  useEffect(() => {
+    let wakeLock: any = null;
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+          wakeLock = await (navigator as any).wakeLock.request('screen');
+        }
+      } catch {}
+    };
+    requestWakeLock();
+    const onVis = () => {
+      if (document.visibilityState === 'visible') requestWakeLock();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      try {
+        wakeLock?.release?.();
+      } catch {}
+    };
+  }, []);
+
+  // Persist user settings & playlists
   useEffect(() => {
     try {
       localStorage.setItem('carhub_ui_scale', uiScale);
@@ -130,6 +338,18 @@ export const App: React.FC = () => {
       localStorage.setItem('carhub_view_mode', viewMode);
     } catch {}
   }, [viewMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_autoskip', String(autoSkipEnabled));
+    } catch {}
+  }, [autoSkipEnabled]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_night_mode', nightMode);
+    } catch {}
+  }, [nightMode]);
 
   useEffect(() => {
     try {
@@ -157,64 +377,225 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     try {
+      localStorage.setItem('carhub_playlists', JSON.stringify(playlists));
+    } catch {}
+  }, [playlists]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_sync_code', syncCode);
+    } catch {}
+  }, [syncCode]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem('carhub_recent_searches', JSON.stringify(recentSearches));
     } catch {}
   }, [recentSearches]);
 
-  // Initial load
   useEffect(() => {
-    loadCategory('remix', 'nhạc trẻ remix bass cực căng lái xe');
+    if (videos.length > 0) {
+      try {
+        localStorage.setItem('carhub_cached_videos', JSON.stringify(videos.slice(0, 40)));
+      } catch {}
+    }
+  }, [videos]);
+
+  // Upgrade #2: Tự động tải Playlist từ mây nếu mở link có ?sync=XXXX hoặc đã gắn Mã Xe
+  const applyPulledSync = useCallback(
+    (pulledFavs: VideoItem[], pulledPlaylists: UserPlaylist[], code: string) => {
+      setSyncCode(code);
+      setFavorites((prev) => mergeUniqueTracks(pulledFavs, prev));
+      setPlaylists((prev) => {
+        const byName = new Map<string, UserPlaylist>();
+        for (const p of prev) {
+          byName.set(p.name.toLowerCase(), p);
+        }
+        for (const inc of pulledPlaylists) {
+          const key = inc.name.toLowerCase();
+          const existing = byName.get(key);
+          if (existing) {
+            byName.set(key, {
+              ...existing,
+              icon: inc.icon || existing.icon,
+              items: mergeUniqueTracks(inc.items || [], existing.items),
+            });
+          } else {
+            byName.set(key, inc);
+          }
+        }
+        return Array.from(byName.values());
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const urlSync = normalizeSyncCode(params.get('sync') || '');
+    const targetCode = urlSync || syncCode;
+    if (targetCode.length >= 4) {
+      pullSyncData(targetCode)
+        .then((res) => {
+          if (res.success && res.data) {
+            applyPulledSync(res.data.favorites || [], res.data.playlists || [], targetCode);
+          }
+        })
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadCategory = async (catId: string, query: string) => {
-    setSelectedCategory(catId);
-    setActiveTab('explore');
-    setIsLoadingVideos(true);
-    setNextContinuation(null);
+  // Tự động đẩy ngầm lên mây khi người dùng sửa Yêu thích / Playlist (nếu đã liên kết Mã Xe)
+  const isInitialMountRef = useRef(true);
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+    if (syncCode.length < 4) return;
+    const timer = window.setTimeout(() => {
+      pushSyncData(syncCode, favorites, playlists).catch(() => {});
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [favorites, playlists, syncCode]);
+
+  const playVideo = useCallback(
+    (video: VideoItem, sourceOverride?: QueueSource, playlistId?: string) => {
+      if (sourceOverride) {
+        setQueueSource(sourceOverride);
+      }
+      if (playlistId) {
+        setActiveQueuePlaylistId(playlistId);
+      }
+      setCurrentVideo(video);
+      setStreamData(buildEmbedStreamData(video));
+
+      try {
+        localStorage.setItem('carhub_last_video', JSON.stringify(video));
+      } catch {}
+
+      setHistory((prev) => {
+        const filtered = prev.filter((item) => item.id !== video.id);
+        return [video, ...filtered].slice(0, 50);
+      });
+    },
+    []
+  );
+
+  const loadCategory = useCallback(
+    async (catId: string, query: string, isInitialStartup = false) => {
+      setSelectedCategory(catId);
+      setSearchQuery('');
+      setIsLoadingVideos(true);
+      setNextContinuation(null);
+
+      try {
+        localStorage.setItem('carhub_last_category', catId);
+      } catch {}
+
+      if (!isInitialStartup) {
+        setQueueSource('explore');
+      }
+
+      try {
+        const result = await searchVideos(query);
+        if (result.items.length > 0) {
+          setVideos(result.items);
+          setNextContinuation(result.nextContinuation);
+          if (!currentVideoRef.current || !isInitialStartup) {
+            playVideo(result.items[0], 'explore');
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load category', err);
+      } finally {
+        setIsLoadingVideos(false);
+      }
+    },
+    [playVideo]
+  );
+
+  useEffect(() => {
+    const startCat = selectedCategory || 'remix';
+    loadCategory(startCat, getCategoryQuery(startCat), true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onOnline = () => {
+      if (videos.length === 0) {
+        const cat = selectedCategory || 'remix';
+        loadCategory(cat, getCategoryQuery(cat), true);
+      }
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [videos.length, selectedCategory, loadCategory]);
+
+  const handleSearch = useCallback(
+    async (query: string) => {
+      const cleanQuery = query.trim();
+      if (!cleanQuery) return;
+
+      setSearchQuery(cleanQuery);
+      setSelectedCategory('');
+      setQueueSource('explore');
+      setIsLoadingVideos(true);
+      setNextContinuation(null);
+
+      setRailSection((prev) =>
+        prev === 'favorites' || prev === 'history' ? 'nowPlaying' : prev
+      );
+
+      setRecentSearches((prev) => {
+        const filtered = prev.filter((item) => item.toLowerCase() !== cleanQuery.toLowerCase());
+        return [cleanQuery, ...filtered].slice(0, 10);
+      });
+
+      try {
+        const result = await searchVideos(cleanQuery);
+        setVideos(result.items);
+        setNextContinuation(result.nextContinuation);
+        if (result.items.length > 0) {
+          playVideo(result.items[0], 'explore');
+        } else {
+          setRailSection('browse');
+        }
+      } catch (err) {
+        console.error('Search failed', err);
+      } finally {
+        setIsLoadingVideos(false);
+      }
+    },
+    [playVideo]
+  );
+
+  // Upgrade #5: Bật Đài phát thông minh (Auto-Mix) theo bài đang phát
+  const handleStartAutoMix = useCallback(async () => {
+    if (!currentVideo || isLoadingMix) return;
+    setIsLoadingMix(true);
     try {
-      const result = await searchVideos(query);
-      setVideos(result.items);
-      setNextContinuation(result.nextContinuation);
-      if (!currentVideo && result.items.length > 0) {
-        playVideo(result.items[0]);
+      const related = await fetchRadioMix(
+        currentVideo.id,
+        currentVideo.title,
+        currentVideo.uploaderName
+      );
+      if (related.length > 0) {
+        const newMix = [currentVideo, ...related.filter((r) => r.id !== currentVideo.id)];
+        setMixVideos(newMix);
+        setQueueSource('mix');
       }
     } catch (err) {
-      console.error('Failed to load category', err);
+      console.error('Auto-mix failed', err);
     } finally {
-      setIsLoadingVideos(false);
+      setIsLoadingMix(false);
     }
-  };
+  }, [currentVideo, isLoadingMix]);
 
-  const handleSearch = async (query: string) => {
-    if (!query.trim()) return;
-    const cleanQuery = query.trim();
-    setSearchQuery(cleanQuery);
-    setActiveTab('explore');
-    setSelectedCategory('');
-    setIsLoadingVideos(true);
-    setNextContinuation(null);
-
-    setRecentSearches((prev) => {
-      const filtered = prev.filter((item) => item.toLowerCase() !== cleanQuery.toLowerCase());
-      return [cleanQuery, ...filtered].slice(0, 10);
-    });
-
-    try {
-      const result = await searchVideos(cleanQuery);
-      setVideos(result.items);
-      setNextContinuation(result.nextContinuation);
-      if (result.items.length > 0) {
-        playVideo(result.items[0]);
-      }
-    } catch (err) {
-      console.error('Search failed', err);
-    } finally {
-      setIsLoadingVideos(false);
-    }
-  };
-
-  const handleLoadMore = async () => {
-    if (!nextContinuation || isLoadingMore) return;
+  const loadMoreExplore = useCallback(async (): Promise<VideoItem[]> => {
+    if (!nextContinuation || isLoadingMore) return [];
     setIsLoadingMore(true);
     const activeQuery = selectedCategory
       ? getCategoryQuery(selectedCategory)
@@ -222,66 +603,82 @@ export const App: React.FC = () => {
 
     try {
       const result = await searchVideos(activeQuery, nextContinuation);
+      let appended: VideoItem[] = [];
       setVideos((prev) => {
         const existingIds = new Set(prev.map((v) => v.id));
-        const newUnique = result.items.filter((item) => !existingIds.has(item.id));
-        return [...prev, ...newUnique];
+        appended = result.items.filter((item) => !existingIds.has(item.id));
+        return [...prev, ...appended];
       });
       setNextContinuation(result.nextContinuation);
+      return appended;
     } catch (err) {
       console.error('Load more failed', err);
+      return [];
     } finally {
       setIsLoadingMore(false);
     }
-  };
+  }, [nextContinuation, isLoadingMore, selectedCategory, searchQuery]);
 
-  const getCategoryQuery = (catId: string) => {
-    const map: Record<string, string> = {
-      remix: 'nhạc trẻ remix bass cực căng lái xe',
-      driving: 'nhạc lái xe đường dài hay nhất',
-      vinahouse: 'vinahouse nonstop căng đét',
-      chill: 'nhạc lofi chill tiếng mưa lái xe',
-      bolero: 'bolero trữ tình hay nhất trên ô tô',
-      podcast: 'hieu tv podcast hay nhất',
-      kids: 'ca nhạc thiếu nhi vui nhộn cho bé',
-    };
-    return map[catId] || 'nhạc hay';
-  };
+  // Xác định danh sách phát đang hoạt động
+  const activePlaylistObj = playlists.find((p) => p.id === activeQueuePlaylistId);
+  const activePlaybackList =
+    queueSource === 'mix' && mixVideos.length > 0
+      ? mixVideos
+      : queueSource === 'playlist' && activePlaylistObj && activePlaylistObj.items.length > 0
+      ? activePlaylistObj.items
+      : queueSource === 'favorites' && favorites.length > 0
+      ? favorites
+      : queueSource === 'history' && history.length > 0
+      ? history
+      : videos;
 
-  // Phát bài hát tức thì 0ms qua YouTube Embed (bỏ hoàn toàn 4G Proxy / Direct để không lag)
-  const playVideo = useCallback((video: VideoItem, _noCache = false) => {
-    setStreamErrorMessage(null);
-    setCurrentVideo(video);
-    setIsLoadingStream(false);
+  const currentIndex = currentVideo
+    ? activePlaybackList.findIndex((v) => v.id === currentVideo.id)
+    : -1;
 
-    setHistory((prev) => {
-      const filtered = prev.filter((item) => item.id !== video.id);
-      return [video, ...filtered].slice(0, 50);
-    });
+  // Tự động nối thêm bài cho cả Explore lẫn Auto-Mix khi gần hết danh sách!
+  useEffect(() => {
+    if (
+      queueSource === 'explore' &&
+      currentIndex >= 0 &&
+      videos.length > 0 &&
+      currentIndex >= videos.length - 3 &&
+      nextContinuation &&
+      !isLoadingMore
+    ) {
+      loadMoreExplore();
+    } else if (
+      queueSource === 'mix' &&
+      currentVideo &&
+      mixVideos.length > 0 &&
+      currentIndex >= mixVideos.length - 2 &&
+      !isLoadingMix
+    ) {
+      // Nối tiếp vô tận Đài phát Auto-Mix dựa trên bài cuối cùng!
+      setIsLoadingMix(true);
+      fetchRadioMix(currentVideo.id, currentVideo.title, currentVideo.uploaderName)
+        .then((more) => {
+          if (more.length > 0) {
+            setMixVideos((prev) => mergeUniqueTracks(prev, more).slice(0, 120));
+          }
+        })
+        .finally(() => setIsLoadingMix(false));
+    }
+  }, [
+    queueSource,
+    currentIndex,
+    videos.length,
+    nextContinuation,
+    isLoadingMore,
+    loadMoreExplore,
+    currentVideo,
+    mixVideos.length,
+    isLoadingMix,
+  ]);
 
-    setStreamData({
-      id: video.id,
-      title: video.title,
-      uploader: video.uploaderName,
-      thumbnailUrl: video.thumbnail,
-      duration: video.duration || 0,
-      playbackType: 'embed',
-      source: 'youtube-embed',
-      embedUrl: `https://www.youtube-nocookie.com/embed/${video.id}?enablejsapi=1&autoplay=1&playsinline=1&modestbranding=1&rel=0`,
-      videoStreams: [],
-      audioStreams: [],
-    });
-  }, []);
-
-  const getCurrentIndex = () => {
-    if (!currentVideo) return -1;
-    const list = activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
-    return list.findIndex((v) => v.id === currentVideo.id);
-  };
-
-  const handleNext = () => {
-    const list = activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
-    const currentIndex = getCurrentIndex();
+  const handleNext = useCallback(async () => {
+    const list = activePlaybackList;
+    if (list.length === 0) return;
 
     if (isShuffle && list.length > 1) {
       let randIdx = Math.floor(Math.random() * list.length);
@@ -294,48 +691,67 @@ export const App: React.FC = () => {
 
     if (currentIndex >= 0 && currentIndex < list.length - 1) {
       playVideo(list[currentIndex + 1]);
-    } else if (repeatMode === 'all' && list.length > 0) {
-      playVideo(list[0]);
-    } else if (streamData?.relatedStreams && streamData.relatedStreams.length > 0) {
-      playVideo(streamData.relatedStreams[0]);
-    } else if (nextContinuation) {
-      handleLoadMore();
+      return;
     }
-  };
 
-  const handlePrev = () => {
-    const list = activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
-    const currentIndex = getCurrentIndex();
+    if (queueSource === 'explore' && nextContinuation) {
+      const more = await loadMoreExplore();
+      if (more.length > 0) {
+        playVideo(more[0], 'explore');
+        return;
+      }
+    }
+
+    if (repeatMode === 'all' || currentIndex === -1) {
+      playVideo(list[0]);
+    }
+  }, [
+    activePlaybackList,
+    isShuffle,
+    currentIndex,
+    playVideo,
+    queueSource,
+    nextContinuation,
+    loadMoreExplore,
+    repeatMode,
+  ]);
+
+  const handlePrev = useCallback(() => {
+    const list = activePlaybackList;
+    if (list.length === 0) return;
+
     if (currentIndex > 0) {
       playVideo(list[currentIndex - 1]);
-    } else if (list.length > 0) {
+    } else if (repeatMode === 'all' && list.length > 1) {
+      playVideo(list[list.length - 1]);
+    } else {
       playVideo(list[0]);
     }
-  };
+  }, [activePlaybackList, currentIndex, repeatMode, playVideo]);
 
-  const handleToggleRepeat = () => {
+  const handleToggleRepeat = useCallback(() => {
     setRepeatMode((prev) => {
       if (prev === 'off') return 'all';
       if (prev === 'all') return 'one';
       return 'off';
     });
-  };
+  }, []);
 
-  // Fallback phím vô lăng khi chưa chọn bài nào
   useCarHardwareControls({
+    enabled: !currentVideo,
     streamData: null,
     isPlaying: false,
     currentTime: 0,
     duration: 0,
     onPlay: () => {
-      if (!currentVideo && videos.length > 0) playVideo(videos[0]);
+      if (!currentVideo && videos.length > 0) playVideo(videos[0], 'explore');
     },
     onPause: () => {},
     onTogglePlay: () => {
-      if (!currentVideo && videos.length > 0) playVideo(videos[0]);
+      if (!currentVideo && videos.length > 0) playVideo(videos[0], 'explore');
     },
     onNext: () => {
-      if (!currentVideo && videos.length > 0) playVideo(videos[0]);
+      if (!currentVideo && videos.length > 0) playVideo(videos[0], 'explore');
     },
     onPrev: () => {},
     onSeekRelative: () => {},
@@ -343,112 +759,183 @@ export const App: React.FC = () => {
 
   const isFavorite = currentVideo ? favorites.some((f) => f.id === currentVideo.id) : false;
 
-  const toggleFavorite = () => {
-    if (!currentVideo) return;
-    if (isFavorite) {
-      setFavorites((prev) => prev.filter((f) => f.id !== currentVideo.id));
-    } else {
-      setFavorites((prev) => [currentVideo, ...prev]);
+  const toggleFavoriteTrack = useCallback((track: VideoItem) => {
+    setFavorites((prev) => {
+      const exists = prev.some((f) => f.id === track.id);
+      return exists ? prev.filter((f) => f.id !== track.id) : [track, ...prev];
+    });
+  }, []);
+
+  const toggleFavoriteCurrent = useCallback(() => {
+    if (currentVideo) toggleFavoriteTrack(currentVideo);
+  }, [currentVideo, toggleFavoriteTrack]);
+
+  // Quản lý Playlist riêng (Upgrade #2)
+  const handleToggleTrackInPlaylist = useCallback((playlistId: string, track: VideoItem) => {
+    setPlaylists((prev) =>
+      prev.map((pl) => {
+        if (pl.id !== playlistId) return pl;
+        const exists = pl.items.some((it) => it.id === track.id);
+        return {
+          ...pl,
+          items: exists ? pl.items.filter((it) => it.id !== track.id) : [track, ...pl.items],
+        };
+      })
+    );
+  }, []);
+
+  const handleCreatePlaylist = useCallback((name: string, icon: string): string => {
+    const newId = `pl-${Date.now()}`;
+    setPlaylists((prev) => [...prev, { id: newId, name, icon, items: [] }]);
+    return newId;
+  }, []);
+
+  const handleDeletePlaylist = useCallback(
+    (playlistId: string) => {
+      setPlaylists((prev) => prev.filter((pl) => pl.id !== playlistId));
+      if (selectedPlaylistId === playlistId) setSelectedPlaylistId('favorites');
+      if (activeQueuePlaylistId === playlistId && queueSource === 'playlist') {
+        setQueueSource('explore');
+      }
+    },
+    [selectedPlaylistId, activeQueuePlaylistId, queueSource]
+  );
+
+  const handleClearHistory = useCallback(() => {
+    setHistory([]);
+    if (queueSource === 'history') {
+      setQueueSource('explore');
     }
-  };
+  }, [queueSource]);
 
-  const handleClearRecentSearches = () => {
-    setRecentSearches([]);
-  };
-
-  const handleRemoveRecentSearch = (itemToRemove: string) => {
-    setRecentSearches((prev) => prev.filter((item) => item !== itemToRemove));
-  };
-
-  const currentIndex = getCurrentIndex();
-  const currentList =
-    activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
   const hasNext =
-    currentIndex < currentList.length - 1 ||
+    activePlaybackList.length > 1 ||
     repeatMode === 'all' ||
-    (streamData?.relatedStreams?.length ?? 0) > 0 ||
-    Boolean(nextContinuation);
-  const hasPrev = currentIndex > 0 || currentList.length > 0;
+    (queueSource === 'explore' && Boolean(nextContinuation));
+  const hasPrev = activePlaybackList.length > 0;
 
-  const zoomFactor = uiScale === 'normal' ? 1.0 : uiScale === 'large' ? 1.18 : 1.32;
+  const selectedBrowsePlaylist = playlists.find((p) => p.id === selectedPlaylistId);
+  const browseVideos =
+    railSection === 'favorites'
+      ? selectedPlaylistId === 'favorites'
+        ? favorites
+        : selectedBrowsePlaylist?.items || []
+      : railSection === 'history'
+      ? history
+      : videos;
 
-  const activeSuggestedList =
-    activeTab === 'favorites' ? favorites : activeTab === 'history' ? history : videos;
-
-  const activeColumnTitle =
-    activeTab === 'favorites'
-      ? 'Danh sách yêu thích'
-      : activeTab === 'history'
-      ? 'Lịch sử vừa nghe'
-      : selectedCategory
-      ? 'Danh sách tiếp theo'
-      : 'Kết quả tìm kiếm';
+  const totalSavedCount =
+    favorites.length + playlists.reduce((sum, p) => sum + p.items.length, 0);
 
   return (
-    <div
-      style={{ zoom: zoomFactor, '--ui-zoom': zoomFactor } as React.CSSProperties}
-      className="min-h-screen bg-[#050507] text-slate-100 flex flex-col pb-2 transition-colors duration-200"
-    >
-      {/* Main Container: Unified Apple iPhone Duo Liquid Glass Workspace for both Music & Video */}
-      <main className="flex-1 max-w-[1600px] mx-auto w-full px-2 sm:px-3 pt-2">
+    <div className="car-app-shell w-full bg-[#050507] text-slate-100 flex flex-col overflow-hidden">
+      <main className="flex-1 min-h-0 w-full h-full">
         {currentVideo ? (
-          <div className="w-full">
-            <VideoPlayer
-              streamData={
-                streamData || {
-                  id: currentVideo.id,
-                  title: currentVideo.title,
-                  uploader: currentVideo.uploaderName,
-                  thumbnailUrl: currentVideo.thumbnail,
-                  duration: currentVideo.duration || 0,
-                  playbackType: 'embed',
-                  source: 'youtube-embed',
-                  videoStreams: [],
-                  audioStreams: [],
-                }
-              }
-              isLoading={isLoadingStream}
-              playerMode={playerMode}
-              onPlayerModeChange={setPlayerMode}
-              onNext={handleNext}
-              onPrev={handlePrev}
-              onRetry={() => playVideo(currentVideo, true)}
-              hasNext={hasNext}
-              hasPrev={hasPrev}
-              isFavorite={isFavorite}
-              onToggleFavorite={toggleFavorite}
-              viewMode={viewMode}
-              onViewModeChange={handleViewModeChange}
-              isShuffle={isShuffle}
-              onToggleShuffle={() => setIsShuffle((s) => !s)}
-              repeatMode={repeatMode}
-              onToggleRepeat={handleToggleRepeat}
-              queueVideos={activeSuggestedList}
-              currentVideoId={currentVideo.id}
-              onSelectVideo={(v) => playVideo(v)}
-              isLoadingQueue={isLoadingVideos}
-              hasMoreQueue={Boolean(nextContinuation)}
-              isLoadingMoreQueue={isLoadingMore}
-              onLoadMoreQueue={handleLoadMore}
-              selectedCategory={selectedCategory}
-              onSelectCategory={loadCategory}
-              activeTab={activeTab}
-              onChangeTab={setActiveTab}
-              favoritesCount={favorites.length}
-              historyCount={history.length}
-              onOpenSearchModal={handleOpenSearchModal}
-              uiScale={uiScale}
-              onChangeUiScale={setUiScale}
-            />
+          <VideoPlayer
+            streamData={streamData || buildEmbedStreamData(currentVideo)}
+            isLoading={false}
+            railSection={railSection}
+            onChangeRailSection={setRailSection}
+            onNext={handleNext}
+            onPrev={handlePrev}
+            hasNext={hasNext}
+            hasPrev={hasPrev}
+            isFavorite={isFavorite}
+            onToggleFavorite={toggleFavoriteCurrent}
+            viewMode={viewMode}
+            onViewModeChange={handleViewModeChange}
+            isShuffle={isShuffle}
+            onToggleShuffle={() => setIsShuffle((s) => !s)}
+            repeatMode={repeatMode}
+            onToggleRepeat={handleToggleRepeat}
+            playbackQueue={activePlaybackList}
+            browseVideos={browseVideos}
+            queueSource={queueSource}
+            currentVideoId={currentVideo.id}
+            onSelectQueueVideo={(v) => playVideo(v)}
+            onSelectBrowseVideo={(v, source, plId) => {
+              playVideo(v, source, plId);
+              setRailSection('nowPlaying');
+            }}
+            isLoadingBrowse={railSection === 'browse' && isLoadingVideos}
+            hasMoreExplore={Boolean(nextContinuation)}
+            isLoadingMoreExplore={isLoadingMore}
+            onLoadMoreExplore={loadMoreExplore}
+            selectedCategory={selectedCategory}
+            onSelectCategory={(catId, q) => loadCategory(catId, q, false)}
+            searchQuery={searchQuery}
+            favoritesCount={totalSavedCount}
+            historyCount={history.length}
+            onClearHistory={handleClearHistory}
+            onOpenSearchModal={handleOpenSearchModal}
+            uiScale={uiScale}
+            onChangeUiScale={setUiScale}
+            autoSkipEnabled={autoSkipEnabled}
+            onToggleAutoSkip={() => setAutoSkipEnabled((v) => !v)}
+            playlists={playlists}
+            selectedPlaylistId={selectedPlaylistId}
+            onSelectPlaylistId={setSelectedPlaylistId}
+            syncCode={syncCode}
+            onOpenSyncModal={handleOpenSyncModal}
+            nightMode={nightMode}
+            isNightDimmed={isNightDimmed}
+            onCycleNightMode={handleCycleNightMode}
+            isMixActive={queueSource === 'mix'}
+            isLoadingMix={isLoadingMix}
+            onStartAutoMix={handleStartAutoMix}
+          />
+        ) : isLoadingVideos ? (
+          <div className="w-full h-full bg-[#050507] flex flex-col items-center justify-center gap-3 text-center p-6">
+            <div className="w-11 h-11 border-4 border-rose-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-base font-bold text-white/85">
+              {viewMode === 'classic'
+                ? 'Đang chuẩn bị trình phát Video cho VF5...'
+                : 'Đang tải danh sách nhạc cho VF5...'}
+            </p>
           </div>
         ) : (
-          <div className="h-[calc((100dvh-16px)/var(--ui-zoom,1))] rounded-3xl bg-[#07070a] border border-white/10 flex flex-col items-center justify-center gap-4 text-center p-6">
-            <div className="w-12 h-12 border-4 border-rose-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-base font-bold text-white/80">
-              {viewMode === 'classic'
-                ? 'Đang chuẩn bị trình phát Video...'
-                : 'Đang tải danh sách nhạc...'}
-            </p>
+          <div className="w-full h-full bg-[#050507] flex flex-col items-center justify-center gap-4 text-center p-6">
+            <WifiOff className="w-12 h-12 text-rose-400" />
+            <div className="max-w-md">
+              <h2 className="text-lg font-extrabold text-white">
+                Chưa tải được danh sách nhạc (Sóng 4G yếu)
+              </h2>
+              <p className="text-xs sm:text-sm text-white/60 mt-1">
+                Kiểm tra kết nối mạng trên iPhone hoặc bấm Thử lại khi xe đã ra khỏi tầng hầm.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  loadCategory(
+                    selectedCategory || 'remix',
+                    getCategoryQuery(selectedCategory || 'remix'),
+                    false
+                  )
+                }
+                className="min-h-[46px] px-5 rounded-full bg-white text-black font-extrabold text-sm flex items-center gap-2 shadow-lg active:scale-95 transition"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Thử lại ngay</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenSearchModal(false)}
+                className="min-h-[46px] px-5 rounded-full bg-white/12 hover:bg-white/20 border border-white/20 text-white font-extrabold text-sm flex items-center gap-2 active:scale-95 transition"
+              >
+                <Search className="w-4 h-4" />
+                <span>Tìm kiếm</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenSearchModal(true)}
+                className="min-h-[46px] px-4 rounded-full bg-rose-500/25 border border-rose-400/45 text-rose-200 font-extrabold text-sm flex items-center gap-2 active:scale-95 transition"
+              >
+                <Mic className="w-4 h-4" />
+                <span>Giọng nói</span>
+              </button>
+            </div>
           </div>
         )}
       </main>
@@ -462,11 +949,30 @@ export const App: React.FC = () => {
         onSearch={handleSearch}
         initialQuery={searchQuery}
         recentSearches={recentSearches}
-        onClearRecentSearches={handleClearRecentSearches}
-        onRemoveRecentSearch={handleRemoveRecentSearch}
-        variant="ytmusic"
+        onClearRecentSearches={() => setRecentSearches([])}
+        onRemoveRecentSearch={(itemToRemove) =>
+          setRecentSearches((prev) => prev.filter((item) => item !== itemToRemove))
+        }
+        variant={viewMode}
         startVoice={startVoiceOnOpen}
         artworkBackdrop={streamData?.thumbnailUrl || currentVideo?.thumbnail}
+      />
+
+      <PlaylistSyncModal
+        isOpen={syncModalOpen}
+        mode={syncModalMode}
+        onClose={() => setSyncModalOpen(false)}
+        onSwitchMode={setSyncModalMode}
+        currentTrack={currentVideo}
+        favorites={favorites}
+        onToggleFavoriteTrack={toggleFavoriteTrack}
+        playlists={playlists}
+        onToggleTrackInPlaylist={handleToggleTrackInPlaylist}
+        onCreatePlaylist={handleCreatePlaylist}
+        onDeletePlaylist={handleDeletePlaylist}
+        syncCode={syncCode}
+        onSaveSyncCode={setSyncCode}
+        onApplyPulledData={applyPulledSync}
       />
     </div>
   );

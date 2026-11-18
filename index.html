@@ -3,37 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/car-icon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#0a0d14" />
-    <title>CarHub - VinFast VF5 Auto Player</title>
-    <!-- Prevent text size adjustment on orientation change in WebKit / APTV -->
+    <meta name="theme-color" content="#050507" />
+    <title>CarHub VF5 - Apple CarPlay (APTV &amp; asCar)</title>
     <style>
-      html, body {
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
         -webkit-text-size-adjust: 100%;
         touch-action: manipulation;
         overscroll-behavior: none;
         user-select: none;
         -webkit-user-select: none;
-        background-color: #0a0d14;
+        background-color: #050507;
         color: #f8fafc;
       }
-      /* Custom scrollbar for touch in car */
-      ::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
-      }
-      ::-webkit-scrollbar-track {
-        background: #0a0d14;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #1f293d;
-        border-radius: 9999px;
+      #root {
+        height: 100%;
       }
     </style>
   </head>
-  <body class="bg-car-bg text-slate-100 min-h-screen overflow-x-hidden antialiased">
+  <body class="bg-[#050507] text-slate-100 antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

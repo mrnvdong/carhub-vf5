@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Search,
   Mic,
@@ -32,10 +32,10 @@ const CAR_TRENDING_QUERIES = [
   { icon: '🚗', text: 'Nhạc lái xe đường dài hay nhất' },
   { icon: '📻', text: 'Bolero trữ tình hải ngoại' },
   { icon: '☕', text: 'Lofi chill tiếng mưa lái xe' },
+  { icon: '🎸', text: 'Acoustic nhạc Trịnh thư giãn' },
   { icon: '🎙️', text: 'Hieu TV podcast mới nhất' },
   { icon: '👶', text: 'Ca nhạc thiếu nhi vui nhộn cho bé' },
   { icon: '🎤', text: 'Nhạc karaoke hát trên ô tô' },
-  { icon: '🎸', text: 'Acoustic nhạc Trịnh thư giãn' },
 ];
 
 const POPULAR_ARTISTS = [
@@ -43,9 +43,11 @@ const POPULAR_ARTISTS = [
   'Đan Nguyên',
   'Quang Lập',
   'Như Quỳnh',
+  'Hà Anh Tuấn',
   'Tuấn Hưng',
   'Mỹ Tâm',
   'Đen Vâu',
+  'Bằng Kiều',
   'Vũ.',
 ];
 
@@ -57,161 +59,234 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
   recentSearches,
   onClearRecentSearches,
   onRemoveRecentSearch,
-  variant = 'ytmusic',
-  startVoice = false,
   artworkBackdrop,
+  startVoice = false,
 }) => {
   const [query, setQuery] = useState(initialQuery);
   const [isListening, setIsListening] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState('');
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [speechSupported, setSpeechSupported] = useState(false);
-  const recognitionRef = useRef<any>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
 
-  const isAppleGlass = variant === 'ytmusic';
+  const recognitionRef = useRef<any>(null);
+  const voiceTimerRef = useRef<number | null>(null);
+  const submittedRef = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const onSearchRef = useRef(onSearch);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onSearchRef.current = onSearch;
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const SpeechRecognition =
         (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        setSpeechSupported(true);
-      }
+      setSpeechSupported(Boolean(SpeechRecognition));
     }
   }, []);
 
+  const executeSearch = useCallback((searchVal: string) => {
+    const clean = searchVal.trim();
+    if (!clean || submittedRef.current) return;
+    submittedRef.current = true;
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch {}
+    }
+    onSearchRef.current(clean);
+    onCloseRef.current();
+  }, []);
+
+  const startOrToggleVoice = useCallback(
+    (forceStart = false) => {
+      const SpeechRecognition =
+        typeof window !== 'undefined'
+          ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+          : null;
+
+      if (!SpeechRecognition) {
+        // Không dùng window.alert() vì WKWebView trên CarPlay (APTV / asCar) có thể treo luồng JS!
+        setVoiceNotice(
+          'WebView CarPlay chưa cấp quyền Web Speech — Hãy chạm ô nhập và bấm nút Micro (🎤) trên bàn phím iOS.'
+        );
+        inputRef.current?.focus();
+        return;
+      }
+
+      if (isListening && !forceStart) {
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.stop();
+          } catch {}
+        }
+        setIsListening(false);
+        return;
+      }
+
+      try {
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.abort();
+          } catch {}
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'vi-VN';
+        recognition.continuous = false;
+        recognition.interimResults = true;
+        recognitionRef.current = recognition;
+
+        recognition.onstart = () => {
+          setIsListening(true);
+          setVoiceNotice(null);
+          setInterimTranscript('');
+        };
+
+        recognition.onresult = (event: any) => {
+          let finalStr = '';
+          let interimStr = '';
+          for (let i = 0; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+              finalStr += event.results[i][0].transcript;
+            } else {
+              interimStr += event.results[i][0].transcript;
+            }
+          }
+
+          const activeText = (finalStr || interimStr).trim();
+          setInterimTranscript(activeText);
+
+          if (finalStr.trim()) {
+            const cleanFinal = finalStr.trim();
+            setQuery(cleanFinal);
+            setIsListening(false);
+            if (voiceTimerRef.current) window.clearTimeout(voiceTimerRef.current);
+            voiceTimerRef.current = window.setTimeout(() => {
+              executeSearch(cleanFinal);
+            }, 380);
+          }
+        };
+
+        recognition.onerror = (ev: any) => {
+          setIsListening(false);
+          if (ev?.error === 'not-allowed' || ev?.error === 'service-not-allowed') {
+            setVoiceNotice(
+              'Chưa có quyền Micro trên WebView — Bạn có thể chạm ô nhập và dùng nút đọc chính tả (🎤) của bàn phím iPhone.'
+            );
+          }
+        };
+
+        recognition.onend = () => {
+          setIsListening(false);
+        };
+
+        recognition.start();
+      } catch {
+        setIsListening(false);
+        setVoiceNotice(
+          'Không thể bật Micro trực tiếp — Hãy chạm ô nhập để dùng Micro (🎤) trên bàn phím iPhone.'
+        );
+      }
+    },
+    [executeSearch, isListening]
+  );
+
+  // Mở / đóng modal (Lưu ý trên CarPlay VF5: KHÔNG tự auto-focus ô input để tránh bàn phím che kín màn hình 8 inch!)
   useEffect(() => {
     if (isOpen) {
+      submittedRef.current = false;
       setQuery(initialQuery);
       setInterimTranscript('');
+      setVoiceNotice(null);
       setIsListening(false);
+
       if (startVoice) {
-        setTimeout(() => {
-          toggleVoiceSearch();
-        }, 200);
-      } else {
-        setTimeout(() => {
-          inputRef.current?.focus();
-        }, 180);
+        startOrToggleVoice(true);
       }
     } else {
-      if (recognitionRef.current) {
-        recognitionRef.current.abort();
+      if (voiceTimerRef.current) {
+        window.clearTimeout(voiceTimerRef.current);
+        voiceTimerRef.current = null;
       }
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
+      }
+      setIsListening(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, initialQuery, startVoice]);
 
+  // Hỗ trợ phím Escape để đóng Modal
   useEffect(() => {
-    if (!query.trim() || query.trim().length < 2) {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onCloseRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen]);
+
+  // Gợi ý từ khóa tự động kèm AbortController chống race condition
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!isOpen || trimmed.length < 2) {
       setSuggestions([]);
       return;
     }
 
-    const timer = setTimeout(async () => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
       try {
-        const res = await fetch(`/api/suggest?q=${encodeURIComponent(query.trim())}`);
-        if (res.ok) {
+        const res = await fetch(`/api/suggest?q=${encodeURIComponent(trimmed)}`, {
+          signal: controller.signal,
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const data = await res.json();
-          setSuggestions(data.suggestions || []);
+          setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);
         }
       } catch {
-        setSuggestions([]);
-      }
-    }, 200);
-
-    return () => clearTimeout(timer);
-  }, [query]);
-
-  const toggleVoiceSearch = () => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      alert('Trình duyệt trên xe chưa hỗ trợ nhận diện giọng nói Web Speech.');
-      return;
-    }
-
-    if (isListening) {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-      setIsListening(false);
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'vi-VN';
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognitionRef.current = recognition;
-
-    recognition.onstart = () => {
-      setIsListening(true);
-      setInterimTranscript('');
-    };
-
-    recognition.onresult = (event: any) => {
-      let finalStr = '';
-      let interimStr = '';
-      for (let i = 0; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          finalStr += event.results[i][0].transcript;
-        } else {
-          interimStr += event.results[i][0].transcript;
+        if (!controller.signal.aborted) {
+          setSuggestions([]);
         }
       }
+    }, 180);
 
-      const activeText = finalStr || interimStr;
-      setInterimTranscript(activeText);
-
-      if (finalStr.trim()) {
-        setQuery(finalStr.trim());
-        setIsListening(false);
-        setTimeout(() => {
-          handleExecuteSearch(finalStr.trim());
-        }, 500);
-      }
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
     };
-
-    recognition.onerror = () => {
-      setIsListening(false);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognition.start();
-  };
-
-  const handleExecuteSearch = (searchVal: string) => {
-    const clean = searchVal.trim();
-    if (!clean) return;
-    onSearch(clean);
-    onClose();
-  };
+  }, [query, isOpen]);
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    handleExecuteSearch(query);
+    executeSearch(query);
   };
 
   if (!isOpen) return null;
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Tìm kiếm bài hát và video"
       onClick={onClose}
-      className={`fixed inset-0 z-50 flex flex-col p-3 sm:p-6 overflow-y-auto no-scrollbar ${
-        isAppleGlass
-          ? 'bg-black/65 backdrop-blur-2xl'
-          : 'bg-black/90 backdrop-blur-md'
-      }`}
+      className="car-app-shell fixed inset-0 z-50 flex flex-col bg-black/80 backdrop-blur-2xl overflow-hidden"
     >
-      {/* Dynamic Ambient Color Backdrop for Apple Music Search */}
-      {isAppleGlass && artworkBackdrop && (
+      {/* Dynamic Ambient Color Backdrop */}
+      {artworkBackdrop && (
         <div
-          className="fixed inset-0 pointer-events-none opacity-35 blur-[100px] scale-125"
+          className="fixed inset-0 pointer-events-none opacity-30 blur-3xl scale-110"
           style={{
             backgroundImage: `url(${artworkBackdrop})`,
             backgroundPosition: 'center',
@@ -220,276 +295,231 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
         />
       )}
 
-      {/* Animated Spring Sheet Container */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`relative z-10 max-w-4xl w-full mx-auto flex flex-col gap-4 my-auto py-2 ${
-          isAppleGlass ? 'animate-ios-sheet-in' : ''
-        }`}
+        className="relative z-10 max-w-5xl w-full h-full mx-auto flex flex-col min-h-0 px-3 sm:px-5 py-2.5 short:py-2 gap-2.5 short:gap-2 animate-ios-sheet-in"
       >
-        {/* Top Bar with Liquid Glass Input & Close */}
-        <div className="flex items-center gap-3">
-          <form onSubmit={handleFormSubmit} className="flex-1 relative flex items-center">
+        {/* STICKY TOP BAR: Search Input + Quick Mic + Close Button (luôn cố định không trôi khi cuộn trên màn 8 inch) */}
+        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          <form onSubmit={handleFormSubmit} className="flex-1 relative flex items-center min-w-0">
             <Search
-              className={`w-6 h-6 absolute left-4 pointer-events-none ${
-                isAppleGlass ? 'text-white/60' : 'text-car-accent'
-              }`}
+              aria-hidden="true"
+              className="w-5 h-5 absolute left-4 pointer-events-none text-white/60"
             />
             <input
               ref={inputRef}
-              type="text"
+              type="search"
+              enterKeyHint="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Nhập tên bài hát, ca sĩ hoặc bấm Micro..."
-              className={`w-full h-14 sm:h-16 text-white text-base sm:text-xl font-bold pl-12 pr-24 focus:outline-none ios-spring-fast ${
-                isAppleGlass
-                  ? 'bg-white/[0.1] backdrop-blur-2xl rounded-full border border-white/20 focus:border-white/45 focus:bg-white/[0.14] placeholder-white/45 shadow-2xl'
-                  : 'bg-car-card rounded-2xl border-2 border-car-border focus:border-car-accent shadow-2xl'
-              }`}
+              placeholder="Chạm để nhập bài hát, ca sĩ..."
+              className="w-full h-12 sm:h-13 short:h-11 text-white text-base sm:text-lg font-bold pl-11 pr-28 bg-white/[0.12] backdrop-blur-xl rounded-full border border-white/25 focus:border-white/55 focus:bg-white/[0.16] placeholder-white/45 focus:outline-none shadow-xl ios-spring-fast"
             />
             {query && (
               <button
                 type="button"
-                onClick={() => setQuery('')}
-                className="absolute right-16 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-white/60 hover:text-white rounded-full hover:bg-white/10 transition"
+                onClick={() => {
+                  setQuery('');
+                  inputRef.current?.focus();
+                }}
+                aria-label="Xóa nội dung đang nhập"
+                className="absolute right-[4.75rem] top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-white/65 hover:text-white rounded-full hover:bg-white/15 transition"
               >
                 <X className="w-5 h-5" />
               </button>
             )}
             <button
               type="submit"
-              className={`absolute right-2 top-1/2 -translate-y-1/2 h-10 sm:h-12 px-4 sm:px-5 font-extrabold text-sm flex items-center gap-1 active:scale-95 ios-spring-fast ${
-                isAppleGlass
-                  ? 'rounded-full bg-white text-black hover:bg-white/90 shadow-lg'
-                  : 'rounded-xl bg-car-accent hover:bg-car-accentHover text-white shadow-md'
-              }`}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 h-9 sm:h-10 short:h-8 px-4 rounded-full bg-white text-black hover:bg-white/90 font-extrabold text-sm flex items-center justify-center shadow-lg active:scale-95 ios-spring-fast"
             >
               Tìm
             </button>
           </form>
 
-          {/* Liquid Glass Close Button */}
+          {/* Nút Micro nhanh ngay cạnh thanh tìm kiếm */}
           <button
-            onClick={onClose}
-            className={`h-14 w-14 sm:h-16 sm:w-16 flex items-center justify-center active:scale-90 shrink-0 ios-spring-fast ${
-              isAppleGlass
-                ? 'rounded-full bg-white/[0.1] hover:bg-white/[0.2] backdrop-blur-2xl border border-white/20 text-white shadow-xl'
-                : 'rounded-2xl bg-slate-800 hover:bg-slate-700 border-2 border-slate-700 text-slate-200 shadow-lg'
+            type="button"
+            onClick={() => startOrToggleVoice(false)}
+            aria-label={isListening ? 'Dừng nhận diện giọng nói' : 'Tìm kiếm bằng giọng nói'}
+            className={`h-12 w-12 sm:h-13 sm:w-13 short:h-11 short:w-11 rounded-full flex items-center justify-center shrink-0 border shadow-xl active:scale-90 ios-spring-fast ${
+              isListening
+                ? 'bg-rose-500 text-white border-rose-300 animate-pulse ring-4 ring-rose-500/40'
+                : 'bg-rose-500/25 hover:bg-rose-500/40 text-rose-200 border-rose-400/45'
             }`}
-            title="Đóng tìm kiếm"
           >
-            <X className="w-7 h-7" />
+            {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+          </button>
+
+          {/* Nút Đóng */}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Đóng cửa sổ tìm kiếm"
+            className="h-12 w-12 sm:h-13 sm:w-13 short:h-11 short:w-11 rounded-full bg-white/[0.12] hover:bg-white/[0.22] border border-white/25 text-white flex items-center justify-center shrink-0 shadow-xl active:scale-90 ios-spring-fast"
+          >
+            <X className="w-6 h-6" />
           </button>
         </div>
 
-        {/* VOICE SEARCH HERO SECTION */}
-        {speechSupported && (
-          <div
-            onClick={toggleVoiceSearch}
-            className={`w-full p-4 sm:p-5 flex items-center gap-4 cursor-pointer active:scale-[0.98] ios-spring-fast ${
-              isAppleGlass
-                ? `rounded-3xl backdrop-blur-2xl border shadow-xl ${
-                    isListening
-                      ? 'bg-rose-500/25 border-rose-400/60 shadow-rose-500/20'
-                      : 'bg-white/[0.08] hover:bg-white/[0.12] border-white/15'
-                  }`
-                : `rounded-3xl border-2 shadow-xl ${
-                    isListening
-                      ? 'bg-rose-950/60 border-rose-500 ring-2 ring-rose-500/50'
-                      : 'bg-gradient-to-r from-blue-950/50 to-car-card border-blue-500/40 hover:border-blue-400'
-                  }`
-            }`}
-          >
-            <div
-              className={`w-16 h-16 sm:w-18 sm:h-18 rounded-full flex items-center justify-center shrink-0 shadow-2xl ios-spring-fast ${
+        {/* SCROLLABLE BODY (tối ưu chiều cao cho màn hình ngang VF5 8 inch) */}
+        <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-2.5 short:space-y-2 pb-3">
+          {/* Trạng thái nhận diện giọng nói hoặc thông báo hướng dẫn CarPlay */}
+          {(isListening || interimTranscript || voiceNotice || speechSupported) && !query && (
+            <button
+              type="button"
+              onClick={() => startOrToggleVoice(false)}
+              className={`w-full text-left p-3 sm:p-4 short:p-2.5 rounded-2xl border flex items-center gap-3.5 transition active:scale-[0.99] ${
                 isListening
-                  ? 'bg-rose-500 text-white animate-pulse ring-4 ring-rose-400/50'
-                  : isAppleGlass
-                  ? 'bg-gradient-to-br from-rose-500 to-pink-600 text-white border border-white/25'
-                  : 'bg-car-accent text-white'
+                  ? 'bg-rose-500/25 border-rose-400/60 shadow-lg'
+                  : 'bg-white/[0.07] hover:bg-white/[0.12] border-white/15'
               }`}
             >
-              {isListening ? (
-                <MicOff className="w-8 h-8" />
-              ) : (
-                <Mic className="w-8 h-8" />
-              )}
-            </div>
-
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span
-                  className={`inline-block w-2 h-2 rounded-full ${
-                    isListening ? 'bg-rose-400 animate-ping' : 'bg-emerald-400'
-                  }`}
-                ></span>
-                <span className="text-xs font-extrabold uppercase tracking-wider text-white/60">
-                  {isListening ? 'ĐANG LẮNG NGHE TIẾNG VIỆT...' : 'TÌM KIẾM BẰNG GIỌNG NÓI'}
-                </span>
-              </div>
-              <p className="text-lg sm:text-xl font-extrabold text-white mt-1 truncate">
-                {interimTranscript ||
-                  (isListening
-                    ? 'Hãy nói tên bài hát hoặc ca sĩ...'
-                    : 'Chạm để nói tên bài hát (Không cần gõ)')}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* REAL-TIME AUTO-COMPLETE SUGGESTIONS */}
-        {suggestions.length > 0 && (
-          <div
-            className={`p-3 sm:p-4 shadow-xl ${
-              isAppleGlass
-                ? 'bg-white/[0.07] backdrop-blur-2xl rounded-3xl border border-white/15 animate-ios-browse-in'
-                : 'bg-car-card rounded-3xl border-2 border-car-border'
-            }`}
-          >
-            <h4 className="text-xs sm:text-sm font-bold text-white/60 uppercase tracking-wider mb-2 px-2 flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-rose-400" />
-              <span>Gợi ý tìm kiếm</span>
-            </h4>
-            <div className="space-y-1.5">
-              {suggestions.map((sug, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => handleExecuteSearch(sug)}
-                  className={`w-full min-h-[48px] px-4 py-2.5 text-left text-base font-bold text-white flex items-center justify-between gap-3 active:scale-[0.98] ios-spring-fast ${
-                    isAppleGlass
-                      ? 'rounded-2xl bg-white/[0.06] hover:bg-white/[0.15] border border-white/10'
-                      : 'rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800'
-                  }`}
-                >
-                  <span className="truncate">{sug}</span>
-                  <ArrowUpRight className="w-5 h-5 text-white/60 shrink-0" />
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* RECENT SEARCHES */}
-        {recentSearches.length > 0 && !query && (
-          <div
-            className={`p-4 shadow-xl ${
-              isAppleGlass
-                ? 'bg-white/[0.07] backdrop-blur-2xl rounded-3xl border border-white/15'
-                : 'bg-car-card rounded-3xl border-2 border-car-border'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-3 px-1">
-              <h4 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
-                <Clock className={`w-4 h-4 ${isAppleGlass ? 'text-rose-400' : 'text-car-accent'}`} />
-                <span>Tìm kiếm gần đây</span>
-              </h4>
-              <button
-                type="button"
-                onClick={onClearRecentSearches}
-                className="text-xs sm:text-sm font-bold text-white/60 hover:text-rose-400 flex items-center gap-1 px-2.5 py-1 rounded-full hover:bg-white/10 transition"
+              <div
+                className={`w-12 h-12 short:w-10 short:h-10 rounded-full flex items-center justify-center shrink-0 shadow-lg ${
+                  isListening
+                    ? 'bg-rose-500 text-white animate-pulse'
+                    : 'bg-gradient-to-br from-rose-500 to-pink-600 text-white'
+                }`}
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Xóa lịch sử</span>
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {recentSearches.map((item, idx) => (
-                <div
-                  key={idx}
-                  className={`flex items-center gap-1 rounded-full pl-4 pr-1.5 py-1.5 active:scale-95 ios-spring-fast ${
-                    isAppleGlass
-                      ? 'bg-white/[0.1] hover:bg-white/[0.18] border border-white/15'
-                      : 'bg-slate-900 border-2 border-slate-700 hover:border-slate-500'
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => handleExecuteSearch(item)}
-                    className="text-sm font-bold text-white"
-                  >
-                    {item}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onRemoveRecentSearch(item);
-                    }}
-                    className="p-1 text-white/50 hover:text-white rounded-full"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                {isListening ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-block w-2 h-2 rounded-full ${
+                      isListening ? 'bg-rose-400 animate-ping' : 'bg-emerald-400'
+                    }`}
+                  />
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-white/65">
+                    {isListening ? 'ĐANG NGHE TIẾNG VIỆT...' : 'TÌM NHANH BẰNG GIỌNG NÓI'}
+                  </span>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
+                <p className="text-sm sm:text-base font-extrabold text-white mt-0.5 line-clamp-2">
+                  {voiceNotice ||
+                    interimTranscript ||
+                    (isListening
+                      ? 'Hãy đọc tên bài hát hoặc ca sĩ...'
+                      : 'Chạm vào đây rồi đọc tên bài hát (không cần gõ phím)')}
+                </p>
+              </div>
+            </button>
+          )}
 
-        {/* TRENDING CAR QUERIES */}
-        {!query && (
-          <div
-            className={`p-4 shadow-xl ${
-              isAppleGlass
-                ? 'bg-white/[0.07] backdrop-blur-2xl rounded-3xl border border-white/15'
-                : 'bg-car-card rounded-3xl border-2 border-car-border'
-            }`}
-          >
-            <h4 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2 mb-3 px-1">
-              <Flame className="w-4 h-4 text-amber-400" />
-              <span>Gợi ý nghe nhiều trên ô tô</span>
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-              {CAR_TRENDING_QUERIES.map((item, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleExecuteSearch(item.text)}
-                  className={`h-13 px-4 text-left flex items-center gap-3 active:scale-95 ios-spring-fast ${
-                    isAppleGlass
-                      ? 'rounded-2xl bg-white/[0.08] hover:bg-white/[0.16] border border-white/12'
-                      : 'rounded-2xl bg-slate-900 hover:bg-slate-800 border-2 border-slate-700 hover:border-car-accent'
-                  }`}
-                >
-                  <span className="text-lg shrink-0">{item.icon}</span>
-                  <span className="text-sm font-bold text-white truncate">{item.text}</span>
-                </button>
-              ))}
+          {/* REAL-TIME AUTO-COMPLETE SUGGESTIONS */}
+          {suggestions.length > 0 && (
+            <div className="p-3 bg-white/[0.08] rounded-2xl border border-white/15 shadow-xl animate-ios-browse-in">
+              <h4 className="text-xs font-bold text-white/60 uppercase tracking-wider mb-2 px-1 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-rose-400" />
+                <span>Gợi ý tìm kiếm</span>
+              </h4>
+              <div className="grid grid-cols-1 car:grid-cols-2 gap-1.5">
+                {suggestions.map((sug, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => executeSearch(sug)}
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-white/[0.07] hover:bg-white/[0.16] border border-white/10 text-left text-sm sm:text-base font-bold text-white flex items-center justify-between gap-2 active:scale-[0.98] ios-spring-fast"
+                  >
+                    <span className="truncate">{sug}</span>
+                    <ArrowUpRight className="w-4 h-4 text-white/60 shrink-0" />
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* POPULAR ARTISTS */}
-        {!query && (
-          <div
-            className={`p-4 shadow-xl ${
-              isAppleGlass
-                ? 'bg-white/[0.07] backdrop-blur-2xl rounded-3xl border border-white/15'
-                : 'bg-car-card rounded-3xl border-2 border-car-border'
-            }`}
-          >
-            <h4 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2 mb-3 px-1">
-              <User className="w-4 h-4 text-rose-400" />
-              <span>Ca sĩ & Nghệ sĩ nổi bật</span>
-            </h4>
-            <div className="flex flex-wrap gap-2">
-              {POPULAR_ARTISTS.map((artist, idx) => (
+          {/* RECENT SEARCHES */}
+          {recentSearches.length > 0 && !query && (
+            <div className="p-3 sm:p-3.5 bg-white/[0.07] rounded-2xl border border-white/15 shadow-lg">
+              <div className="flex items-center justify-between mb-2 px-1">
+                <h4 className="text-xs sm:text-sm font-extrabold text-white/85 uppercase tracking-wider flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-rose-400" />
+                  <span>Tìm gần đây</span>
+                </h4>
                 <button
-                  key={idx}
                   type="button"
-                  onClick={() => handleExecuteSearch(`nhạc ${artist} hay nhất`)}
-                  className={`h-11 px-4 text-sm font-bold flex items-center gap-2 active:scale-95 ios-spring-fast ${
-                    isAppleGlass
-                      ? 'rounded-full bg-white/[0.1] hover:bg-white/[0.2] border border-white/15 text-white'
-                      : 'rounded-xl bg-slate-900 hover:bg-slate-800 border-2 border-slate-700 hover:border-blue-400 text-slate-200'
-                  }`}
+                  onClick={onClearRecentSearches}
+                  className="min-h-[36px] px-3 rounded-full text-xs font-bold text-white/65 hover:text-rose-300 hover:bg-white/10 flex items-center gap-1.5 transition"
                 >
-                  <span>{artist}</span>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Xóa hết</span>
                 </button>
-              ))}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {recentSearches.map((item, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center rounded-full bg-white/[0.1] hover:bg-white/[0.18] border border-white/15 overflow-hidden"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => executeSearch(item)}
+                      className="min-h-[42px] pl-4 pr-2.5 text-sm font-bold text-white active:scale-95 transition"
+                    >
+                      {item}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Xóa ${item} khỏi lịch sử tìm kiếm`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveRecentSearch(item);
+                      }}
+                      className="min-h-[42px] w-9 flex items-center justify-center text-white/55 hover:text-white hover:bg-white/15 transition"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* TRENDING CAR QUERIES */}
+          {!query && (
+            <div className="p-3 sm:p-3.5 bg-white/[0.07] rounded-2xl border border-white/15 shadow-lg">
+              <h4 className="text-xs sm:text-sm font-extrabold text-white/85 uppercase tracking-wider flex items-center gap-1.5 mb-2.5 px-1">
+                <Flame className="w-4 h-4 text-amber-400" />
+                <span>Chủ đề nghe nhiều trên VF5</span>
+              </h4>
+              <div className="grid grid-cols-1 car:grid-cols-2 lg:grid-cols-3 gap-2">
+                {CAR_TRENDING_QUERIES.map((item, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => executeSearch(item.text)}
+                    className="min-h-[46px] px-3.5 py-2 rounded-xl bg-white/[0.08] hover:bg-white/[0.16] border border-white/12 text-left flex items-center gap-2.5 active:scale-95 ios-spring-fast"
+                  >
+                    <span className="text-base shrink-0">{item.icon}</span>
+                    <span className="text-sm font-bold text-white truncate">{item.text}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* POPULAR ARTISTS */}
+          {!query && (
+            <div className="p-3 sm:p-3.5 bg-white/[0.07] rounded-2xl border border-white/15 shadow-lg">
+              <h4 className="text-xs sm:text-sm font-extrabold text-white/85 uppercase tracking-wider flex items-center gap-1.5 mb-2.5 px-1">
+                <User className="w-4 h-4 text-rose-400" />
+                <span>Ca sĩ nổi bật</span>
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {POPULAR_ARTISTS.map((artist, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => executeSearch(`nhạc ${artist} hay nhất`)}
+                    className="min-h-[42px] px-4 rounded-full bg-white/[0.1] hover:bg-white/[0.2] border border-white/15 text-sm font-bold text-white flex items-center active:scale-95 ios-spring-fast"
+                  >
+                    {artist}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { StreamData } from '../types';
 
 interface CarHardwareControlsOptions {
+  enabled?: boolean;
   streamData: StreamData | null;
   isPlaying: boolean;
   currentTime: number;
@@ -18,12 +19,13 @@ interface CarHardwareControlsOptions {
 
 /**
  * Hook điều khiển phím cứng vô lăng chuyên biệt cho VinFast VF5:
- * 1. Tương thích Apple CarPlay (APTV) & Bluetooth AVRCP qua HTML5 MediaSession API
- *    (Chú ý: Tắt seekbackward/seekforward trên MediaSession để iOS CarPlay kích hoạt đúng
+ * 1. Tương thích Apple CarPlay (APTV / asCar) & Bluetooth AVRCP qua HTML5 MediaSession API
+ *    (Đặt seekbackward/seekforward = null để iOS CarPlay kích hoạt đúng
  *    nút Next Track / Previous Track trên vô lăng VF5 thay vì nút tua 10s của Podcast).
  * 2. Tương thích Android Box / Màn hình Android / CAN-bus KeyCode qua KeyboardEvent toàn cục.
  */
 export function useCarHardwareControls({
+  enabled = true,
   streamData,
   isPlaying,
   currentTime,
@@ -63,6 +65,8 @@ export function useCarHardwareControls({
 
   // 1. GLOBAL KEYBOARD / HARDWARE MEDIA KEYS LISTENER (VF5 CAN-bus / Android Box / Bluetooth Remote)
   useEffect(() => {
+    if (!enabled) return;
+
     let lastKeyTime = 0;
 
     const handleKeyEvent = (e: KeyboardEvent) => {
@@ -180,8 +184,8 @@ export function useCarHardwareControls({
         return;
       }
 
-      // Space: Play / Pause
-      if (key === ' ' || code === 'Space') {
+      // Space: Play / Pause (chỉ khi focus không nằm trên button để tránh xung đột click)
+      if ((key === ' ' || code === 'Space') && target?.tagName !== 'BUTTON') {
         e.preventDefault();
         notify('⏯️ Phát / Tạm dừng');
         callbacksRef.current.onTogglePlay();
@@ -218,18 +222,26 @@ export function useCarHardwareControls({
     return () => {
       window.removeEventListener('keydown', handleKeyEvent, { capture: true });
     };
-  }, []);
+  }, [enabled]);
 
-  // 2. HTML5 MEDIASESSION API (Apple CarPlay APTV & Bluetooth AVRCP trên VinFast VF5)
+  // 2. HTML5 MEDIASESSION API (Apple CarPlay APTV / asCar & Bluetooth AVRCP trên VinFast VF5)
   useEffect(() => {
-    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    if (!enabled || typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+
+    // iOS 16.4+ Audio Session hint for playback priority over CarPlay
+    try {
+      const navAny = navigator as any;
+      if (navAny.audioSession && navAny.audioSession.type !== 'playback') {
+        navAny.audioSession.type = 'playback';
+      }
+    } catch {}
 
     if (streamData && streamData.title) {
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: streamData.title,
-          artist: streamData.uploader || 'CarHub YouTube Music',
-          album: 'VinFast VF5 Audio',
+          artist: streamData.uploader || 'CarHub VF5',
+          album: 'VinFast VF5 CarPlay',
           artwork: streamData.thumbnailUrl
             ? [
                 { src: streamData.thumbnailUrl, sizes: '96x96', type: 'image/jpeg' },
@@ -284,7 +296,7 @@ export function useCarHardwareControls({
     });
 
     // QUAN TRỌNG CHO IOS CARPLAY & VF5:
-    // Phải đặt seekbackward & seekforward = null để iOS MPRemoteCommandCenter
+    // Đặt seekbackward & seekforward = null để iOS MPRemoteCommandCenter
     // hiển thị và nhận lệnh Next Track / Previous Track từ phím cứng vô lăng VF5!
     safeSetHandler('seekbackward', null);
     safeSetHandler('seekforward', null);
@@ -294,11 +306,19 @@ export function useCarHardwareControls({
         callbacksRef.current.onSeekTo(details.seekTime);
       }
     });
-  }, [streamData?.id, streamData?.title, streamData?.uploader, streamData?.thumbnailUrl, isPlaying]);
+  }, [
+    enabled,
+    streamData?.id,
+    streamData?.title,
+    streamData?.uploader,
+    streamData?.thumbnailUrl,
+    isPlaying,
+  ]);
 
   // 3. Cập nhật vị trí thời gian thực cho màn hình xe / CarPlay
   useEffect(() => {
     if (
+      !enabled ||
       typeof navigator === 'undefined' ||
       !('mediaSession' in navigator) ||
       !navigator.mediaSession.setPositionState
@@ -316,5 +336,5 @@ export function useCarHardwareControls({
         });
       } catch {}
     }
-  }, [Math.floor(currentTime), Math.floor(duration), isPlaying]);
+  }, [enabled, Math.floor(currentTime), Math.floor(duration), isPlaying]);
 }
