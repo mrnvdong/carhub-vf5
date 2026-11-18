@@ -4,8 +4,13 @@ import {
   Marker as MapLibreMarker,
   GeoJSONSource,
   StyleSpecification,
+  setWorkerUrl,
 } from 'maplibre-gl';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
+
+// Bắt buộc chỉ định đường dẫn Web Worker cho maplibre-gl v6 trên Vite để giải mã Vector 3D (.pbf)!
+setWorkerUrl(maplibreWorkerUrl);
 import {
   Navigation,
   LocateFixed,
