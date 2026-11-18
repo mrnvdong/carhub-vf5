@@ -1,5 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Map as MapLibreMap, Marker as MapLibreMarker, GeoJSONSource } from 'maplibre-gl';
+import {
+  Map as MapLibreMap,
+  Marker as MapLibreMarker,
+  GeoJSONSource,
+  StyleSpecification,
+} from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   Navigation,
@@ -12,8 +17,7 @@ import {
   X,
   Bell,
   BellOff,
-  Sun,
-  Moon,
+  Layers,
   Loader2,
   Flag,
   Video as CameraIcon,
@@ -21,8 +25,103 @@ import {
 } from 'lucide-react';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
 
-const DARK_MAP_STYLE = 'https://tiles.openfreemap.org/styles/dark';
-const LIGHT_MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+type MapTheme = 'nav' | 'night' | 'vector3d' | 'satellite';
+
+// Inline Zero-Latency Style Specs (không phụ thuộc tải style.json hay font .pbf ngoài -> hiển thị tức thì 100% trên mọi mạng 4G!)
+function buildRasterStyle(theme: 'nav' | 'night' | 'satellite'): StyleSpecification {
+  if (theme === 'satellite') {
+    return {
+      version: 8,
+      sources: {
+        sat: {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          ],
+          tileSize: 256,
+        },
+      },
+      layers: [
+        {
+          id: 'sat-layer',
+          type: 'raster',
+          source: 'sat',
+          paint: { 'raster-contrast': 0.1 },
+        },
+      ],
+    };
+  }
+
+  if (theme === 'night') {
+    return {
+      version: 8,
+      sources: {
+        cartoDark: {
+          type: 'raster',
+          tiles: [
+            'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+            'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+            'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+          ],
+          tileSize: 256,
+        },
+      },
+      layers: [
+        {
+          id: 'carto-dark-layer',
+          type: 'raster',
+          source: 'cartoDark',
+          // Tăng độ tương phản & độ sáng vạch đường để nhìn rõ cả ban ngày lẫn ban đêm trên màn VF5
+          paint: {
+            'raster-brightness-min': 0.08,
+            'raster-contrast': 0.28,
+            'raster-saturation': 0.2,
+          },
+        },
+      ],
+    };
+  }
+
+  // Default 'nav': Bản đồ giao thông màu sắc rõ nét cao (Voyager @2x Retina)
+  return {
+    version: 8,
+    sources: {
+      cartoVoyager: {
+        type: 'raster',
+        tiles: [
+          'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
+          'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
+          'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
+        ],
+        tileSize: 256,
+      },
+    },
+    layers: [
+      {
+        id: 'carto-voyager-layer',
+        type: 'raster',
+        source: 'cartoVoyager',
+        paint: {
+          'raster-contrast': 0.08,
+        },
+      },
+    ],
+  };
+}
+
+function getStyleForTheme(theme: MapTheme): string | StyleSpecification {
+  if (theme === 'vector3d') {
+    return 'https://tiles.openfreemap.org/styles/liberty';
+  }
+  return buildRasterStyle(theme);
+}
+
+const THEME_LABELS: Record<MapTheme, string> = {
+  nav: 'Rõ nét',
+  night: 'Đêm',
+  vector3d: ' Nhà 3D',
+  satellite: 'Vệ tinh',
+};
 
 interface PlaceItem {
   name: string;
@@ -82,10 +181,17 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
   const carArrowElRef = useRef<HTMLDivElement | null>(null);
   const destMarkerRef = useRef<MapLibreMarker | null>(null);
   const hazardMarkersRef = useRef<MapLibreMarker[]>([]);
+  const sovereigntyMarkersRef = useRef<MapLibreMarker[]>([]);
 
-  const [isDarkMap, setIsDarkMap] = useState<boolean>(true);
+  const [mapTheme, setMapTheme] = useState<MapTheme>(() => {
+    const hr = new Date().getHours();
+    return hr >= 18 || hr < 6 ? 'night' : 'nav';
+  });
+  const appliedThemeRef = useRef<MapTheme>(mapTheme);
+
   const [is3DHeadingUp, setIs3DHeadingUp] = useState<boolean>(true);
   const [isFollowing, setIsFollowing] = useState<boolean>(true);
+  const [webglError, setWebglError] = useState<boolean>(false);
 
   // Quick Navigation / EV Charging search state
   const [navDrawerOpen, setNavDrawerOpen] = useState<boolean>(false);
@@ -98,48 +204,8 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
   const activeRouteRef = useRef<ActiveRoute | null>(activeRoute);
   activeRouteRef.current = activeRoute;
 
-  // Inject sovereign Vietnam labels + active route layers onto MapLibre style
-  const applyCustomLayersToStyle = useCallback((map: MapLibreMap) => {
+  const ensureRouteLayers = useCallback((map: MapLibreMap) => {
     try {
-      // 1. Nhãn chủ quyền biển đảo Việt Nam (Hoàng Sa & Trường Sa)
-      if (!map.getSource('vn-sovereignty')) {
-        map.addSource('vn-sovereignty', {
-          type: 'geojson',
-          data: {
-            type: 'FeatureCollection',
-            features: [
-              {
-                type: 'Feature',
-                properties: { title: 'Quần đảo Hoàng Sa (Việt Nam)' },
-                geometry: { type: 'Point', coordinates: [112.0, 16.5] },
-              },
-              {
-                type: 'Feature',
-                properties: { title: 'Quần đảo Trường Sa (Việt Nam)' },
-                geometry: { type: 'Point', coordinates: [114.2, 10.0] },
-              },
-            ],
-          },
-        });
-
-        map.addLayer({
-          id: 'vn-sovereignty-label',
-          type: 'symbol',
-          source: 'vn-sovereignty',
-          layout: {
-            'text-field': ['get', 'title'],
-            'text-size': 12,
-            'text-max-width': 12,
-          },
-          paint: {
-            'text-color': '#38bdf8',
-            'text-halo-color': '#020617',
-            'text-halo-width': 2,
-          },
-        });
-      }
-
-      // 2. Lớp vẽ vệt dẫn đường OSRM phát sáng
       const route = activeRouteRef.current;
       if (!map.getSource('carhub-route')) {
         map.addSource('carhub-route', {
@@ -155,9 +221,9 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           source: 'carhub-route',
           layout: { 'line-join': 'round', 'line-cap': 'round' },
           paint: {
-            'line-color': '#0ea5e9',
-            'line-width': 11,
-            'line-opacity': 0.35,
+            'line-color': '#0284c7',
+            'line-width': 12,
+            'line-opacity': 0.45,
           },
         });
 
@@ -167,58 +233,88 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           source: 'carhub-route',
           layout: { 'line-join': 'round', 'line-cap': 'round' },
           paint: {
-            'line-color': '#38bdf8',
-            'line-width': 5.5,
-            'line-opacity': 0.95,
+            'line-color': '#0ea5e9',
+            'line-width': 6,
+            'line-opacity': 0.98,
           },
         });
       }
     } catch {}
   }, []);
 
-  // Khởi tạo bản đồ WebGL 3D MapLibre
+  // Khởi tạo bản đồ WebGL 3D MapLibre (Đảm bảo kích thước tuyệt đối 100% không bị .maplibregl-map ghi đè!)
   useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
+    const container = mapContainerRef.current;
+    if (!container || mapRef.current) return;
 
-    const map = new MapLibreMap({
-      container: mapContainerRef.current,
-      style: isDarkMap ? DARK_MAP_STYLE : LIGHT_MAP_STYLE,
-      center: [position.lon, position.lat],
-      zoom: 16.3,
-      pitch: 55,
-      bearing: position.heading || 0,
-      attributionControl: false,
-    });
+    let map: MapLibreMap;
+    try {
+      map = new MapLibreMap({
+        container,
+        style: getStyleForTheme(appliedThemeRef.current),
+        center: [position.lon, position.lat],
+        zoom: 16.0,
+        pitch: 52,
+        bearing: position.heading || 0,
+        attributionControl: false,
+      });
+    } catch (err) {
+      console.error('MapLibre WebGL init failed:', err);
+      setWebglError(true);
+      return;
+    }
 
     map.on('load', () => {
-      applyCustomLayersToStyle(map);
+      map.resize();
+      ensureRouteLayers(map);
     });
 
     map.on('styledata', () => {
       if (map.isStyleLoaded()) {
-        applyCustomLayersToStyle(map);
+        ensureRouteLayers(map);
       }
     });
 
-    // Khi người lái kéo bản đồ bằng tay -> tạm dừng tự bám để xem trước đường
     map.on('dragstart', () => {
       setIsFollowing(false);
     });
 
+    // Nhãn chủ quyền biển đảo Việt Nam bằng HTML Marker (không phụ thuộc font .pbf ngoài!)
+    const islands = [
+      { label: '🇻🇳 Quần đảo Hoàng Sa (Việt Nam)', lon: 112.0, lat: 16.5 },
+      { label: '🇻🇳 Quần đảo Trường Sa (Việt Nam)', lon: 114.2, lat: 10.0 },
+    ];
+    sovereigntyMarkersRef.current = islands.map((isl) => {
+      const el = document.createElement('div');
+      el.style.padding = '2px 8px';
+      el.style.borderRadius = '9999px';
+      el.style.background = 'rgba(2,6,23,0.82)';
+      el.style.color = '#38bdf8';
+      el.style.fontWeight = '800';
+      el.style.fontSize = '11px';
+      el.style.border = '1px solid rgba(56,189,248,0.45)';
+      el.style.whiteSpace = 'nowrap';
+      el.style.pointerEvents = 'none';
+      el.textContent = isl.label;
+      return new MapLibreMarker({ element: el, anchor: 'center' })
+        .setLngLat([isl.lon, isl.lat])
+        .addTo(map);
+    });
+
     // Tạo con trỏ mũi tên định vị xe VF5 phát sáng
     const puckWrap = document.createElement('div');
-    puckWrap.style.width = '44px';
-    puckWrap.style.height = '44px';
+    puckWrap.style.width = '46px';
+    puckWrap.style.height = '46px';
     puckWrap.style.display = 'flex';
     puckWrap.style.alignItems = 'center';
     puckWrap.style.justifyContent = 'center';
     puckWrap.style.pointerEvents = 'none';
 
     puckWrap.innerHTML = `
-      <div style="position:relative;width:40px;height:40px;display:flex;align-items:center;justify-content:center;">
-        <div style="position:absolute;inset:0;border-radius:9999px;background:rgba(16,185,129,0.28);box-shadow:0 0 22px rgba(16,185,129,0.65);"></div>
-        <div data-arrow="1" style="position:relative;width:30px;height:30px;border-radius:9999px;background:#10b981;border:3px solid #ffffff;box-shadow:0 4px 14px rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;transition:transform 250ms ease;">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="#04130d">
+      <div style="position:relative;width:42px;height:42px;display:flex;align-items:center;justify-content:center;">
+        <div style="position:absolute;inset:0;border-radius:9999px;background:rgba(37,99,235,0.32);box-shadow:0 0 22px rgba(37,99,235,0.75);"></div>
+        <div data-arrow="1" style="position:relative;width:32px;height:32px;border-radius:9999px;background:#2563eb;border:3px solid #ffffff;box-shadow:0 4px 14px rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;transition:transform 250ms ease;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#ffffff">
             <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
           </svg>
         </div>
@@ -234,13 +330,23 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     carMarkerRef.current = marker;
     mapRef.current = map;
 
+    // Đảm bảo tính lại kích thước ngay sau khi layout ổn định
+    const rafId = window.requestAnimationFrame(() => {
+      map.resize();
+    });
+    const t1 = window.setTimeout(() => map.resize(), 250);
+
     const resizeObs = new ResizeObserver(() => {
       map.resize();
     });
-    resizeObs.observe(mapContainerRef.current);
+    resizeObs.observe(container);
 
     return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(t1);
       resizeObs.disconnect();
+      for (const sm of sovereigntyMarkersRef.current) sm.remove();
+      sovereigntyMarkersRef.current = [];
       marker.remove();
       map.remove();
       mapRef.current = null;
@@ -248,14 +354,15 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Đổi giao diện bản đồ Tối / Sáng
+  // Chỉ gọi setStyle khi người dùng thực sự bấm đổi giao diện bản đồ (KHÔNG gọi chồng lúc vừa mount!)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
-    map.setStyle(isDarkMap ? DARK_MAP_STYLE : LIGHT_MAP_STYLE);
-  }, [isDarkMap]);
+    if (!map || appliedThemeRef.current === mapTheme) return;
+    appliedThemeRef.current = mapTheme;
+    map.setStyle(getStyleForTheme(mapTheme));
+  }, [mapTheme]);
 
-  // Cập nhật vị trí xe VF5 & góc quay Camera 3D mượt mà theo thời gian thực
+  // Cập nhật vị trí xe VF5 & góc xoay Camera 3D
   useEffect(() => {
     const map = mapRef.current;
     const marker = carMarkerRef.current;
@@ -265,8 +372,6 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
 
     const currentHeading = position.heading ?? 0;
     if (carArrowElRef.current) {
-      // Ở chế độ 3D Mũi xe: bản đồ tự xoay theo hướng xe nên mũi tên hướng thẳng lên trước (0deg)
-      // Ở chế độ 2D Hướng Bắc: bản đồ cố định Bắc nên mũi tên xoay theo góc la bàn của xe
       const arrowDeg = is3DHeadingUp && isFollowing ? 0 : currentHeading;
       carArrowElRef.current.style.transform = `rotate(${arrowDeg}deg)`;
     }
@@ -274,22 +379,23 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     if (isFollowing) {
       map.easeTo({
         center: [position.lon, position.lat],
-        zoom: is3DHeadingUp ? 16.4 : 15.6,
-        pitch: is3DHeadingUp ? 56 : 0,
+        zoom: is3DHeadingUp ? 16.2 : 15.5,
+        pitch: is3DHeadingUp ? 52 : 0,
         bearing: is3DHeadingUp ? currentHeading : 0,
         padding: is3DHeadingUp
-          ? { top: 75, bottom: 15, left: 0, right: 0 }
+          ? { top: 70, bottom: 15, left: 0, right: 0 }
           : { top: 20, bottom: 20, left: 0, right: 0 },
-        duration: 650,
+        duration: 600,
       });
     }
   }, [position.lat, position.lon, position.heading, isFollowing, is3DHeadingUp]);
 
-  // Cập nhật dữ liệu vệt đường OSRM lên bản đồ
+  // Vẽ vệt dẫn đường OSRM
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
+    ensureRouteLayers(map);
     const src = map.getSource('carhub-route') as GeoJSONSource | undefined;
     if (src) {
       src.setData(
@@ -320,9 +426,9 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
         .setLngLat([activeRoute.destLon, activeRoute.destLat])
         .addTo(map);
     }
-  }, [activeRoute]);
+  }, [activeRoute, ensureRouteLayers]);
 
-  // Ghim biểu tượng Camera / Cảnh báo hạ tầng trực tiếp lên mặt bản đồ 3D
+  // Ghim biểu tượng Camera / Cảnh báo hạ tầng lên mặt bản đồ
   useEffect(() => {
     const map = mapRef.current;
     for (const m of hazardMarkersRef.current) {
@@ -361,7 +467,15 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     }
   }, [roadInfo?.hazards]);
 
-  // Tìm kiếm địa điểm hoặc Trạm sạc VinFast gần xe
+  const cycleMapTheme = () => {
+    setMapTheme((prev) => {
+      if (prev === 'nav') return 'night';
+      if (prev === 'night') return 'vector3d';
+      if (prev === 'vector3d') return 'satellite';
+      return 'nav';
+    });
+  };
+
   const runPlaceSearch = async (queryText: string, mode = '') => {
     setIsSearchingPlaces(true);
     try {
@@ -380,7 +494,6 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     }
   };
 
-  // Tính toán đường đi thực tế qua OSRM & bắt đầu dẫn đường trên màn VF5
   const startRouteTo = async (place: PlaceItem) => {
     setIsRouting(true);
     try {
@@ -429,28 +542,59 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     : null;
 
   return (
-    <div className="relative w-full h-full min-h-[210px] rounded-2xl sm:rounded-3xl overflow-hidden border border-white/15 shadow-2xl bg-[#090d16]">
-      {/* KHUNG BẢN ĐỒ WEBGL 3D */}
-      <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
+    <div className="relative w-full h-[320px] xs:h-[360px] car:h-full rounded-2xl sm:rounded-3xl overflow-hidden border border-white/15 shadow-2xl bg-[#101622]">
+      {/* KHUNG BẢN ĐỒ WEBGL 3D: dùng inline style tuyệt đối để .maplibregl-map { position: relative } không bao giờ làm co khung về 0px! */}
+      {webglError ? (
+        <iframe
+          title="OpenStreetMap Fallback"
+          src={`https://www.openstreetmap.org/export/embed.html?bbox=${(
+            position.lon - 0.01
+          ).toFixed(4)}%2C${(position.lat - 0.008).toFixed(4)}%2C${(position.lon + 0.01).toFixed(
+            4
+          )}%2C${(position.lat + 0.008).toFixed(4)}&layer=mapnik&marker=${position.lat.toFixed(
+            5
+          )}%2C${position.lon.toFixed(5)}`}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            border: 0,
+          }}
+        />
+      ) : (
+        <div
+          ref={mapContainerRef}
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+          }}
+        />
+      )}
 
       {/* =====================================================================
-          1. CỤM HUD TỐC ĐỘ & BIỂN BÁO P.127 GÓC TRÊN BÊN TRÁI (Nổi trên mặt bản đồ!)
+          1. CỤM HUD TỐC ĐỘ & BIỂN BÁO P.127 GÓC TRÊN BÊN TRÁI
          ===================================================================== */}
       <div
         onClick={gpsStatus !== 'active' ? requestGps : undefined}
         className={`absolute top-2.5 left-2.5 z-20 backdrop-blur-xl rounded-2xl border px-3 py-2 flex items-center gap-3 shadow-[0_10px_30px_rgba(0,0,0,0.75)] transition-colors ${
           isDangerOverLimit
             ? 'bg-rose-950/90 border-rose-500 ring-2 ring-rose-500/50'
-            : 'bg-black/75 border-white/20'
+            : 'bg-black/80 border-white/25'
         } ${gpsStatus !== 'active' ? 'cursor-pointer' : ''}`}
       >
-        {/* Số KM/H */}
         <div className="flex flex-col">
           <div className="flex items-baseline gap-1">
             <span
               className={`text-4xl sm:text-5xl short:text-3xl font-black tabular-nums tracking-tighter leading-none ${
                 speedKmh === null
-                  ? 'text-white/60'
+                  ? 'text-white'
                   : isDangerOverLimit
                   ? 'text-rose-400'
                   : isOverLimit
@@ -458,9 +602,9 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                   : 'text-emerald-300'
               }`}
             >
-              {speedKmh !== null ? speedKmh : '--'}
+              {speedKmh !== null ? speedKmh : '0'}
             </span>
-            <span className="text-[10px] font-black text-white/60">KM/H</span>
+            <span className="text-[10px] font-black text-white/70">KM/H</span>
           </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             <span
@@ -468,12 +612,12 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                 gpsStatus === 'active' ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'
               }`}
             />
-            <span className="text-[9px] font-extrabold uppercase tracking-wider text-white/65">
+            <span className="text-[9px] font-extrabold uppercase tracking-wider text-white/75">
               {gpsStatus === 'active'
                 ? isDangerOverLimit
                   ? 'QUÁ TỐC ĐỘ!'
                   : 'GPS LIVE'
-                : 'Bật GPS'}
+                : 'Chạm bật GPS'}
             </span>
             <button
               type="button"
@@ -505,7 +649,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             </div>
             <span
               className={`text-[8px] font-extrabold uppercase mt-0.5 ${
-                roadInfo?.isVerifiedLimit ? 'text-emerald-300' : 'text-amber-200/80'
+                roadInfo?.isVerifiedLimit ? 'text-emerald-300' : 'text-amber-200'
               }`}
             >
               {roadInfo?.isVerifiedLimit ? 'OSM' : 'T.Khảo'}
@@ -527,14 +671,14 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
               runPlaceSearch('', 'ev');
             }
           }}
-          className={`min-h-[38px] short:min-h-[34px] px-3 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition ${
+          className={`min-h-[38px] short:min-h-[34px] px-2.5 sm:px-3 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition ${
             navDrawerOpen
               ? 'bg-white text-black border-white'
-              : 'bg-black/75 hover:bg-black/90 text-sky-200 border-white/20'
+              : 'bg-black/80 hover:bg-black/95 text-sky-200 border-white/25'
           }`}
         >
-          <Navigation className="w-3.5 h-3.5" />
-          <span className="hidden xs:inline">Dẫn đường / Trạm sạc</span>
+          <Navigation className="w-3.5 h-3.5 shrink-0" />
+          <span className="hidden sm:inline">Dẫn đường / Sạc</span>
         </button>
 
         <button
@@ -544,7 +688,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             setIsFollowing(true);
           }}
           title="Đổi góc nhìn 3D Mũi xe / 2D Hướng Bắc"
-          className="min-h-[38px] short:min-h-[34px] px-2.5 rounded-xl bg-black/75 hover:bg-black/90 backdrop-blur-xl border border-white/20 text-white text-xs font-black flex items-center gap-1 shadow-lg active:scale-95 transition"
+          className="min-h-[38px] short:min-h-[34px] px-2.5 rounded-xl bg-black/80 hover:bg-black/95 backdrop-blur-xl border border-white/25 text-white text-xs font-black flex items-center gap-1 shadow-lg active:scale-95 transition"
         >
           <Compass className="w-3.5 h-3.5 text-emerald-300" />
           <span>{is3DHeadingUp ? '3D' : '2D'}</span>
@@ -552,19 +696,19 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
 
         <button
           type="button"
-          onClick={() => setIsDarkMap((v) => !v)}
-          aria-label="Đổi màu bản đồ Sáng hoặc Tối"
-          className="w-9 h-9 short:w-8 short:h-8 rounded-xl bg-black/75 hover:bg-black/90 backdrop-blur-xl border border-white/20 text-white flex items-center justify-center shadow-lg active:scale-95 transition"
+          onClick={cycleMapTheme}
+          title="Đổi lớp bản đồ: Rõ nét / Đêm / Nhà 3D / Vệ tinh"
+          className="min-h-[38px] short:min-h-[34px] px-2.5 rounded-xl bg-black/80 hover:bg-black/95 backdrop-blur-xl border border-white/25 text-white text-xs font-extrabold flex items-center gap-1 shadow-lg active:scale-95 transition"
         >
-          {isDarkMap ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4" />}
+          <Layers className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+          <span className="hidden xs:inline">{THEME_LABELS[mapTheme]}</span>
         </button>
 
         <button
           type="button"
           onClick={onToggleExpandMap}
           aria-label={isMapExpanded ? 'Thu gọn bản đồ về chia đôi' : 'Mở rộng bản đồ toàn màn hình'}
-          title={isMapExpanded ? 'Chia đôi Bản đồ & Nhạc' : 'Phóng rộng Bản đồ'}
-          className="w-9 h-9 short:w-8 short:h-8 rounded-xl bg-black/75 hover:bg-black/90 backdrop-blur-xl border border-white/20 text-white flex items-center justify-center shadow-lg active:scale-95 transition"
+          className="w-9 h-9 short:w-8 short:h-8 rounded-xl bg-black/80 hover:bg-black/95 backdrop-blur-xl border border-white/25 text-white flex items-center justify-center shadow-lg active:scale-95 transition"
         >
           {isMapExpanded ? (
             <Minimize2 className="w-4 h-4 text-sky-300" />
@@ -575,10 +719,10 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
       </div>
 
       {/* =====================================================================
-          3. THANH DẪN ĐƯỜNG ĐANG CHẠY (Hiện khi đã chọn Đích đến / Trạm sạc)
+          3. THANH DẪN ĐƯỜNG ĐANG CHẠY
          ===================================================================== */}
       {activeRoute && !navDrawerOpen && (
-        <div className="absolute top-15 short:top-13 right-2.5 z-20 max-w-[260px] bg-sky-950/90 backdrop-blur-xl border border-sky-400/50 rounded-2xl px-3 py-2 flex items-center justify-between gap-2 shadow-2xl">
+        <div className="absolute top-15 short:top-13 right-2.5 z-20 max-w-[260px] bg-sky-950/95 backdrop-blur-xl border border-sky-400/60 rounded-2xl px-3 py-2 flex items-center justify-between gap-2 shadow-2xl">
           <div className="min-w-0">
             <div className="flex items-center gap-1 text-[11px] font-black text-sky-300 truncate">
               <Flag className="w-3 h-3 shrink-0" />
@@ -600,10 +744,10 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
       )}
 
       {/* =====================================================================
-          4. HỘP TÌM ĐỊA ĐIỂM & TRẠM SẠC VINFAST NHANH NGAY TRONG BẢN ĐỒ
+          4. HỘP TÌM ĐỊA ĐIỂM & TRẠM SẠC VINFAST NHANH
          ===================================================================== */}
       {navDrawerOpen && (
-        <div className="absolute inset-x-2.5 top-14 short:top-12 bottom-12 z-30 bg-black/90 backdrop-blur-2xl border border-white/20 rounded-2xl p-2.5 flex flex-col gap-2 shadow-2xl animate-ios-sheet-in">
+        <div className="absolute inset-x-2.5 top-14 short:top-12 bottom-12 z-30 bg-black/92 backdrop-blur-2xl border border-white/25 rounded-2xl p-2.5 flex flex-col gap-2 shadow-2xl animate-ios-sheet-in">
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -636,7 +780,6 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             </button>
           </form>
 
-          {/* Nút 1-chạm tìm nhanh cho chủ xe điện VinFast VF5 */}
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
             <button
               type="button"
@@ -701,15 +844,14 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
          ===================================================================== */}
       <div className="absolute inset-x-2.5 bottom-2 z-20 flex flex-col gap-1.5 pointer-events-none">
         <div className="flex flex-wrap items-center justify-between gap-1.5">
-          {/* Cảnh báo Camera / Đèn đỏ phía trước */}
           <div className="flex flex-wrap items-center gap-1.5">
             {roadInfo?.hazards?.map((hz, i) => (
               <span
                 key={i}
                 className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold flex items-center gap-1 border backdrop-blur-xl shadow-lg ${
                   hz.type === 'camera'
-                    ? 'bg-rose-600/90 border-rose-300 text-white animate-pulse'
-                    : 'bg-amber-600/90 border-amber-300 text-white'
+                    ? 'bg-rose-600/95 border-rose-300 text-white animate-pulse'
+                    : 'bg-amber-600/95 border-amber-300 text-white'
                 }`}
               >
                 {hz.type === 'camera' ? (
@@ -722,7 +864,6 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             ))}
           </div>
 
-          {/* Nút đưa tâm bản đồ quay lại mũi xe khi người dùng đã kéo lệch */}
           {!isFollowing && (
             <button
               type="button"
@@ -735,8 +876,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
           )}
         </div>
 
-        {/* Thanh Tên Đường Hiện Tại + Giờ & Thời Tiết */}
-        <div className="bg-black/80 backdrop-blur-xl border border-white/15 rounded-xl px-3 py-1.5 flex items-center justify-between gap-2 shadow-xl">
+        <div className="bg-black/85 backdrop-blur-xl border border-white/20 rounded-xl px-3 py-1.5 flex items-center justify-between gap-2 shadow-xl">
           <div className="flex items-center gap-1.5 min-w-0">
             {roadInfo?.roadRef && (
               <span className="px-1.5 py-0.2 rounded bg-sky-500/25 border border-sky-400/40 text-[10px] font-black text-sky-200 shrink-0">
@@ -758,7 +898,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
 
           <div className="flex items-center gap-2 text-[11px] font-bold text-white/85 shrink-0">
             {weather && (
-              <span className={weather.isRainy ? 'text-sky-300' : 'text-white/80'}>
+              <span className={weather.isRainy ? 'text-sky-300' : 'text-white/85'}>
                 {weather.icon} {weather.temperature}°C
               </span>
             )}

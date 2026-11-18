@@ -105,10 +105,10 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
 
   return (
     <div
-      className={`flex-1 min-h-0 w-full max-w-[1560px] mx-auto animate-ios-browse-in overflow-y-auto car:overflow-hidden no-scrollbar ${
+      className={`flex-1 min-h-0 h-full w-full max-w-[1560px] mx-auto animate-ios-browse-in overflow-y-auto car:overflow-hidden no-scrollbar ${
         isMapExpanded
           ? 'flex flex-col gap-2'
-          : 'grid grid-cols-1 car:grid-cols-12 gap-2.5 sm:gap-3 items-stretch'
+          : 'grid grid-cols-1 car:grid-cols-12 car:grid-rows-[minmax(0,1fr)] gap-2.5 sm:gap-3 items-stretch'
       }`}
     >
       {/* =====================================================================
@@ -117,8 +117,8 @@ export const CockpitView: React.FC<CockpitViewProps> = ({
       <div
         className={
           isMapExpanded
-            ? 'flex-1 min-h-0 w-full'
-            : 'car:col-span-7 min-h-[240px] car:min-h-0 h-full'
+            ? 'flex-1 min-h-[300px] car:min-h-0 w-full h-full'
+            : 'car:col-span-7 min-h-[320px] car:min-h-0 h-full'
         }
       >
         <Suspense
