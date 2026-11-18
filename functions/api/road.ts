@@ -35,6 +35,8 @@ interface HazardItem {
   type: 'camera' | 'toll' | 'railway' | 'school' | 'signals';
   label: string;
   distanceM: number;
+  lat: number;
+  lon: number;
 }
 
 function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -259,15 +261,15 @@ export async function onRequestGet(context: any) {
         (t.man_made === 'surveillance' &&
           (t['surveillance:type'] === 'camera' || t.surveillance === 'traffic'))
       ) {
-        hazards.push({ type: 'camera', label: `Camera ${distM}m`, distanceM: distM });
+        hazards.push({ type: 'camera', label: `Camera ${distM}m`, distanceM: distM, lat: el.lat, lon: el.lon });
       } else if (t.barrier === 'toll_booth') {
-        hazards.push({ type: 'toll', label: `Trạm thu phí ${distM}m`, distanceM: distM });
+        hazards.push({ type: 'toll', label: `Trạm thu phí ${distM}m`, distanceM: distM, lat: el.lat, lon: el.lon });
       } else if (t.railway === 'level_crossing') {
-        hazards.push({ type: 'railway', label: `Đường sắt ${distM}m`, distanceM: distM });
+        hazards.push({ type: 'railway', label: `Đường sắt ${distM}m`, distanceM: distM, lat: el.lat, lon: el.lon });
       } else if (t.amenity === 'school' && distM <= 180) {
-        hazards.push({ type: 'school', label: 'Gần trường học', distanceM: distM });
+        hazards.push({ type: 'school', label: 'Gần trường học', distanceM: distM, lat: el.lat, lon: el.lon });
       } else if (t.highway === 'traffic_signals' && distM <= 150) {
-        hazards.push({ type: 'signals', label: `Đèn giao thông ${distM}m`, distanceM: distM });
+        hazards.push({ type: 'signals', label: `Đèn giao thông ${distM}m`, distanceM: distM, lat: el.lat, lon: el.lon });
       }
     }
   }

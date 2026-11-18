@@ -11,6 +11,8 @@ export interface RoadHazard {
   type: 'camera' | 'toll' | 'railway' | 'school' | 'signals';
   label: string;
   distanceM: number;
+  lat?: number;
+  lon?: number;
 }
 
 export interface RoadInfraInfo {
@@ -27,6 +29,7 @@ export interface RoadInfraInfo {
 export interface CockpitTelemetry {
   speedKmh: number | null;
   gpsStatus: 'idle' | 'active' | 'denied' | 'unsupported';
+  position: { lat: number; lon: number; heading: number | null };
   weather: WeatherInfo | null;
   roadInfo: RoadInfraInfo | null;
   speedAlertSound: boolean;
@@ -132,6 +135,16 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
     return { lat: 21.0285, lon: 105.8542 };
   });
 
+  const [livePosition, setLivePosition] = useState<{
+    lat: number;
+    lon: number;
+    heading: number | null;
+  }>(() => ({
+    lat: weatherCoords.lat,
+    lon: weatherCoords.lon,
+    heading: null,
+  }));
+
   const [liveGpsFix, setLiveGpsFix] = useState<{
     lat: number;
     lon: number;
@@ -228,6 +241,11 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
         }
 
         prevFixRef.current = { lat: latitude, lon: longitude, time: now };
+        setLivePosition((prev) => ({
+          lat: latitude,
+          lon: longitude,
+          heading: computedHeading !== null ? computedHeading : prev.heading,
+        }));
 
         if (rawKmh !== null) {
           const clean = rawKmh < 2.6 ? 0 : Math.min(200, rawKmh);
@@ -393,6 +411,7 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
   return {
     speedKmh,
     gpsStatus,
+    position: livePosition,
     weather,
     roadInfo,
     speedAlertSound,
