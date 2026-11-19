@@ -2,19 +2,53 @@
 // Engine Phim Rạp ĐA NGUỒN:
 // 1) KKPhim (https://phimapi.com — tài liệu https://kkphim.com/api-document) — 30.600+ phim, 1080p HLS
 // 2) VSMov  (https://vsmov.com/api — tài liệu https://vsmov.com/api-document) — 38.500+ phim, Chiếu rạp & Subteam
-// - GET action=meta&source=kkphim|vsmov   : Thể loại + Quốc gia, cache 24h
-// - GET action=list&source=...            : Danh sách & bộ lọc Thể loại / Quốc gia / Năm / Âm thanh
-// - GET action=search&source=...          : Tìm kiếm phim
-// - GET action=detail&source=...&slug=... : Chi tiết phim + Server + Tập phim + link_m3u8 & link_embed
-// - GET action=clean-m3u8                 : Lọc quảng cáo chèn trong HLS manifest
+// 3) VidSrc (https://vidsrc.mov/embed — danh mục IMDb/Cinemeta quốc tế) — Phim lẻ & Series TV 1080p đa phụ đề
+// - GET action=meta&source=kkphim|vsmov|vidsrc : Thể loại + Quốc gia, cache 24h
+// - GET action=list&source=...                 : Danh sách & bộ lọc Thể loại / Quốc gia / Năm / Âm thanh
+// - GET action=search&source=...               : Tìm kiếm phim (VidSrc hỗ trợ cả tìm tên & IMDb/TMDB ID trực tiếp!)
+// - GET action=detail&source=...&slug=...      : Chi tiết phim + Server/Mùa + Tập phim + link_m3u8 & link_embed
+// - GET action=clean-m3u8                      : Lọc quảng cáo chèn trong HLS manifest
 
-type MovieSource = 'kkphim' | 'vsmov';
+type MovieSource = 'kkphim' | 'vsmov' | 'vidsrc';
 
 const PHIMAPI_BASE = 'https://phimapi.com';
 const CDN_IMAGE_BASE = 'https://phimimg.com';
 
 const VSMOV_API_BASE = 'https://vsmov.com/api';
 const VSMOV_IMAGE_BASE = 'https://vsmov.com/storage/images';
+
+const VIDSRC_EMBED_BASE = 'https://vidsrc.mov/embed';
+const VIDSRC_DIRECT_BASE = 'https://vidsrc.sh/embed';
+const CINEMETA_BASE = 'https://v3-cinemeta.strem.io';
+
+const VIDSRC_GENRES: Array<{ name: string; slug: string; canonical: string }> = [
+  { name: 'Hành động (Action)', slug: 'action', canonical: 'Action' },
+  { name: 'Phiêu lưu (Adventure)', slug: 'adventure', canonical: 'Adventure' },
+  { name: 'Hoạt hình (Animation)', slug: 'animation', canonical: 'Animation' },
+  { name: 'Viễn tưởng (Sci-Fi)', slug: 'sci-fi', canonical: 'Sci-Fi' },
+  { name: 'Giật gân (Thriller)', slug: 'thriller', canonical: 'Thriller' },
+  { name: 'Kinh dị (Horror)', slug: 'horror', canonical: 'Horror' },
+  { name: 'Hài hước (Comedy)', slug: 'comedy', canonical: 'Comedy' },
+  { name: 'Tâm lý (Drama)', slug: 'drama', canonical: 'Drama' },
+  { name: 'Tình cảm (Romance)', slug: 'romance', canonical: 'Romance' },
+  { name: 'Tội phạm (Crime)', slug: 'crime', canonical: 'Crime' },
+  { name: 'Bí ẩn (Mystery)', slug: 'mystery', canonical: 'Mystery' },
+  { name: 'Thần thoại (Fantasy)', slug: 'fantasy', canonical: 'Fantasy' },
+  { name: 'Gia đình (Family)', slug: 'family', canonical: 'Family' },
+  { name: 'Chiến tranh (War)', slug: 'war', canonical: 'War' },
+  { name: 'Lịch sử (History)', slug: 'history', canonical: 'History' },
+  { name: 'Tài liệu (Documentary)', slug: 'documentary', canonical: 'Documentary' },
+  { name: 'Tiểu sử (Biography)', slug: 'biography', canonical: 'Biography' },
+  { name: 'Thể thao (Sport)', slug: 'sport', canonical: 'Sport' },
+  { name: 'Miền Tây (Western)', slug: 'western', canonical: 'Western' },
+];
+
+const VIDSRC_GENRE_CANONICAL = new Map<string, string>(
+  VIDSRC_GENRES.map((g) => [g.slug, g.canonical])
+);
+const VIDSRC_GENRE_LABEL = new Map<string, string>(
+  VIDSRC_GENRES.map((g) => [g.slug, g.name])
+);
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
@@ -140,6 +174,193 @@ function normalizeMovieItem(
   };
 }
 
+function normalizeCinemetaItem(meta: any, fallbackKind: 'movie' | 'series' = 'movie') {
+  const imdbId = String(meta?.imdb_id || meta?.id || '').trim();
+  const kind: 'movie' | 'series' =
+    meta?.type === 'series' || fallbackKind === 'series' ? 'series' : 'movie';
+  const yearMatch = String(meta?.releaseInfo || meta?.year || '').match(/\d{4}/);
+  const year = yearMatch ? Number(yearMatch[0]) : 0;
+  const ratingRaw = parseFloat(String(meta?.imdbRating || '0'));
+  const rating = Number.isFinite(ratingRaw) && ratingRaw > 0 ? Math.round(ratingRaw * 10) / 10 : 0;
+
+  const rawPoster = typeof meta?.poster === 'string' ? meta.poster.trim() : '';
+  const posterUrl = rawPoster
+    ? rawPoster.replace('/poster/small/', '/poster/medium/')
+    : imdbId.startsWith('tt')
+    ? `https://images.metahub.space/poster/medium/${imdbId}/img`
+    : '';
+  const rawBg = typeof meta?.background === 'string' ? meta.background.trim() : '';
+  const thumbUrl =
+    rawBg ||
+    (imdbId.startsWith('tt')
+      ? `https://images.metahub.space/background/medium/${imdbId}/img`
+      : posterUrl);
+
+  const rawGenres: string[] = Array.isArray(meta?.genres)
+    ? meta.genres
+    : Array.isArray(meta?.genre)
+    ? meta.genre
+    : [];
+  const categories = rawGenres
+    .map((g) => {
+      const clean = decodeEntities(g);
+      const slug = clean.toLowerCase().replace(/\s+/g, '-');
+      return { name: VIDSRC_GENRE_LABEL.get(slug) || clean, slug };
+    })
+    .filter((c) => c.name && c.slug);
+
+  const countryStr = typeof meta?.country === 'string' ? meta.country : '';
+  const countries = countryStr
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .map((c) => ({ name: c, slug: c.toLowerCase().replace(/[^a-z0-9]+/g, '-') }));
+
+  return {
+    id: imdbId,
+    source: 'vidsrc' as MovieSource,
+    name: decodeEntities(meta?.name) || imdbId,
+    originName: imdbId ? `${imdbId.toUpperCase()} • ${kind === 'series' ? 'TV Series' : 'Movie'}` : '',
+    slug: `${kind}--${imdbId.toLowerCase()}`,
+    type: kind,
+    posterUrl,
+    thumbUrl,
+    year,
+    quality: '1080p',
+    lang: 'Multi-Sub',
+    time: decodeEntities(meta?.runtime),
+    episodeCurrent: kind === 'series' ? 'Series TV' : 'Full HD',
+    episodeTotal: '',
+    chieurap: false,
+    subDocQuyen: false,
+    rating,
+    categories,
+    countries,
+  };
+}
+
+function parseVidsrcSlug(rawSlug: string): {
+  kind: 'movie' | 'series';
+  id: string;
+  isTmdb: boolean;
+} | null {
+  const s = rawSlug.trim().toLowerCase();
+  const prefixed = s.match(/^(movie|series)--(tmdb-)?(tt\d{5,12}|\d{2,10})$/i);
+  if (prefixed) {
+    const kind = prefixed[1] === 'series' ? 'series' : 'movie';
+    const isTmdb = Boolean(prefixed[2]) || !prefixed[3].startsWith('tt');
+    return { kind, id: prefixed[3], isTmdb };
+  }
+  if (/^tt\d{5,12}$/i.test(s)) {
+    return { kind: 'movie', id: s, isTmdb: false };
+  }
+  if (/^\d{2,10}$/.test(s)) {
+    return { kind: 'movie', id: s, isTmdb: true };
+  }
+  return null;
+}
+
+function buildVidsrcServers(
+  kind: 'movie' | 'series',
+  mediaId: string,
+  title: string,
+  videos: any[]
+) {
+  if (kind === 'movie') {
+    return [
+      {
+        serverName: 'VidSrc.mov (Chính • 1080p)',
+        episodes: [
+          {
+            name: 'Full 1080p',
+            slug: 'full',
+            filename: `${title} • VidSrc.mov`,
+            linkEmbed: `${VIDSRC_EMBED_BASE}/movie/${mediaId}`,
+            linkM3u8: '',
+          },
+        ],
+      },
+      {
+        serverName: 'VidSrc Direct (Ít Popup)',
+        episodes: [
+          {
+            name: 'Full 1080p',
+            slug: 'full-direct',
+            filename: `${title} • VidSrc Direct`,
+            linkEmbed: `${VIDSRC_DIRECT_BASE}/movie/${mediaId}/`,
+            linkM3u8: '',
+          },
+        ],
+      },
+    ];
+  }
+
+  // TV Series: gom theo từng Mùa (Season 1, Mùa 2...) chuẩn link https://vidsrc.mov/embed/tv/{id}/{s}/{e}
+  const nowMs = Date.now() + 24 * 60 * 60 * 1000;
+  const seasonMap = new Map<number, any[]>();
+  const allVideos = Array.isArray(videos) ? videos : [];
+  const hasPositiveSeason = allVideos.some((v) => Number(v?.season) >= 1);
+
+  for (const v of allVideos) {
+    const season = Number(v?.season);
+    const epNum = Number(v?.episode ?? v?.number);
+    if (!Number.isFinite(season) || !Number.isFinite(epNum) || epNum < 1) continue;
+    if (hasPositiveSeason && season < 1) continue;
+    // Bỏ qua các tập tương lai chưa công chiếu (nếu có ngày phát sóng rõ ràng)
+    if (v?.released) {
+      const relMs = Date.parse(String(v.released));
+      if (Number.isFinite(relMs) && relMs > nowMs) continue;
+    }
+    const list = seasonMap.get(season) || [];
+    list.push({ ...v, _epNum: epNum });
+    seasonMap.set(season, list);
+  }
+
+  const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => a - b);
+  const servers = sortedSeasons.map((seasonNum) => {
+    const eps = (seasonMap.get(seasonNum) || [])
+      .sort((a, b) => a._epNum - b._epNum)
+      .filter((v, idx, arr) => idx === 0 || v._epNum !== arr[idx - 1]._epNum);
+
+    return {
+      serverName: seasonNum === 0 ? 'Đặc biệt (VidSrc.mov)' : `Mùa ${seasonNum} (VidSrc.mov)`,
+      episodes: eps.map((v) => {
+        const epTitle = decodeEntities(v?.name || v?.title);
+        const sPad = String(seasonNum).padStart(2, '0');
+        const ePad = String(v._epNum).padStart(2, '0');
+        return {
+          name: `Tập ${v._epNum}`,
+          slug: `s${seasonNum}e${v._epNum}`,
+          filename: epTitle ? `S${sPad}E${ePad} • ${epTitle}` : `S${sPad}E${ePad}`,
+          linkEmbed: `${VIDSRC_EMBED_BASE}/tv/${mediaId}/${seasonNum}/${v._epNum}`,
+          linkM3u8: '',
+        };
+      }),
+    };
+  });
+
+  if (servers.length > 0) {
+    return servers;
+  }
+
+  // Fallback nếu phim bộ mới chưa có danh sách tập trên Cinemeta (hoặc nhập trực tiếp TMDB ID)
+  return [
+    {
+      serverName: 'Mùa 1 (VidSrc.mov)',
+      episodes: Array.from({ length: 12 }, (_, idx) => {
+        const n = idx + 1;
+        return {
+          name: `Tập ${n}`,
+          slug: `s1e${n}`,
+          filename: `S01E${String(n).padStart(2, '0')}`,
+          linkEmbed: `${VIDSRC_EMBED_BASE}/tv/${mediaId}/1/${n}`,
+          linkM3u8: '',
+        };
+      }),
+    },
+  ];
+}
+
 async function fetchJson(url: string, timeoutMs = 10000): Promise<any> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -154,7 +375,7 @@ async function fetchJson(url: string, timeoutMs = 10000): Promise<any> {
       },
     });
     if (!res.ok) {
-      throw new Error(`KKPhim API HTTP ${res.status}`);
+      throw new Error(`Movie API HTTP ${res.status}`);
     }
     return await res.json();
   } finally {
@@ -294,15 +515,31 @@ export const onRequest: PagesFunction = async (context) => {
 
   const reqUrl = new URL(request.url);
   const action = (reqUrl.searchParams.get('action') || 'list').toLowerCase();
+  const rawSource = (reqUrl.searchParams.get('source') || 'kkphim').toLowerCase();
   const source: MovieSource =
-    (reqUrl.searchParams.get('source') || 'kkphim').toLowerCase() === 'vsmov'
-      ? 'vsmov'
-      : 'kkphim';
+    rawSource === 'vsmov' ? 'vsmov' : rawSource === 'vidsrc' ? 'vidsrc' : 'kkphim';
 
   // =========================================================================
-  // 1. ACTION = META (Danh sách Thể loại & Quốc gia theo nguồn KKPhim hoặc VSMov)
+  // 1. ACTION = META (Danh sách Thể loại & Quốc gia theo nguồn KKPhim / VSMov / VidSrc)
   // =========================================================================
   if (action === 'meta') {
+    if (source === 'vidsrc') {
+      return new Response(
+        JSON.stringify({
+          source: 'vidsrc',
+          genres: VIDSRC_GENRES.map((g) => ({ name: g.name, slug: g.slug })),
+          countries: [],
+        }),
+        {
+          status: 200,
+          headers: {
+            ...JSON_HEADERS,
+            'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+          },
+        }
+      );
+    }
+
     const base = source === 'vsmov' ? VSMOV_API_BASE : PHIMAPI_BASE;
     try {
       const [tlRes, qgRes] = await Promise.all([
@@ -357,6 +594,77 @@ export const onRequest: PagesFunction = async (context) => {
     const page = Number.isFinite(pageRaw) && pageRaw >= 1 && pageRaw <= 500 ? pageRaw : 1;
     const limitRaw = parseInt(reqUrl.searchParams.get('limit') || '24', 10);
     const limit = Number.isFinite(limitRaw) && limitRaw >= 6 && limitRaw <= 48 ? limitRaw : 24;
+
+    // --- NHÁNH VIDSRC (https://vidsrc.mov/embed + Danh mục quốc tế IMDb/Cinemeta) ---
+    if (source === 'vidsrc') {
+      try {
+        const mediaType: 'movie' | 'series' =
+          type === 'phim-bo' || type === 'series-imdb' ? 'series' : 'movie';
+        const skip = (page - 1) * limit;
+        const extraParts: string[] = [];
+
+        let catalogId = type === 'top-imdb' || type === 'series-imdb' ? 'imdbRating' : 'top';
+        if (year && /^\d{4}$/.test(year)) {
+          catalogId = 'year';
+          extraParts.push(`genre=${year}`);
+        } else {
+          const canonicalGenre = category
+            ? VIDSRC_GENRE_CANONICAL.get(category)
+            : type === 'hoat-hinh'
+            ? 'Animation'
+            : undefined;
+          if (canonicalGenre) {
+            extraParts.push(`genre=${encodeURIComponent(canonicalGenre)}`);
+          }
+        }
+        if (skip > 0) {
+          extraParts.push(`skip=${skip}`);
+        }
+
+        const extraSeg = extraParts.length > 0 ? `/${extraParts.join('&')}` : '';
+        const endpoint = `${CINEMETA_BASE}/catalog/${mediaType}/${catalogId}${extraSeg}.json`;
+        const res = await fetchJson(endpoint);
+        const rawMetas = Array.isArray(res?.metas) ? res.metas : [];
+
+        // Cinemeta trả tối đa ~50 item mỗi batch -> cắt đúng `limit` để chuyển trang mượt, không trùng
+        const items = rawMetas
+          .slice(0, limit)
+          .map((m: any) => normalizeCinemetaItem(m, mediaType))
+          .filter((x: any) => x.id);
+        const hasMore = rawMetas.length >= limit;
+        const totalPages = hasMore ? Math.max(page + 1, 20) : page;
+
+        return new Response(
+          JSON.stringify({
+            source: 'vidsrc',
+            title: 'Kho Phim Quốc Tế VidSrc.mov',
+            page,
+            totalPages,
+            totalItems: hasMore ? totalPages * limit : skip + items.length,
+            items,
+          }),
+          {
+            status: 200,
+            headers: {
+              ...JSON_HEADERS,
+              'Cache-Control': 'public, max-age=300, s-maxage=300',
+            },
+          }
+        );
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({
+            source: 'vidsrc',
+            error: err?.message || 'Không tải được danh sách phim từ VidSrc',
+            items: [],
+            page: 1,
+            totalPages: 1,
+            totalItems: 0,
+          }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
+    }
 
     // --- NHÁNH VSMOV (https://vsmov.com/api) ---
     if (source === 'vsmov') {
@@ -562,6 +870,166 @@ export const onRequest: PagesFunction = async (context) => {
     if (sortLang) params.set('sort_lang', sortLang);
 
     try {
+      if (source === 'vidsrc') {
+        const kwLower = keyword.toLowerCase();
+
+        // 1) Hỗ trợ dán trực tiếp IMDb ID (vd: tt17048514) hoặc TMDB ID số (vd: 927085) chuẩn tài liệu vidsrc.mov!
+        if (/^tt\d{5,12}$/i.test(kwLower)) {
+          const [mRes, sRes] = await Promise.allSettled([
+            fetchJson(`${CINEMETA_BASE}/meta/movie/${kwLower}.json`),
+            fetchJson(`${CINEMETA_BASE}/meta/series/${kwLower}.json`),
+          ]);
+          const found: any[] = [];
+          if (mRes.status === 'fulfilled' && mRes.value?.meta?.id) {
+            found.push(normalizeCinemetaItem(mRes.value.meta, 'movie'));
+          }
+          if (sRes.status === 'fulfilled' && sRes.value?.meta?.id) {
+            found.push(normalizeCinemetaItem(sRes.value.meta, 'series'));
+          }
+          if (found.length === 0) {
+            found.push({
+              id: kwLower,
+              source: 'vidsrc',
+              name: `Phim IMDb ${kwLower.toUpperCase()}`,
+              originName: 'Phát trực tiếp qua VidSrc.mov',
+              slug: `movie--${kwLower}`,
+              type: 'movie',
+              posterUrl: `https://images.metahub.space/poster/medium/${kwLower}/img`,
+              thumbUrl: `https://images.metahub.space/background/medium/${kwLower}/img`,
+              year: 0,
+              quality: '1080p',
+              lang: 'Multi-Sub',
+              time: '',
+              episodeCurrent: 'Full HD',
+              episodeTotal: '',
+              chieurap: false,
+              subDocQuyen: false,
+              rating: 0,
+              categories: [],
+              countries: [],
+            });
+          }
+          return new Response(
+            JSON.stringify({
+              source: 'vidsrc',
+              title: `VidSrc IMDb: ${kwLower.toUpperCase()}`,
+              keyword,
+              page: 1,
+              totalPages: 1,
+              totalItems: found.length,
+              items: found,
+            }),
+            { status: 200, headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=300, s-maxage=300' } }
+          );
+        }
+
+        if (/^\d{2,10}$/.test(kwLower)) {
+          const tmdbItems = [
+            {
+              id: kwLower,
+              source: 'vidsrc',
+              name: `Movie TMDB #${kwLower}`,
+              originName: 'VidSrc.mov • Phát trực tiếp bằng TMDB ID',
+              slug: `movie--tmdb-${kwLower}`,
+              type: 'movie',
+              posterUrl: '',
+              thumbUrl: '',
+              year: 0,
+              quality: '1080p',
+              lang: 'Multi-Sub',
+              time: '',
+              episodeCurrent: 'Full HD',
+              episodeTotal: '',
+              chieurap: false,
+              subDocQuyen: false,
+              rating: 0,
+              categories: [],
+              countries: [],
+            },
+            {
+              id: kwLower,
+              source: 'vidsrc',
+              name: `TV Series TMDB #${kwLower}`,
+              originName: 'VidSrc.mov • Phát trực tiếp Series bằng TMDB ID',
+              slug: `series--tmdb-${kwLower}`,
+              type: 'series',
+              posterUrl: '',
+              thumbUrl: '',
+              year: 0,
+              quality: '1080p',
+              lang: 'Multi-Sub',
+              time: '',
+              episodeCurrent: 'Series TV',
+              episodeTotal: '',
+              chieurap: false,
+              subDocQuyen: false,
+              rating: 0,
+              categories: [],
+              countries: [],
+            },
+          ];
+          return new Response(
+            JSON.stringify({
+              source: 'vidsrc',
+              title: `VidSrc TMDB #${kwLower}`,
+              keyword,
+              page: 1,
+              totalPages: 1,
+              totalItems: tmdbItems.length,
+              items: tmdbItems,
+            }),
+            { status: 200, headers: JSON_HEADERS }
+          );
+        }
+
+        // 2) Tìm kiếm song song cả Phim lẻ (movie) và Series TV (series) trên kho IMDb quốc tế
+        const qEnc = encodeURIComponent(keyword);
+        const [movieRes, seriesRes] = await Promise.allSettled([
+          fetchJson(`${CINEMETA_BASE}/catalog/movie/top/search=${qEnc}.json`),
+          fetchJson(`${CINEMETA_BASE}/catalog/series/top/search=${qEnc}.json`),
+        ]);
+
+        const movieList =
+          movieRes.status === 'fulfilled' && Array.isArray(movieRes.value?.metas)
+            ? movieRes.value.metas.map((m: any) => normalizeCinemetaItem(m, 'movie'))
+            : [];
+        const seriesList =
+          seriesRes.status === 'fulfilled' && Array.isArray(seriesRes.value?.metas)
+            ? seriesRes.value.metas.map((m: any) => normalizeCinemetaItem(m, 'series'))
+            : [];
+
+        // Xen kẽ phim lẻ & series để người dùng thấy cả hai ngay đầu kết quả
+        const merged: any[] = [];
+        const seen = new Set<string>();
+        const maxLen = Math.max(movieList.length, seriesList.length);
+        for (let i = 0; i < maxLen; i++) {
+          for (const candidate of [movieList[i], seriesList[i]]) {
+            if (!candidate || !candidate.slug || seen.has(candidate.slug)) continue;
+            seen.add(candidate.slug);
+            merged.push(candidate);
+          }
+        }
+
+        return new Response(
+          JSON.stringify({
+            source: 'vidsrc',
+            title: `Tìm kiếm VidSrc: "${keyword}"`,
+            keyword,
+            page: 1,
+            totalPages: 1,
+            totalItems: merged.length,
+            items: merged.slice(0, Math.max(limit, 36)),
+          }),
+          {
+            status: 200,
+            headers: {
+              ...JSON_HEADERS,
+              'Cache-Control': 'public, max-age=180, s-maxage=180',
+            },
+          }
+        );
+      }
+
       if (source === 'vsmov') {
         const res = await fetchJson(`${VSMOV_API_BASE}/tim-kiem?${params.toString()}`);
         const imgDomain = res?.pathImage || VSMOV_IMAGE_BASE;
@@ -624,10 +1092,11 @@ export const onRequest: PagesFunction = async (context) => {
         }
       );
     } catch (err: any) {
+      const srcLabel = source === 'vsmov' ? 'VSMov' : source === 'vidsrc' ? 'VidSrc' : 'KKPhim';
       return new Response(
         JSON.stringify({
           source,
-          error: err?.message || `Lỗi tìm kiếm phim trên ${source === 'vsmov' ? 'VSMov' : 'KKPhim'}`,
+          error: err?.message || `Lỗi tìm kiếm phim trên ${srcLabel}`,
           items: [],
           page: 1,
           totalPages: 1,
@@ -648,6 +1117,110 @@ export const onRequest: PagesFunction = async (context) => {
         status: 400,
         headers: JSON_HEADERS,
       });
+    }
+
+    if (source === 'vidsrc') {
+      const parsed = parseVidsrcSlug(slug);
+      if (!parsed) {
+        return new Response(JSON.stringify({ error: 'ID phim VidSrc không hợp lệ' }), {
+          status: 400,
+          headers: JSON_HEADERS,
+        });
+      }
+
+      try {
+        let kind: 'movie' | 'series' = parsed.kind;
+        let meta: any = null;
+
+        if (!parsed.isTmdb) {
+          try {
+            const r1 = await fetchJson(`${CINEMETA_BASE}/meta/${kind}/${parsed.id}.json`);
+            if (r1?.meta?.id) meta = r1.meta;
+          } catch {}
+          if (!meta) {
+            const altKind: 'movie' | 'series' = kind === 'movie' ? 'series' : 'movie';
+            try {
+              const r2 = await fetchJson(`${CINEMETA_BASE}/meta/${altKind}/${parsed.id}.json`);
+              if (r2?.meta?.id) {
+                meta = r2.meta;
+                kind = altKind;
+              }
+            } catch {}
+          }
+        }
+
+        const baseItem = meta
+          ? normalizeCinemetaItem(meta, kind)
+          : {
+              id: parsed.id,
+              source: 'vidsrc' as MovieSource,
+              name: parsed.isTmdb
+                ? `${kind === 'series' ? 'TV Series' : 'Movie'} TMDB #${parsed.id}`
+                : `IMDb ${parsed.id.toUpperCase()}`,
+              originName: 'VidSrc.mov • 1080p Multi-Sub',
+              slug,
+              type: kind,
+              posterUrl: !parsed.isTmdb
+                ? `https://images.metahub.space/poster/medium/${parsed.id}/img`
+                : '',
+              thumbUrl: !parsed.isTmdb
+                ? `https://images.metahub.space/background/medium/${parsed.id}/img`
+                : '',
+              year: 0,
+              quality: '1080p',
+              lang: 'Multi-Sub',
+              time: '',
+              episodeCurrent: kind === 'series' ? 'Series TV' : 'Full HD',
+              episodeTotal: '',
+              chieurap: false,
+              subDocQuyen: false,
+              rating: 0,
+              categories: [],
+              countries: [],
+            };
+
+        const servers = buildVidsrcServers(kind, parsed.id, baseItem.name, meta?.videos || []);
+        const totalEps = servers.reduce((acc, s) => acc + s.episodes.length, 0);
+
+        const detail = {
+          ...baseItem,
+          episodeCurrent:
+            kind === 'series'
+              ? `${servers.length} mùa • ${totalEps} tập`
+              : 'Full 1080p',
+          episodeTotal: kind === 'series' ? `${totalEps} tập` : '1080p',
+          content:
+            decodeEntities(meta?.description) ||
+            'Phát trực tiếp chuẩn 1080p từ VidSrc.mov, hỗ trợ đa ngôn ngữ phụ đề (chọn biểu tượng CC trong trình phát).',
+          status: kind === 'series' ? 'TV Series' : 'Released',
+          trailerUrl: '',
+          notify: '',
+          showtimes: '',
+          view: 0,
+          actors: Array.isArray(meta?.cast)
+            ? meta.cast.map((a: any) => decodeEntities(a)).filter(Boolean)
+            : [],
+          directors: Array.isArray(meta?.director)
+            ? meta.director.map((d: any) => decodeEntities(d)).filter(Boolean)
+            : typeof meta?.director === 'string' && meta.director
+            ? [decodeEntities(meta.director)]
+            : [],
+          servers,
+        };
+
+        return new Response(JSON.stringify(detail), {
+          status: 200,
+          headers: {
+            ...JSON_HEADERS,
+            'Cache-Control': 'public, max-age=600, s-maxage=600',
+          },
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ error: err?.message || 'Không tải được chi tiết phim từ VidSrc' }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
     }
 
     const detailUrl =

@@ -34,8 +34,19 @@ export const VSMOV_TABS: MovieTabOption[] = [
   { id: 'hoat-hinh', label: 'Hoạt hình', icon: '🎨' },
 ];
 
+export const VIDSRC_TABS: MovieTabOption[] = [
+  { id: 'moi-cap-nhat', label: 'Thịnh hành', icon: '🔥' },
+  { id: 'phim-le', label: 'Phim lẻ Top', icon: '🎬' },
+  { id: 'phim-bo', label: 'Series TV', icon: '📺' },
+  { id: 'top-imdb', label: 'Top IMDb', icon: '⭐' },
+  { id: 'series-imdb', label: 'Series IMDb', icon: '🏆' },
+  { id: 'hoat-hinh', label: 'Hoạt hình', icon: '🎨' },
+];
+
 export function getMovieTabsForSource(source: MovieSource): MovieTabOption[] {
-  return source === 'vsmov' ? VSMOV_TABS : KKPHIM_TABS;
+  if (source === 'vsmov') return VSMOV_TABS;
+  if (source === 'vidsrc') return VIDSRC_TABS;
+  return KKPHIM_TABS;
 }
 
 export function getMovieKey(source: MovieSource | undefined, slug: string): string {
