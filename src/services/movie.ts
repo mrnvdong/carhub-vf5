@@ -5,6 +5,7 @@ import {
   MovieListType,
   MovieMetaResponse,
   MovieSource,
+  MovieSubtitleTrack,
   MovieWatchHistoryItem,
 } from '../types';
 
@@ -34,6 +35,35 @@ export const VSMOV_TABS: MovieTabOption[] = [
   { id: 'hoat-hinh', label: 'Hoạt hình', icon: '🎨' },
 ];
 
+export const NGUONC_TABS: MovieTabOption[] = [
+  { id: 'moi-cap-nhat', label: 'Mới cập nhật', icon: '🔥' },
+  { id: 'phim-thuyet-minh', label: 'Thuyết minh', icon: '🎙️' },
+  { id: 'phim-long-tieng', label: 'Lồng tiếng', icon: '🗣️' },
+  { id: 'phim-le', label: 'Phim lẻ', icon: '🎬' },
+  { id: 'phim-bo', label: 'Phim bộ', icon: '📺' },
+  { id: 'phim-dang-chieu', label: 'Đang chiếu', icon: '⚡' },
+  { id: 'tv-shows', label: 'TV Shows', icon: '🌟' },
+  { id: 'phim-vietsub', label: 'Vietsub', icon: '📝' },
+];
+
+export const COBEPHIM_TABS: MovieTabOption[] = [
+  { id: 'moi-cap-nhat', label: 'Hot & Song Ngữ', icon: '🔥' },
+  { id: 'phim-le', label: 'Phim lẻ', icon: '🎬' },
+  { id: 'phim-bo', label: 'Phim bộ', icon: '📺' },
+  { id: 'song-ngu', label: 'Song Ngữ', icon: '🎧' },
+  { id: 'trung-quoc', label: 'Trung Quốc mới', icon: '🐉' },
+  { id: 'au-my', label: 'Âu Mỹ mới', icon: '🗽' },
+  { id: 'dien-anh', label: 'Điện ảnh mới', icon: '🎟️' },
+];
+
+export const K20_TABS: MovieTabOption[] = [
+  { id: 'moi-cap-nhat', label: 'Phim 4K', icon: '💎' },
+  { id: 'phim-xua', label: 'CLB Phim Xưa', icon: '📼' },
+  { id: 'the-thao', label: 'Thể Thao Live', icon: '⚽' },
+  { id: 'phim-le', label: 'Phim lẻ K20', icon: '🎬' },
+  { id: 'phim-bo', label: 'Phim bộ K20', icon: '📺' },
+];
+
 export const VIDSRC_TABS: MovieTabOption[] = [
   { id: 'moi-cap-nhat', label: 'Thịnh hành', icon: '🔥' },
   { id: 'phim-le', label: 'Phim lẻ Top', icon: '🎬' },
@@ -45,6 +75,9 @@ export const VIDSRC_TABS: MovieTabOption[] = [
 
 export function getMovieTabsForSource(source: MovieSource): MovieTabOption[] {
   if (source === 'vsmov') return VSMOV_TABS;
+  if (source === 'nguonc') return NGUONC_TABS;
+  if (source === 'cobephim') return COBEPHIM_TABS;
+  if (source === 'k20') return K20_TABS;
   if (source === 'vidsrc') return VIDSRC_TABS;
   return KKPHIM_TABS;
 }
@@ -144,6 +177,126 @@ export async function fetchMovieDetail(
 
 export function buildCleanM3u8Url(rawM3u8: string): string {
   return `/api/movie?action=clean-m3u8&url=${encodeURIComponent(rawM3u8)}`;
+}
+
+export function isVsmovEmbedUrl(url?: string | null): boolean {
+  if (!url) return false;
+  return /^https:\/\/[a-z0-9-]+\.streamvsmov\.com\/video\/[a-z0-9-]+/i.test(url.trim());
+}
+
+export interface VsmovResolvedStream {
+  m3u8Url: string;
+  subtitles: MovieSubtitleTrack[];
+  isSigned: boolean;
+}
+
+const vsmovResolveCache = new Map<string, { data: VsmovResolvedStream; ts: number }>();
+
+export async function resolveVsmovStream(embedUrl: string): Promise<VsmovResolvedStream> {
+  const cached = vsmovResolveCache.get(embedUrl);
+  if (cached) {
+    const ttl = cached.data.isSigned ? 50_000 : 4 * 60_000;
+    if (Date.now() - cached.ts < ttl) {
+      return cached.data;
+    }
+  }
+
+  const res = await fetch(
+    `/api/movie?action=resolve-vsmov&url=${encodeURIComponent(embedUrl)}`
+  );
+  const data = (await res.json()) as VsmovResolvedStream & { error?: string };
+  if (!res.ok || !data.m3u8Url) {
+    throw new Error(data.error || `Không tách được luồng phát VSMov (HTTP ${res.status})`);
+  }
+
+  if (vsmovResolveCache.size >= 40) {
+    const firstKey = vsmovResolveCache.keys().next().value;
+    if (firstKey) vsmovResolveCache.delete(firstKey);
+  }
+  vsmovResolveCache.set(embedUrl, { data, ts: Date.now() });
+  return data;
+}
+
+export function isCobephimEpRef(url?: string | null): boolean {
+  return Boolean(url && url.startsWith('cobephim-ep://'));
+}
+
+export function isK20StreamRef(url?: string | null): boolean {
+  return Boolean(url && (url.startsWith('k20-ep://') || url.startsWith('k20-imdb://')));
+}
+
+export function isDirectMp4Url(url?: string | null): boolean {
+  if (!url) return false;
+  return /\.(mp4|m4v|webm)(\?|$)/i.test(url) || /\/hx-mp4\b/i.test(url);
+}
+
+export interface CobephimResolvedEpisode {
+  linkM3u8: string;
+  linkEmbed: string;
+  isEncrypted4k?: boolean;
+  server?: string;
+}
+
+const cobephimEpCache = new Map<string, { data: CobephimResolvedEpisode; ts: number }>();
+
+export async function resolveCobephimEpisode(refUrl: string): Promise<CobephimResolvedEpisode> {
+  const cached = cobephimEpCache.get(refUrl);
+  if (cached && Date.now() - cached.ts < 3 * 60_000) {
+    return cached.data;
+  }
+  const clean = refUrl.replace(/^cobephim-ep:\/\//, '');
+  const [slug, epId] = clean.split('/');
+  const res = await fetch(
+    `/api/movie?action=resolve-cobephim&slug=${encodeURIComponent(slug || '')}&epId=${encodeURIComponent(epId || '')}`
+  );
+  const data = (await res.json()) as CobephimResolvedEpisode & { error?: string };
+  if (!res.ok) {
+    throw new Error(data.error || `Không tải được tập phim CoBePhim (HTTP ${res.status})`);
+  }
+  if (cobephimEpCache.size >= 40) {
+    const firstKey = cobephimEpCache.keys().next().value;
+    if (firstKey) cobephimEpCache.delete(firstKey);
+  }
+  cobephimEpCache.set(refUrl, { data, ts: Date.now() });
+  return data;
+}
+
+export interface K20ResolvedOption {
+  label: string;
+  url: string;
+  isMp4: boolean;
+  subtitles: MovieSubtitleTrack[];
+}
+
+export interface K20ResolvedResponse {
+  streams: K20ResolvedOption[];
+}
+
+const k20StreamCache = new Map<string, { data: K20ResolvedResponse; ts: number }>();
+
+export async function resolveK20Stream(refUrl: string): Promise<K20ResolvedResponse> {
+  const cached = k20StreamCache.get(refUrl);
+  if (cached && Date.now() - cached.ts < 3 * 60_000) {
+    return cached.data;
+  }
+  const clean = refUrl.replace(/^k20-(?:ep|imdb):\/\//, '');
+  const slashIdx = clean.indexOf('/');
+  const mediaType = slashIdx > 0 ? clean.slice(0, slashIdx) : 'movie';
+  const id = slashIdx > 0 ? clean.slice(slashIdx + 1) : clean;
+
+  const res = await fetch(
+    `/api/movie?action=resolve-k20&type=${encodeURIComponent(mediaType)}&id=${encodeURIComponent(id)}`
+  );
+  const data = (await res.json()) as K20ResolvedResponse & { error?: string };
+  if (!res.ok) {
+    throw new Error(data.error || `Không tải được luồng K20 (HTTP ${res.status})`);
+  }
+  if (k20StreamCache.size >= 40) {
+    const firstKey = k20StreamCache.keys().next().value;
+    if (firstKey) k20StreamCache.delete(firstKey);
+  }
+  k20StreamCache.set(refUrl, { data, ts: Date.now() });
+  return data;
 }
 
 function resolveUrlSafe(baseUrl: string, rel: string): string {

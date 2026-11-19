@@ -1,15 +1,30 @@
 // Cloudflare Pages Function: /api/movie
-// Engine Phim Rạp ĐA NGUỒN:
-// 1) KKPhim (https://phimapi.com — tài liệu https://kkphim.com/api-document) — 30.600+ phim, 1080p HLS
-// 2) VSMov  (https://vsmov.com/api — tài liệu https://vsmov.com/api-document) — 38.500+ phim, Chiếu rạp & Subteam
-// 3) VidSrc (https://vidsrc.mov/embed — danh mục IMDb/Cinemeta quốc tế) — Phim lẻ & Series TV 1080p đa phụ đề
-// - GET action=meta&source=kkphim|vsmov|vidsrc : Thể loại + Quốc gia, cache 24h
-// - GET action=list&source=...                 : Danh sách & bộ lọc Thể loại / Quốc gia / Năm / Âm thanh
-// - GET action=search&source=...               : Tìm kiếm phim (VidSrc hỗ trợ cả tìm tên & IMDb/TMDB ID trực tiếp!)
-// - GET action=detail&source=...&slug=...      : Chi tiết phim + Server/Mùa + Tập phim + link_m3u8 & link_embed
-// - GET action=clean-m3u8                      : Lọc quảng cáo chèn trong HLS manifest
+// Engine Phim Rạp ĐA NGUỒN (6 kho phim & trực tiếp):
+// 1) KKPhim   (https://phimapi.com)              — 30.600+ phim, 1080p HLS Sạch QC
+// 2) VSMov    (https://vsmov.com/api)            — 38.500+ phim, Chiếu rạp & Subteam (bóc PNG-TS sạch logo/QC)
+// 3) NguonC   (https://phim.nguonc.com/api)      — 33.700+ phim (HLS sạch QC qua K20 + Embed)
+// 4) CoBePhim (https://cobephim.club)            — Song Ngữ, Đa Server KK/VS/NC
+// 5) K20      (https://sc.k-20.xyz)              — Phim 4K, CLB Phim Xưa MP4, Thể Thao Live (Xôi Lạc, Vebo, SoCoLive...)
+// 6) VidSrc   (https://vidsrc.mov + K20 Direct HLS) — Kho IMDb quốc tế, ưu tiên HLS sạch 0% popup + Embed dự phòng
 
-type MovieSource = 'kkphim' | 'vsmov' | 'vidsrc';
+import {
+  NGUONC_COUNTRIES,
+  NGUONC_GENRES,
+  handleCobephimDetail,
+  handleCobephimList,
+  handleCobephimMeta,
+  handleCobephimSearch,
+  handleK20Detail,
+  handleK20List,
+  handleK20Search,
+  handleNguoncDetail,
+  handleNguoncList,
+  handleNguoncSearch,
+  handleResolveCobephim,
+  handleResolveK20,
+} from '../_lib/movieSources';
+
+type MovieSource = 'kkphim' | 'vsmov' | 'nguonc' | 'cobephim' | 'k20' | 'vidsrc';
 
 const PHIMAPI_BASE = 'https://phimapi.com';
 const CDN_IMAGE_BASE = 'https://phimimg.com';
@@ -18,7 +33,7 @@ const VSMOV_API_BASE = 'https://vsmov.com/api';
 const VSMOV_IMAGE_BASE = 'https://vsmov.com/storage/images';
 
 const VIDSRC_EMBED_BASE = 'https://vidsrc.mov/embed';
-const VIDSRC_DIRECT_BASE = 'https://vidsrc.sh/embed';
+const VIDFAST_EMBED_BASE = 'https://vidfast.vc';
 const CINEMETA_BASE = 'https://v3-cinemeta.strem.io';
 
 const VIDSRC_GENRES: Array<{ name: string; slug: string; canonical: string }> = [
@@ -264,38 +279,60 @@ function buildVidsrcServers(
   kind: 'movie' | 'series',
   mediaId: string,
   title: string,
-  videos: any[]
+  videos: any[],
+  isTmdb = false
 ) {
   if (kind === 'movie') {
-    return [
+    const servers: Array<{ serverName: string; episodes: any[] }> = [];
+
+    // Ưu tiên 1: Tự bóc luồng Direct HLS (4K / Thuyết minh / Vietsub) từ K20 ngay trong Player -> mở trang 150ms, 0% popup, không iframe!
+    if (!isTmdb) {
+      servers.push({
+        serverName: '🛡️ HLS Sạch 0% Popup (4K / TM / Vietsub)',
+        episodes: [
+          {
+            name: 'Full 4K/1080p',
+            slug: 'k20-direct',
+            filename: `${title} • Direct HLS (4K / Thuyết minh / Vietsub)`,
+            linkM3u8: `k20-imdb://movie/${mediaId}`,
+            linkEmbed: `${VIDFAST_EMBED_BASE}/movie/${mediaId}?autoPlay=true&theme=06B6D4`,
+          },
+        ],
+      });
+    }
+
+    // Dự phòng Embed: VidFast & VidSrc.mov (nếu phim quốc tế quá mới chưa có bản Việt/K20)
+    servers.push(
       {
-        serverName: 'VidSrc.mov (Chính • 1080p)',
+        serverName: 'VidFast (Embed 1080p)',
         episodes: [
           {
             name: 'Full 1080p',
             slug: 'full',
+            filename: `${title} • VidFast`,
+            linkEmbed: `${VIDFAST_EMBED_BASE}/movie/${mediaId}?autoPlay=true&theme=06B6D4`,
+            linkM3u8: '',
+          },
+        ],
+      },
+      {
+        serverName: 'VidSrc.mov (Embed dự phòng)',
+        episodes: [
+          {
+            name: 'Full 1080p',
+            slug: 'full-vidsrc',
             filename: `${title} • VidSrc.mov`,
             linkEmbed: `${VIDSRC_EMBED_BASE}/movie/${mediaId}`,
             linkM3u8: '',
           },
         ],
-      },
-      {
-        serverName: 'VidSrc Direct (Ít Popup)',
-        episodes: [
-          {
-            name: 'Full 1080p',
-            slug: 'full-direct',
-            filename: `${title} • VidSrc Direct`,
-            linkEmbed: `${VIDSRC_DIRECT_BASE}/movie/${mediaId}/`,
-            linkM3u8: '',
-          },
-        ],
-      },
-    ];
+      }
+    );
+    return servers;
   }
 
-  // TV Series: gom theo từng Mùa (Season 1, Mùa 2...) chuẩn link https://vidsrc.mov/embed/tv/{id}/{s}/{e}
+  // TV Series: gom theo từng Mùa (Season 1, Mùa 2...)
+  // Mỗi tập gắn linkM3u8 = k20-imdb://series/{imdbId}:{s}:{e} -> tự thử phát Direct HLS sạch 0% popup trước, nếu chưa có mới rơi về VidFast Embed!
   const nowMs = Date.now() + 24 * 60 * 60 * 1000;
   const seasonMap = new Map<number, any[]>();
   const allVideos = Array.isArray(videos) ? videos : [];
@@ -306,7 +343,6 @@ function buildVidsrcServers(
     const epNum = Number(v?.episode ?? v?.number);
     if (!Number.isFinite(season) || !Number.isFinite(epNum) || epNum < 1) continue;
     if (hasPositiveSeason && season < 1) continue;
-    // Bỏ qua các tập tương lai chưa công chiếu (nếu có ngày phát sóng rõ ràng)
     if (v?.released) {
       const relMs = Date.parse(String(v.released));
       if (Number.isFinite(relMs) && relMs > nowMs) continue;
@@ -323,7 +359,7 @@ function buildVidsrcServers(
       .filter((v, idx, arr) => idx === 0 || v._epNum !== arr[idx - 1]._epNum);
 
     return {
-      serverName: seasonNum === 0 ? 'Đặc biệt (VidSrc.mov)' : `Mùa ${seasonNum} (VidSrc.mov)`,
+      serverName: seasonNum === 0 ? 'Đặc biệt' : `Mùa ${seasonNum} (🛡️ HLS Sạch)`,
       episodes: eps.map((v) => {
         const epTitle = decodeEntities(v?.name || v?.title);
         const sPad = String(seasonNum).padStart(2, '0');
@@ -332,8 +368,8 @@ function buildVidsrcServers(
           name: `Tập ${v._epNum}`,
           slug: `s${seasonNum}e${v._epNum}`,
           filename: epTitle ? `S${sPad}E${ePad} • ${epTitle}` : `S${sPad}E${ePad}`,
-          linkEmbed: `${VIDSRC_EMBED_BASE}/tv/${mediaId}/${seasonNum}/${v._epNum}`,
-          linkM3u8: '',
+          linkEmbed: `${VIDFAST_EMBED_BASE}/tv/${mediaId}/${seasonNum}/${v._epNum}?autoPlay=true&theme=06B6D4`,
+          linkM3u8: !isTmdb ? `k20-imdb://series/${mediaId}:${seasonNum}:${v._epNum}` : '',
         };
       }),
     };
@@ -343,18 +379,17 @@ function buildVidsrcServers(
     return servers;
   }
 
-  // Fallback nếu phim bộ mới chưa có danh sách tập trên Cinemeta (hoặc nhập trực tiếp TMDB ID)
   return [
     {
-      serverName: 'Mùa 1 (VidSrc.mov)',
+      serverName: 'Mùa 1 (🛡️ HLS Sạch)',
       episodes: Array.from({ length: 12 }, (_, idx) => {
         const n = idx + 1;
         return {
           name: `Tập ${n}`,
           slug: `s1e${n}`,
           filename: `S01E${String(n).padStart(2, '0')}`,
-          linkEmbed: `${VIDSRC_EMBED_BASE}/tv/${mediaId}/1/${n}`,
-          linkM3u8: '',
+          linkEmbed: `${VIDFAST_EMBED_BASE}/tv/${mediaId}/1/${n}?autoPlay=true&theme=06B6D4`,
+          linkM3u8: !isTmdb ? `k20-imdb://series/${mediaId}:1:${n}` : '',
         };
       }),
     },
@@ -517,10 +552,20 @@ export const onRequest: PagesFunction = async (context) => {
   const action = (reqUrl.searchParams.get('action') || 'list').toLowerCase();
   const rawSource = (reqUrl.searchParams.get('source') || 'kkphim').toLowerCase();
   const source: MovieSource =
-    rawSource === 'vsmov' ? 'vsmov' : rawSource === 'vidsrc' ? 'vidsrc' : 'kkphim';
+    rawSource === 'vsmov'
+      ? 'vsmov'
+      : rawSource === 'nguonc'
+      ? 'nguonc'
+      : rawSource === 'cobephim'
+      ? 'cobephim'
+      : rawSource === 'k20'
+      ? 'k20'
+      : rawSource === 'vidsrc'
+      ? 'vidsrc'
+      : 'kkphim';
 
   // =========================================================================
-  // 1. ACTION = META (Danh sách Thể loại & Quốc gia theo nguồn KKPhim / VSMov / VidSrc)
+  // 1. ACTION = META (Danh sách Thể loại & Quốc gia cho cả 6 nguồn phim)
   // =========================================================================
   if (action === 'meta') {
     if (source === 'vidsrc') {
@@ -532,12 +577,41 @@ export const onRequest: PagesFunction = async (context) => {
         }),
         {
           status: 200,
-          headers: {
-            ...JSON_HEADERS,
-            'Cache-Control': 'public, max-age=86400, s-maxage=86400',
-          },
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=86400, s-maxage=86400' },
         }
       );
+    }
+    if (source === 'nguonc') {
+      return new Response(
+        JSON.stringify({ source: 'nguonc', genres: NGUONC_GENRES, countries: NGUONC_COUNTRIES }),
+        {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=86400, s-maxage=86400' },
+        }
+      );
+    }
+    if (source === 'k20') {
+      return new Response(
+        JSON.stringify({ source: 'k20', genres: [], countries: [] }),
+        {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=86400, s-maxage=86400' },
+        }
+      );
+    }
+    if (source === 'cobephim') {
+      try {
+        const meta = await handleCobephimMeta();
+        return new Response(JSON.stringify(meta), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=86400, s-maxage=86400' },
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ source: 'cobephim', error: err?.message, genres: [], countries: [] }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
     }
 
     const base = source === 'vsmov' ? VSMOV_API_BASE : PHIMAPI_BASE;
@@ -594,6 +668,51 @@ export const onRequest: PagesFunction = async (context) => {
     const page = Number.isFinite(pageRaw) && pageRaw >= 1 && pageRaw <= 500 ? pageRaw : 1;
     const limitRaw = parseInt(reqUrl.searchParams.get('limit') || '24', 10);
     const limit = Number.isFinite(limitRaw) && limitRaw >= 6 && limitRaw <= 48 ? limitRaw : 24;
+
+    if (source === 'nguonc') {
+      try {
+        const data = await handleNguoncList({ type, category, country, year, sortLang, page });
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ source: 'nguonc', error: err?.message || 'Lỗi tải NguonC', items: [], page: 1, totalPages: 1, totalItems: 0 }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
+    }
+
+    if (source === 'cobephim') {
+      try {
+        const data = await handleCobephimList({ type, category, country, page });
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ source: 'cobephim', error: err?.message || 'Lỗi tải CoBePhim', items: [], page: 1, totalPages: 1, totalItems: 0 }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
+    }
+
+    if (source === 'k20') {
+      try {
+        const data = await handleK20List({ type, page, limit });
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=120, s-maxage=120' },
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ source: 'k20', error: err?.message || 'Lỗi tải kho K20', items: [], page: 1, totalPages: 1, totalItems: 0 }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
+    }
 
     // --- NHÁNH VIDSRC (https://vidsrc.mov/embed + Danh mục quốc tế IMDb/Cinemeta) ---
     if (source === 'vidsrc') {
@@ -870,6 +989,28 @@ export const onRequest: PagesFunction = async (context) => {
     if (sortLang) params.set('sort_lang', sortLang);
 
     try {
+      if (source === 'nguonc') {
+        const data = await handleNguoncSearch(keyword, page);
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
+        });
+      }
+      if (source === 'cobephim') {
+        const data = await handleCobephimSearch(keyword);
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
+        });
+      }
+      if (source === 'k20') {
+        const data = await handleK20Search(keyword);
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
+        });
+      }
+
       if (source === 'vidsrc') {
         const kwLower = keyword.toLowerCase();
 
@@ -1119,6 +1260,51 @@ export const onRequest: PagesFunction = async (context) => {
       });
     }
 
+    if (source === 'nguonc') {
+      try {
+        const detail = await handleNguoncDetail(slug);
+        return new Response(JSON.stringify(detail), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=300, s-maxage=300' },
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ error: err?.message || 'Không tải được chi tiết phim NguonC' }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
+    }
+
+    if (source === 'cobephim') {
+      try {
+        const detail = await handleCobephimDetail(slug);
+        return new Response(JSON.stringify(detail), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ error: err?.message || 'Không tải được chi tiết phim CoBePhim' }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
+    }
+
+    if (source === 'k20') {
+      try {
+        const detail = await handleK20Detail(slug);
+        return new Response(JSON.stringify(detail), {
+          status: 200,
+          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=120, s-maxage=120' },
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ error: err?.message || 'Không tải được chi tiết phim K20' }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
+    }
+
     if (source === 'vidsrc') {
       const parsed = parseVidsrcSlug(slug);
       if (!parsed) {
@@ -1179,7 +1365,13 @@ export const onRequest: PagesFunction = async (context) => {
               countries: [],
             };
 
-        const servers = buildVidsrcServers(kind, parsed.id, baseItem.name, meta?.videos || []);
+        const servers = buildVidsrcServers(
+          kind,
+          parsed.id,
+          baseItem.name,
+          meta?.videos || [],
+          parsed.isTmdb
+        );
         const totalEps = servers.reduce((acc, s) => acc + s.episodes.length, 0);
 
         const detail = {
@@ -1369,6 +1561,183 @@ export const onRequest: PagesFunction = async (context) => {
     } catch (err: any) {
       return new Response(
         JSON.stringify({ error: err?.message || 'Không lọc được luồng m3u8' }),
+        { status: 502, headers: JSON_HEADERS }
+      );
+    }
+  }
+
+  // =========================================================================
+  // 6. ACTION = RESOLVE-VSMOV (Tách luồng HLS master.m3u8 sạch + phụ đề WebVTT từ trang embed streamvsmov.com -> phát native KHÔNG logo, KHÔNG quảng cáo!)
+  // =========================================================================
+  if (action === 'resolve-vsmov') {
+    const embedUrl = (reqUrl.searchParams.get('url') || '').trim();
+    if (!/^https:\/\/[a-z0-9-]+\.streamvsmov\.com\/video\/[a-z0-9-]+(?:[/?#].*)?$/i.test(embedUrl)) {
+      return new Response(JSON.stringify({ error: 'URL VSMov không hợp lệ' }), {
+        status: 400,
+        headers: JSON_HEADERS,
+      });
+    }
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 9000);
+      let html = '';
+      let finalUrl = embedUrl;
+      try {
+        const res = await fetch(embedUrl, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            'User-Agent': UA,
+            Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+            Referer: 'https://vsmov.com/',
+          },
+        });
+        if (!res.ok) throw new Error(`VSMov Embed HTTP ${res.status}`);
+        finalUrl = res.url || embedUrl;
+        html = await res.text();
+      } finally {
+        clearTimeout(timer);
+      }
+
+      const parsedFinal = new URL(finalUrl);
+      const baseMatch = html.match(/const\s+baseUrl\s*=\s*"([^"]+)"/);
+      const hashMatch = html.match(/const\s+videoHash\s*=\s*"([^"]+)"/);
+      const signedFlagMatch = html.match(/enableSignedUrl\s*:\s*(true|false)/i);
+      const signedUrlMatch = html.match(/signedMasterUrl\s*:\s*"([^"]*)"/);
+
+      const baseUrl = (baseMatch?.[1] || parsedFinal.origin).replace(/\/+$/, '');
+      const videoHash =
+        hashMatch?.[1] || parsedFinal.pathname.match(/\/video\/([a-z0-9-]+)/i)?.[1] || '';
+      const isSigned = signedFlagMatch?.[1]?.toLowerCase() === 'true';
+      const signedMasterUrl = (signedUrlMatch?.[1] || '').trim();
+
+      let m3u8Url = '';
+      if (isSigned && signedMasterUrl) {
+        m3u8Url = resolveAbsoluteUrl(baseUrl + '/', signedMasterUrl);
+      } else if (videoHash) {
+        m3u8Url = `${baseUrl}/stream/${videoHash}/master.m3u8`;
+      }
+
+      if (!m3u8Url) {
+        throw new Error('Không tách được luồng HLS từ VSMov');
+      }
+
+      // Tách danh sách phụ đề WebVTT (.vtt) nếu có (ưu tiên Tiếng Việt lên đầu)
+      const subtitles: Array<{ label: string; lang: string; url: string }> = [];
+      const subMatch = html.match(/subtitles\s*:\s*(\[[\s\S]*?\])\s*,\s*\n?\s*audios\s*:/);
+      if (subMatch?.[1]) {
+        try {
+          const rawSubs = JSON.parse(subMatch[1]);
+          if (Array.isArray(rawSubs)) {
+            const langCounts: Record<string, number> = {};
+            const seenUrls = new Set<string>();
+            for (const s of rawSubs) {
+              const rawU = typeof s?.url === 'string' ? s.url.trim() : '';
+              if (!rawU) continue;
+              const absUrl = resolveAbsoluteUrl(baseUrl + '/', rawU);
+              if (seenUrls.has(absUrl)) continue;
+              seenUrls.add(absUrl);
+
+              const codeRaw = String(s?.code || s?.name || '').toLowerCase();
+              let lang = 'vi';
+              let baseLabel = 'Phụ đề';
+              if (codeRaw.startsWith('vi') || codeRaw.includes('viet')) {
+                lang = 'vi';
+                baseLabel = 'Tiếng Việt';
+              } else if (codeRaw.startsWith('en') || codeRaw.includes('eng')) {
+                lang = 'en';
+                baseLabel = 'English';
+              } else if (codeRaw.startsWith('zh') || codeRaw.includes('chi') || codeRaw.includes('zho')) {
+                lang = 'zh';
+                baseLabel = '中文';
+              } else if (codeRaw.startsWith('ko') || codeRaw.includes('kor')) {
+                lang = 'ko';
+                baseLabel = '한국어';
+              } else if (codeRaw.startsWith('ja') || codeRaw.includes('jpn')) {
+                lang = 'ja';
+                baseLabel = '日本語';
+              } else {
+                lang = codeRaw.slice(0, 2) || 'und';
+                baseLabel = decodeEntities(s?.name) || 'Phụ đề';
+              }
+
+              langCounts[lang] = (langCounts[lang] || 0) + 1;
+              const label =
+                langCounts[lang] > 1 ? `${baseLabel} #${langCounts[lang]}` : baseLabel;
+              subtitles.push({ label, lang, url: absUrl });
+            }
+          }
+        } catch {}
+      }
+
+      // Đưa Tiếng Việt lên đầu tiên để tự động bật khi phát
+      subtitles.sort((a, b) => {
+        if (a.lang === 'vi' && b.lang !== 'vi') return -1;
+        if (b.lang === 'vi' && a.lang !== 'vi') return 1;
+        return 0;
+      });
+
+      return new Response(
+        JSON.stringify({
+          m3u8Url,
+          subtitles,
+          isSigned,
+        }),
+        {
+          status: 200,
+          headers: {
+            ...JSON_HEADERS,
+            'Cache-Control': isSigned
+              ? 'public, max-age=60, s-maxage=60'
+              : 'public, max-age=300, s-maxage=300',
+          },
+        }
+      );
+    } catch (err: any) {
+      return new Response(
+        JSON.stringify({ error: err?.message || 'Không tách được luồng phát VSMov' }),
+        { status: 502, headers: JSON_HEADERS }
+      );
+    }
+  }
+
+  // =========================================================================
+  // 7. ACTION = RESOLVE-COBEPHIM (Tách luồng thực cho 1 tập CoBePhim khi người dùng bấm chọn tập/server)
+  // =========================================================================
+  if (action === 'resolve-cobephim') {
+    const slug = (reqUrl.searchParams.get('slug') || '').trim().toLowerCase();
+    const epId = (reqUrl.searchParams.get('epId') || '').trim();
+    try {
+      const data = await handleResolveCobephim(slug, epId);
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
+      });
+    } catch (err: any) {
+      return new Response(
+        JSON.stringify({ error: err?.message || 'Không lấy được luồng tập CoBePhim' }),
+        { status: 502, headers: JSON_HEADERS }
+      );
+    }
+  }
+
+  // =========================================================================
+  // 8. ACTION = RESOLVE-K20 (Tách luồng Direct HLS/MP4 sạch từ sc.k-20.xyz cho K20 & VidSrc/IMDb!)
+  // =========================================================================
+  if (action === 'resolve-k20') {
+    const mediaType = (reqUrl.searchParams.get('type') || 'movie').trim().toLowerCase();
+    const id = (reqUrl.searchParams.get('id') || '').trim();
+    try {
+      const data = await handleResolveK20(mediaType, id);
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
+      });
+    } catch (err: any) {
+      return new Response(
+        JSON.stringify({ error: err?.message || 'Không lấy được luồng K20' }),
         { status: 502, headers: JSON_HEADERS }
       );
     }

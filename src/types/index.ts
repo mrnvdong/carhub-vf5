@@ -233,7 +233,7 @@ export interface NewsTtsProviderInfo {
   voices: NewsTtsVoiceOption[];
 }
 
-export type MovieSource = 'kkphim' | 'vsmov' | 'vidsrc';
+export type MovieSource = 'kkphim' | 'vsmov' | 'nguonc' | 'cobephim' | 'k20' | 'vidsrc';
 
 export type MovieListType =
   | 'moi-cap-nhat'
@@ -242,7 +242,15 @@ export type MovieListType =
   | 'phim-le'
   | 'phim-bo'
   | 'phim-chieu-rap'
+  | 'phim-dang-chieu'
   | 'subteam'
+  | 'song-ngu'
+  | 'trung-quoc'
+  | 'au-my'
+  | 'dien-anh'
+  | 'phim-4k'
+  | 'phim-xua'
+  | 'the-thao'
   | 'top-imdb'
   | 'series-imdb'
   | 'hoat-hinh'
@@ -274,6 +282,12 @@ export interface MovieItem {
   rating: number;
   categories: MovieTaxon[];
   countries: MovieTaxon[];
+}
+
+export interface MovieSubtitleTrack {
+  label: string;
+  lang: string;
+  url: string;
 }
 
 export interface MovieEpisode {

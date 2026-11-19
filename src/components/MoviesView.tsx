@@ -57,20 +57,41 @@ type LibraryMode = 'browse' | 'favorites' | 'history';
 
 function getLangBadgeStyle(lang: string): string {
   const low = lang.toLowerCase();
-  if (low.includes('thuyết minh')) return 'bg-emerald-500 text-slate-950';
+  if (low.includes('thuyết minh') || low.includes('song ngữ')) return 'bg-emerald-500 text-slate-950';
   if (low.includes('lồng tiếng')) return 'bg-amber-400 text-slate-950';
+  if (low.includes('trực tiếp') || low.includes('live')) return 'bg-rose-600 text-white';
   if (low.includes('multi-sub')) return 'bg-cyan-500 text-slate-950';
   return 'bg-slate-900/85 text-white border border-white/20';
 }
 
+const MOVIE_SOURCE_OPTIONS: Array<{
+  id: MovieSource;
+  icon: string;
+  label: string;
+  activeClass: string;
+}> = [
+  { id: 'kkphim', icon: '🎬', label: 'KKPhim', activeClass: 'bg-violet-600 text-white shadow' },
+  { id: 'vsmov', icon: '🍿', label: 'VSMov', activeClass: 'bg-rose-600 text-white shadow' },
+  { id: 'nguonc', icon: '🎥', label: 'NguonC', activeClass: 'bg-emerald-600 text-white shadow' },
+  { id: 'cobephim', icon: '🎀', label: 'CoBePhim', activeClass: 'bg-fuchsia-600 text-white shadow' },
+  { id: 'k20', icon: '⚡', label: 'K20 4K', activeClass: 'bg-amber-500 text-slate-950 shadow' },
+  { id: 'vidsrc', icon: '🌍', label: 'Quốc tế', activeClass: 'bg-cyan-600 text-white shadow' },
+];
+
 function getSourceLabel(src: MovieSource): string {
   if (src === 'vsmov') return 'VSMov';
-  if (src === 'vidsrc') return 'VidSrc';
+  if (src === 'nguonc') return 'NguonC';
+  if (src === 'cobephim') return 'CoBePhim';
+  if (src === 'k20') return 'K20';
+  if (src === 'vidsrc') return 'Quốc tế';
   return 'KKPhim';
 }
 
 function getSourceBadgeClass(src: MovieSource): string {
   if (src === 'vsmov') return 'bg-rose-600 text-white';
+  if (src === 'nguonc') return 'bg-emerald-600 text-white';
+  if (src === 'cobephim') return 'bg-fuchsia-600 text-white';
+  if (src === 'k20') return 'bg-amber-500 text-slate-950';
   if (src === 'vidsrc') return 'bg-cyan-600 text-white';
   return 'bg-violet-600 text-white';
 }
@@ -83,11 +104,19 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   const theme = getCarTheme(isLightTheme);
   const browseScrollRef = useRef<HTMLDivElement>(null);
 
-  // Nguồn phim đa nền tảng: KKPhim (1080p HLS) | VSMov (Chiếu rạp & Subteam) | VidSrc (Quốc tế IMDb 1080p)
+  // 6 kho phim đa nền tảng: KKPhim | VSMov | NguonC | CoBePhim | K20 (4K/Xưa/Thể Thao) | Quốc tế (IMDb/VidSrc)
   const [movieSource, setMovieSourceState] = useState<MovieSource>(() => {
     try {
       const saved = localStorage.getItem('carhub_movie_source');
-      if (saved === 'vsmov' || saved === 'vidsrc') return saved;
+      if (
+        saved === 'vsmov' ||
+        saved === 'nguonc' ||
+        saved === 'cobephim' ||
+        saved === 'k20' ||
+        saved === 'vidsrc'
+      ) {
+        return saved;
+      }
       return 'kkphim';
     } catch {
       return 'kkphim';
@@ -122,10 +151,16 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     setPage(1);
     onNotifyToast(
       nextSource === 'vsmov'
-        ? '🍿 Đã chuyển kho phim sang VSMov (Chiếu rạp & Subteam)'
+        ? '🍿 Đã chuyển sang VSMov (1080p Sạch QC & Chiếu rạp)'
+        : nextSource === 'nguonc'
+        ? '🎥 Đã chuyển sang NguonC (33.700+ phim • HLS Sạch QC)'
+        : nextSource === 'cobephim'
+        ? '🎀 Đã chuyển sang CoBePhim (Song Ngữ & Đa Server)'
+        : nextSource === 'k20'
+        ? '⚡ Đã chuyển sang K20 (Phim 4K • CLB Phim Xưa • Thể Thao Live)'
         : nextSource === 'vidsrc'
-        ? '🌍 Đã chuyển kho phim sang VidSrc.mov (Phim quốc tế 1080p)'
-        : '🎬 Đã chuyển kho phim sang KKPhim (1080p HLS Sạch QC)'
+        ? '🌍 Đã chuyển sang Quốc tế IMDb (Ưu tiên HLS 4K/TM 0% Popup!)'
+        : '🎬 Đã chuyển sang KKPhim (1080p HLS Sạch QC)'
     );
   };
 
@@ -196,10 +231,10 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           type: activeTab,
           page,
           limit: 24,
-          category: selectedGenre,
-          country: movieSource === 'vidsrc' ? '' : selectedCountry,
-          year: selectedYear,
-          sortLang: movieSource === 'kkphim' ? selectedSortLang : '',
+          category: movieSource === 'k20' ? '' : selectedGenre,
+          country: movieSource === 'vidsrc' || movieSource === 'k20' ? '' : selectedCountry,
+          year: movieSource === 'cobephim' || movieSource === 'k20' ? '' : selectedYear,
+          sortLang: movieSource === 'kkphim' || movieSource === 'nguonc' ? selectedSortLang : '',
           keyword: searchKeyword,
         });
         if (cancelled) return;
@@ -242,10 +277,10 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   ]);
 
   const activeFiltersCount =
-    (selectedGenre ? 1 : 0) +
-    (movieSource !== 'vidsrc' && selectedCountry ? 1 : 0) +
-    (selectedYear ? 1 : 0) +
-    (movieSource === 'kkphim' && selectedSortLang ? 1 : 0);
+    (movieSource !== 'k20' && selectedGenre ? 1 : 0) +
+    (movieSource !== 'vidsrc' && movieSource !== 'k20' && selectedCountry ? 1 : 0) +
+    (movieSource !== 'cobephim' && movieSource !== 'k20' && selectedYear ? 1 : 0) +
+    ((movieSource === 'kkphim' || movieSource === 'nguonc') && selectedSortLang ? 1 : 0);
 
   const clearAllFilters = () => {
     setSelectedGenre('');
@@ -509,8 +544,10 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
 
     return (
       <div className="flex-1 min-h-0 flex flex-col gap-2 max-w-[1920px] mx-auto w-full animate-ios-browse-in">
-        {/* Header phòng chiếu */}
-        <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
+        {/* Header phòng chiếu (cân đối 1 hàng gọn gàng trên mọi màn hình) */}
+        <div
+          className={`rounded-2xl border p-2 sm:p-2.5 flex items-center justify-between gap-2 shrink-0 ${theme.card}`}
+        >
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <button
               type="button"
@@ -518,15 +555,15 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                 setActiveTarget(null);
                 setMovieDetail(null);
               }}
-              className={`min-h-[2.5rem] px-3 rounded-xl border text-xs font-black flex items-center gap-1.5 shrink-0 active:scale-95 transition ${theme.iconBtn}`}
+              className={`h-10 px-3 rounded-xl border text-xs font-black flex items-center gap-1.5 shrink-0 active:scale-95 transition ${theme.iconBtn}`}
             >
-              <ArrowLeft className="w-4 h-4" />
-              <span>Kho phim</span>
+              <ArrowLeft className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Kho phim</span>
             </button>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
                 <span
-                  className={`px-1.5 py-0.5 rounded text-[0.62rem] font-black uppercase shrink-0 ${getSourceBadgeClass(
+                  className={`px-1.5 py-0.5 rounded-md text-[0.62rem] font-black uppercase shrink-0 ${getSourceBadgeClass(
                     activeSrc
                   )}`}
                 >
@@ -537,7 +574,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                 </h2>
               </div>
               {movieDetail?.originName && (
-                <p className={`text-xs font-semibold truncate ${theme.textSub}`}>
+                <p className={`text-[0.7rem] sm:text-xs font-semibold truncate ${theme.textSub}`}>
                   {movieDetail.originName}
                   {movieDetail.year ? ` (${movieDetail.year})` : ''}
                   {movieDetail.quality ? ` • ${movieDetail.quality}` : ''}
@@ -549,32 +586,33 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
 
           {movieDetail && (
             <div className="flex items-center gap-1.5 shrink-0">
-              {(['kkphim', 'vsmov', 'vidsrc'] as MovieSource[])
+              {(['kkphim', 'vsmov', 'nguonc', 'cobephim', 'vidsrc'] as MovieSource[])
                 .filter((s) => s !== activeSrc)
+                .slice(0, 2)
                 .map((other) => (
                   <button
                     key={other}
                     type="button"
                     onClick={() => handleFindOnOtherSource(other)}
                     title={`Tìm bộ phim này trên nguồn ${getSourceLabel(other)}`}
-                    className={`min-h-[2.45rem] px-2.5 sm:px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1 active:scale-95 transition ${theme.iconBtn}`}
+                    className={`h-10 px-2.5 rounded-xl border text-xs font-extrabold hidden md:flex items-center gap-1 active:scale-95 transition ${theme.iconBtn}`}
                   >
                     <Search className="w-3.5 h-3.5 shrink-0" />
-                    <span className="hidden sm:inline">{getSourceLabel(other)}</span>
+                    <span>{getSourceLabel(other)}</span>
                   </button>
                 ))}
 
               <button
                 type="button"
                 onClick={() => handleToggleFavorite(movieDetail)}
-                className={`min-h-[2.45rem] px-3.5 rounded-xl border text-xs font-black flex items-center gap-1.5 active:scale-95 transition ${
+                className={`h-10 px-3 rounded-xl border text-xs font-black flex items-center gap-1.5 active:scale-95 transition ${
                   isFavCurrent
                     ? 'bg-rose-600 border-rose-500 text-white shadow'
                     : theme.iconBtn
                 }`}
               >
-                <Heart className={`w-4 h-4 ${isFavCurrent ? 'fill-white' : ''}`} />
-                <span>{isFavCurrent ? 'Đã lưu' : 'Yêu thích'}</span>
+                <Heart className={`w-4 h-4 shrink-0 ${isFavCurrent ? 'fill-white' : ''}`} />
+                <span className="hidden sm:inline">{isFavCurrent ? 'Đã lưu' : 'Yêu thích'}</span>
               </button>
             </div>
           )}
@@ -906,16 +944,29 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-2 max-w-[1920px] mx-auto w-full animate-ios-browse-in">
-      {/* 1. THANH ĐẦU TRANG: LOGO + ĐỔI NGUỒN KKPHIM/VSMOV/VIDSRC + TÌM KIẾM + BỘ LỌC + YÊU THÍCH + ĐANG XEM */}
-      <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
+      {/* 1. HEADER KHO PHIM CÂN ĐỐI 2 HÀNG GỌN GÀNG (6 NGUỒN PHIM KHÔNG VỠ KHUNG TRÊN MỌI MÀN HÌNH) */}
+      <div className={`shrink-0 rounded-2xl border p-2.5 sm:p-3 space-y-2 ${theme.card}`}>
+        {/* Hàng 1: Thương hiệu Rạp Phim (trái) ↔ Bộ chuyển 6 nguồn phim cuộn ngang gọn gàng (phải) */}
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0 shrink-0">
             <div
-              className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
+              className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 ${
                 movieSource === 'vsmov'
                   ? isLightTheme
                     ? 'bg-rose-100 border-rose-300 text-rose-700'
                     : 'bg-rose-500/20 border-rose-400/45 text-rose-300'
+                  : movieSource === 'nguonc'
+                  ? isLightTheme
+                    ? 'bg-emerald-100 border-emerald-300 text-emerald-700'
+                    : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300'
+                  : movieSource === 'cobephim'
+                  ? isLightTheme
+                    ? 'bg-fuchsia-100 border-fuchsia-300 text-fuchsia-700'
+                    : 'bg-fuchsia-500/20 border-fuchsia-400/45 text-fuchsia-300'
+                  : movieSource === 'k20'
+                  ? isLightTheme
+                    ? 'bg-amber-100 border-amber-300 text-amber-800'
+                    : 'bg-amber-500/20 border-amber-400/45 text-amber-300'
                   : movieSource === 'vidsrc'
                   ? isLightTheme
                     ? 'bg-cyan-100 border-cyan-300 text-cyan-700'
@@ -925,13 +976,22 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                   : 'bg-violet-500/20 border-violet-400/45 text-violet-300'
               }`}
             >
-              <Clapperboard className="w-5 h-5" />
+              <Clapperboard className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
             <div className="min-w-0">
-              <h2 className={`text-base sm:text-lg font-black tracking-tight truncate ${theme.text}`}>
-                Rạp Phim • {getSourceLabel(movieSource)}
-              </h2>
-              <p className={`text-xs font-semibold truncate ${theme.textSub}`}>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <h2 className={`text-sm sm:text-base font-black tracking-tight truncate ${theme.text}`}>
+                  Rạp Phim
+                </h2>
+                <span
+                  className={`px-1.5 py-0.5 rounded-md text-[0.62rem] font-black uppercase shrink-0 ${getSourceBadgeClass(
+                    movieSource
+                  )}`}
+                >
+                  {getSourceLabel(movieSource)}
+                </span>
+              </div>
+              <p className={`text-[0.7rem] sm:text-xs font-semibold truncate ${theme.textSub}`}>
                 {libraryMode === 'favorites'
                   ? `Phim yêu thích đã lưu (${favorites.length})`
                   : libraryMode === 'history'
@@ -939,62 +999,50 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                   : searchKeyword
                   ? `Kết quả "${searchKeyword}" (${totalItems} phim)`
                   : movieSource === 'vidsrc'
-                  ? 'Kho phim quốc tế IMDb • 1080p Multi-Sub'
+                  ? 'Kho quốc tế IMDb • Ưu tiên HLS 4K/TM 0% Popup'
+                  : movieSource === 'k20'
+                  ? 'K20 Tổng Hợp • Phim 4K • CLB Phim Xưa • Thể Thao Live'
+                  : movieSource === 'cobephim'
+                  ? 'CoBePhim • Song Ngữ & Đa Server KK/VS/NC'
                   : `${
                       totalItems > 0
                         ? `${totalItems.toLocaleString('vi-VN')} phim HD/FHD`
+                        : movieSource === 'nguonc'
+                        ? '33.700+ phim • HLS Sạch QC'
                         : movieSource === 'vsmov'
-                        ? '38.000+ phim Chiếu rạp & Subteam'
-                        : '30.000+ phim HD/FHD'
+                        ? '38.000+ phim Sạch QC & Chiếu rạp'
+                        : '30.000+ phim 1080p Sạch QC'
                     }${updateToday > 0 ? ` • Hôm nay +${updateToday}` : ''}`}
               </p>
             </div>
           </div>
 
-          {/* Công tắc chuyển nhanh 3 nguồn phim: KKPhim | VSMov | VidSrc */}
-          <div className={`inline-flex items-center p-0.5 rounded-full border shrink-0 ${theme.segTrack}`}>
-            <button
-              type="button"
-              onClick={() => handleChangeMovieSource('kkphim')}
-              className={`min-h-[2.2rem] px-2.5 sm:px-3 rounded-full text-xs font-black flex items-center gap-1 transition ${
-                movieSource === 'kkphim'
-                  ? 'bg-violet-600 text-white shadow'
-                  : theme.segIdle
-              }`}
-            >
-              <span>🎬</span>
-              <span>KKPhim</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleChangeMovieSource('vsmov')}
-              className={`min-h-[2.2rem] px-2.5 sm:px-3 rounded-full text-xs font-black flex items-center gap-1 transition ${
-                movieSource === 'vsmov'
-                  ? 'bg-rose-600 text-white shadow'
-                  : theme.segIdle
-              }`}
-            >
-              <span>🍿</span>
-              <span>VSMov</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleChangeMovieSource('vidsrc')}
-              className={`min-h-[2.2rem] px-2.5 sm:px-3 rounded-full text-xs font-black flex items-center gap-1 transition ${
-                movieSource === 'vidsrc'
-                  ? 'bg-cyan-600 text-white shadow'
-                  : theme.segIdle
-              }`}
-            >
-              <span>🌍</span>
-              <span>VidSrc</span>
-            </button>
+          {/* Thanh chuyển 6 nguồn phim 1 hàng gọn gàng (cuộn mượt trên màn nhỏ, không vỡ dòng!) */}
+          <div
+            className={`flex items-center p-1 rounded-xl border gap-1 overflow-x-auto no-scrollbar max-w-full ${theme.segTrack}`}
+          >
+            {MOVIE_SOURCE_OPTIONS.map((opt) => {
+              const active = movieSource === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => handleChangeMovieSource(opt.id)}
+                  className={`h-9 px-2.5 sm:px-3 rounded-lg text-xs font-black flex items-center justify-center gap-1 whitespace-nowrap shrink-0 active:scale-95 transition ${
+                    active ? opt.activeClass : theme.segIdle
+                  }`}
+                >
+                  <span>{opt.icon}</span>
+                  <span>{opt.label}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5 flex-1 justify-end min-w-[16rem]">
-          {/* Ô tìm kiếm */}
-          <form onSubmit={handleSearchSubmit} className="relative flex-1 min-w-[10rem] max-w-[18rem]">
+        {/* Hàng 2: Thanh tìm kiếm giãn đều + cụm nút Lọc / Đang xem / Yêu thích / Làm mới thẳng hàng */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <form onSubmit={handleSearchSubmit} className="relative flex-1 min-w-0">
             <Search
               className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none ${theme.textMuted}`}
             />
@@ -1005,9 +1053,11 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
               placeholder={
                 movieSource === 'vidsrc'
                   ? 'Tìm tên phim Anh hoặc IMDb ID (tt...)...'
+                  : movieSource === 'k20'
+                  ? 'Tìm phim 4K, phim xưa TVB, phim lẻ K20...'
                   : 'Tìm tên phim, diễn viên...'
               }
-              className={`w-full min-h-[2.5rem] pl-9 pr-8 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
+              className={`w-full h-10 pl-9 pr-8 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
             />
             {(searchInput || searchKeyword) && (
               <button
@@ -1025,70 +1075,74 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             )}
           </form>
 
-          {/* Nút bật/tắt Bộ lọc nâng cao */}
-          <button
-            type="button"
-            onClick={() => {
-              setLibraryMode('browse');
-              setShowFilters((v) => !v);
-            }}
-            className={`min-h-[2.5rem] px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition shrink-0 ${
-              showFilters || activeFiltersCount > 0
-                ? 'bg-violet-600 border-violet-500 text-white shadow'
-                : theme.iconBtn
-            }`}
-          >
-            <SlidersHorizontal className="w-4 h-4" />
-            <span className="hidden sm:inline">Lọc phim</span>
-            {activeFiltersCount > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full bg-white text-violet-700 text-[0.65rem] font-black leading-none">
-                {activeFiltersCount}
-              </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Bộ lọc nâng cao (ẩn trên K20 vì K20 dùng tab chuyên mục riêng) */}
+            {movieSource !== 'k20' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setLibraryMode('browse');
+                  setShowFilters((v) => !v);
+                }}
+                className={`h-10 px-2.5 sm:px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition shrink-0 ${
+                  showFilters || activeFiltersCount > 0
+                    ? 'bg-violet-600 border-violet-500 text-white shadow'
+                    : theme.iconBtn
+                }`}
+              >
+                <SlidersHorizontal className="w-4 h-4 shrink-0" />
+                <span className="hidden sm:inline">Lọc</span>
+                {activeFiltersCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-white text-violet-700 text-[0.65rem] font-black leading-none">
+                    {activeFiltersCount}
+                  </span>
+                )}
+              </button>
             )}
-          </button>
 
-          {/* Đang xem (History) */}
-          <button
-            type="button"
-            onClick={() => setLibraryMode((m) => (m === 'history' ? 'browse' : 'history'))}
-            className={`min-h-[2.5rem] px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition shrink-0 ${
-              libraryMode === 'history'
-                ? 'bg-emerald-600 border-emerald-500 text-white shadow'
-                : theme.iconBtn
-            }`}
-          >
-            <Clock className="w-4 h-4" />
-            <span className="hidden md:inline">Đang xem</span>
-            {history.length > 0 && <span>({history.length})</span>}
-          </button>
+            {/* Đang xem (History) */}
+            <button
+              type="button"
+              onClick={() => setLibraryMode((m) => (m === 'history' ? 'browse' : 'history'))}
+              className={`h-10 px-2.5 sm:px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition shrink-0 ${
+                libraryMode === 'history'
+                  ? 'bg-emerald-600 border-emerald-500 text-white shadow'
+                  : theme.iconBtn
+              }`}
+            >
+              <Clock className="w-4 h-4 shrink-0" />
+              <span className="hidden md:inline">Đang xem</span>
+              {history.length > 0 && <span className="tabular-nums">({history.length})</span>}
+            </button>
 
-          {/* Phim yêu thích */}
-          <button
-            type="button"
-            onClick={() => setLibraryMode((m) => (m === 'favorites' ? 'browse' : 'favorites'))}
-            className={`min-h-[2.5rem] px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition shrink-0 ${
-              libraryMode === 'favorites'
-                ? 'bg-rose-600 border-rose-500 text-white shadow'
-                : theme.iconBtn
-            }`}
-          >
-            <Heart className={`w-4 h-4 ${libraryMode === 'favorites' ? 'fill-white' : ''}`} />
-            <span className="hidden md:inline">Yêu thích</span>
-            {favorites.length > 0 && <span>({favorites.length})</span>}
-          </button>
+            {/* Phim yêu thích */}
+            <button
+              type="button"
+              onClick={() => setLibraryMode((m) => (m === 'favorites' ? 'browse' : 'favorites'))}
+              className={`h-10 px-2.5 sm:px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition shrink-0 ${
+                libraryMode === 'favorites'
+                  ? 'bg-rose-600 border-rose-500 text-white shadow'
+                  : theme.iconBtn
+              }`}
+            >
+              <Heart className={`w-4 h-4 shrink-0 ${libraryMode === 'favorites' ? 'fill-white' : ''}`} />
+              <span className="hidden md:inline">Yêu thích</span>
+              {favorites.length > 0 && <span className="tabular-nums">({favorites.length})</span>}
+            </button>
 
-          {/* Làm mới */}
-          <button
-            type="button"
-            onClick={() => {
-              setLibraryMode('browse');
-              setReloadNonce((n) => n + 1);
-            }}
-            aria-label="Làm mới danh sách phim"
-            className={`w-10 h-10 rounded-xl border flex items-center justify-center active:scale-90 transition shrink-0 ${theme.iconBtn}`}
-          >
-            <RefreshCw className={`w-4 h-4 ${isLoadingList ? 'animate-spin' : ''}`} />
-          </button>
+            {/* Làm mới */}
+            <button
+              type="button"
+              onClick={() => {
+                setLibraryMode('browse');
+                setReloadNonce((n) => n + 1);
+              }}
+              aria-label="Làm mới danh sách phim"
+              className={`w-10 h-10 rounded-xl border flex items-center justify-center active:scale-90 transition shrink-0 ${theme.iconBtn}`}
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoadingList ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1109,14 +1163,20 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
               }}
               className={`min-h-[2.35rem] px-3.5 rounded-full text-xs font-extrabold whitespace-nowrap border flex items-center gap-1.5 active:scale-95 transition shrink-0 ${
                 active
-                  ? tab.id === 'phim-thuyet-minh'
+                  ? tab.id === 'phim-thuyet-minh' || tab.id === 'song-ngu'
                     ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow'
-                    : tab.id === 'phim-long-tieng' || tab.id === 'subteam' || tab.id === 'top-imdb' || tab.id === 'series-imdb'
+                    : tab.id === 'phim-long-tieng' || tab.id === 'subteam' || tab.id === 'top-imdb' || tab.id === 'series-imdb' || tab.id === 'phim-xua'
                     ? 'bg-amber-400 text-slate-950 border-amber-300 shadow'
-                    : tab.id === 'phim-chieu-rap'
+                    : tab.id === 'phim-chieu-rap' || tab.id === 'the-thao'
                     ? 'bg-rose-600 text-white border-rose-500 shadow'
                     : movieSource === 'vsmov'
                     ? 'bg-rose-600 text-white border-rose-500 shadow'
+                    : movieSource === 'nguonc'
+                    ? 'bg-emerald-600 text-white border-emerald-500 shadow'
+                    : movieSource === 'cobephim'
+                    ? 'bg-fuchsia-600 text-white border-fuchsia-500 shadow'
+                    : movieSource === 'k20'
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow'
                     : movieSource === 'vidsrc'
                     ? 'bg-cyan-600 text-white border-cyan-500 shadow'
                     : 'bg-violet-600 text-white border-violet-500 shadow'
@@ -1130,13 +1190,13 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
         })}
       </div>
 
-      {/* 3. BẢNG BỘ LỌC NÂNG CAO (Thể loại • Quốc gia • Năm • Âm thanh) */}
-      {showFilters && libraryMode === 'browse' && (
+      {/* 3. BẢNG BỘ LỌC NÂNG CAO (Tự thích nghi theo từng nguồn phim) */}
+      {showFilters && libraryMode === 'browse' && movieSource !== 'k20' && (
         <div
           className={`shrink-0 rounded-2xl border p-3 grid gap-2 animate-ios-sheet-in ${
-            movieSource === 'kkphim'
+            movieSource === 'kkphim' || movieSource === 'nguonc'
               ? 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-5'
-              : movieSource === 'vidsrc'
+              : movieSource === 'vidsrc' || movieSource === 'cobephim'
               ? 'grid-cols-2 sm:grid-cols-3'
               : 'grid-cols-2 sm:grid-cols-4'
           } ${theme.cardElevated}`}
@@ -1185,28 +1245,30 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             </label>
           )}
 
-          <label className="flex flex-col gap-1">
-            <span className={`text-[0.68rem] font-extrabold flex items-center gap-1 ${theme.textSub}`}>
-              <Calendar className="w-3.5 h-3.5" /> Năm
-            </span>
-            <select
-              value={selectedYear}
-              onChange={(e) => {
-                setSelectedYear(e.target.value);
-                setPage(1);
-              }}
-              className={`min-h-[2.35rem] px-2.5 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
-            >
-              <option value="">Tất cả năm</option>
-              {MOVIE_YEARS.map((y) => (
-                <option key={y} value={String(y)}>
-                  Năm {y}
-                </option>
-              ))}
-            </select>
-          </label>
+          {movieSource !== 'cobephim' && (
+            <label className="flex flex-col gap-1">
+              <span className={`text-[0.68rem] font-extrabold flex items-center gap-1 ${theme.textSub}`}>
+                <Calendar className="w-3.5 h-3.5" /> Năm
+              </span>
+              <select
+                value={selectedYear}
+                onChange={(e) => {
+                  setSelectedYear(e.target.value);
+                  setPage(1);
+                }}
+                className={`min-h-[2.35rem] px-2.5 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
+              >
+                <option value="">Tất cả năm</option>
+                {MOVIE_YEARS.map((y) => (
+                  <option key={y} value={String(y)}>
+                    Năm {y}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
-          {movieSource === 'kkphim' && (
+          {(movieSource === 'kkphim' || movieSource === 'nguonc') && (
             <label className="flex flex-col gap-1">
               <span className={`text-[0.68rem] font-extrabold flex items-center gap-1 ${theme.textSub}`}>
                 <Layers className="w-3.5 h-3.5" /> Âm thanh
@@ -1229,9 +1291,9 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
 
           <div
             className={`flex items-end ${
-              movieSource === 'kkphim'
+              movieSource === 'kkphim' || movieSource === 'nguonc'
                 ? 'col-span-2 sm:col-span-4 lg:col-span-1'
-                : movieSource === 'vidsrc'
+                : movieSource === 'vidsrc' || movieSource === 'cobephim'
                 ? 'col-span-2 sm:col-span-1'
                 : 'col-span-1'
             }`}

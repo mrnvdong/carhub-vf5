@@ -16,13 +16,90 @@ import {
   MonitorPlay,
   AlertCircle,
   RefreshCw,
+  Subtitles,
 } from 'lucide-react';
-import { MovieEpisode } from '../types';
-import { fetchAndCleanMovieM3u8 } from '../services/movie';
+import { MovieEpisode, MovieSubtitleTrack } from '../types';
+import {
+  K20ResolvedOption,
+  fetchAndCleanMovieM3u8,
+  isCobephimEpRef,
+  isDirectMp4Url,
+  isK20StreamRef,
+  isVsmovEmbedUrl,
+  resolveCobephimEpisode,
+  resolveK20Stream,
+  resolveVsmovStream,
+} from '../services/movie';
 import { formatSeconds } from '../services/api';
+
+function extractSubsFromK20Url(streamUrl: string): MovieSubtitleTrack[] {
+  try {
+    const u = new URL(streamUrl);
+    const raw = u.searchParams.get('subs');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: MovieSubtitleTrack[] = [];
+    const seen = new Set<string>();
+    for (const s of parsed) {
+      const subUrl = typeof s?.url === 'string' ? s.url.trim() : '';
+      if (!subUrl || seen.has(subUrl)) continue;
+      seen.add(subUrl);
+      const code = String(s?.lang || s?.code || '').toLowerCase();
+      if (code.startsWith('vi')) out.push({ label: 'Tiếng Việt', lang: 'vi', url: subUrl });
+      else if (code.startsWith('en')) out.push({ label: 'English', lang: 'en', url: subUrl });
+      else out.push({ label: code.toUpperCase() || 'CC', lang: code || 'und', url: subUrl });
+    }
+    out.sort((a, b) => (a.lang === 'vi' && b.lang !== 'vi' ? -1 : b.lang === 'vi' && a.lang !== 'vi' ? 1 : 0));
+    return out;
+  } catch {
+    return [];
+  }
+}
 
 type PlayerMode = 'clean' | 'direct' | 'embed';
 const SPEED_STEPS = [1, 1.25, 1.5, 2, 0.75];
+
+interface LoadedSubtitleTrack {
+  label: string;
+  lang: string;
+  blobUrl: string;
+}
+
+// Bóc lớp header ảnh PNG giả trang ở đầu phân đoạn MPEG-TS của VSMov (.png -> .ts) trong <0.02ms ngay trên trình duyệt
+function stripPngPrefixToMpegTs(buf: ArrayBuffer): ArrayBuffer {
+  const u8 = new Uint8Array(buf);
+  if (u8.length > 376 && u8[0] === 0x47 && u8[188] === 0x47 && u8[376] === 0x47) {
+    return buf;
+  }
+  const scanLimit = Math.min(u8.length - 377, 16384);
+  for (let i = 1; i <= scanLimit; i++) {
+    if (u8[i] === 0x47 && u8[i + 188] === 0x47 && u8[i + 376] === 0x47) {
+      return buf.slice(i);
+    }
+  }
+  return buf;
+}
+
+function createPngStripLoader(BaseLoader: any) {
+  return class PngTsStripLoader extends BaseLoader {
+    load(context: any, config: any, callbacks: any) {
+      const patchedCtx = { ...context, progressData: false };
+      const origOnSuccess = callbacks.onSuccess;
+      const patchedCallbacks = {
+        ...callbacks,
+        onProgress: undefined,
+        onSuccess: (response: any, stats: any, ctx: any, networkDetails: any) => {
+          if (response?.data instanceof ArrayBuffer) {
+            response.data = stripPngPrefixToMpegTs(response.data);
+          }
+          origOnSuccess(response, stats, ctx, networkDetails);
+        },
+      };
+      super.load(patchedCtx, config, patchedCallbacks);
+    }
+  };
+}
 
 interface MoviePlayerStageProps {
   movieTitle: string;
@@ -59,8 +136,18 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<any>(null);
 
+  const canUseHls = Boolean(
+    episode?.linkM3u8 ||
+      isVsmovEmbedUrl(episode?.linkEmbed) ||
+      isCobephimEpRef(episode?.linkEmbed) ||
+      isK20StreamRef(episode?.linkM3u8)
+  );
   const [playerMode, setPlayerMode] = useState<PlayerMode>(() =>
-    episode?.linkM3u8 ? 'clean' : 'embed'
+    episode?.linkM3u8 ||
+    isVsmovEmbedUrl(episode?.linkEmbed) ||
+    isCobephimEpRef(episode?.linkEmbed)
+      ? 'clean'
+      : 'embed'
   );
   const [reloadNonce, setReloadNonce] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -74,6 +161,14 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [seekFlash, setSeekFlash] = useState<'back' | 'forward' | null>(null);
   const [nextCountdown, setNextCountdown] = useState<number | null>(null);
+  const [subtitleTracks, setSubtitleTracks] = useState<LoadedSubtitleTrack[]>([]);
+  const [activeSubIdx, setActiveSubIdx] = useState<number>(-1);
+  const [resolvedEmbedOverride, setResolvedEmbedOverride] = useState<string>('');
+  const [k20Options, setK20Options] = useState<K20ResolvedOption[]>([]);
+  const [k20OptionIdx, setK20OptionIdx] = useState<number>(0);
+  // Mặc định TẮT sandbox ở chế độ Embed dự phòng vì VidFast/VidSrc từ chối iframe sandbox; các phim IMDb đã ưu tiên phát Direct HLS sạch 0% popup qua K20 trước!
+  const [embedPopupShield, setEmbedPopupShield] = useState<boolean>(false);
+  const [useVidsrcMirror, setUseVidsrcMirror] = useState<boolean>(false);
 
   const hudTimerRef = useRef<number | null>(null);
   const lastTapRef = useRef<{ time: number; side: 'left' | 'right' | 'center' }>({
@@ -101,7 +196,16 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     setErrorMsg(null);
     setCurrentTime(0);
     setDuration(0);
-    if (episode?.linkM3u8) {
+    setUseVidsrcMirror(false);
+    setResolvedEmbedOverride('');
+    setK20Options([]);
+    setK20OptionIdx(0);
+    setEmbedPopupShield(false);
+    if (
+      episode?.linkM3u8 ||
+      isVsmovEmbedUrl(episode?.linkEmbed) ||
+      isCobephimEpRef(episode?.linkEmbed)
+    ) {
       setPlayerMode((prev) => (prev === 'embed' ? 'clean' : prev));
     } else if (episode?.linkEmbed) {
       setPlayerMode('embed');
@@ -125,17 +229,24 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     scheduleHideHud();
   }, [scheduleHideHud]);
 
-  // Nạp luồng HLS (Sạch QC / Trực tiếp) bằng Native HLS trên iOS Safari hoặc lazy hls.js trên Chrome/Desktop
+  // Nạp luồng HLS / MP4 cho tất cả 6 nguồn: KKPhim, VSMov (PNG-TS + VTT), NguonC, CoBePhim, K20 (4K/MP4/Live), VidSrc (K20 Direct HLS 0% popup!)
   useEffect(() => {
-    if (!episode || playerMode === 'embed' || !episode.linkM3u8) {
+    const isInitialVsmov = Boolean(!episode?.linkM3u8 && isVsmovEmbedUrl(episode?.linkEmbed));
+    const isInitialCobephim = Boolean(!episode?.linkM3u8 && isCobephimEpRef(episode?.linkEmbed));
+    const isInitialK20 = Boolean(isK20StreamRef(episode?.linkM3u8));
+
+    if (
+      !episode ||
+      playerMode === 'embed' ||
+      (!episode.linkM3u8 && !isInitialVsmov && !isInitialCobephim)
+    ) {
       if (hlsRef.current) {
         try {
           hlsRef.current.destroy();
         } catch {}
         hlsRef.current = null;
       }
-      // Khi phát bằng Embed (như nguồn VSMov) -> vẫn tự tạm dừng Nhạc / TV / Báo Audio!
-      if (episode && playerMode === 'embed' && episode.linkEmbed) {
+      if (episode && playerMode === 'embed' && (resolvedEmbedOverride || episode.linkEmbed)) {
         onBeforePlayRef.current?.();
       }
       return;
@@ -146,8 +257,12 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
 
     let cancelled = false;
     let activeBlobUrl: string | null = null;
+    let createdSubBlobs: string[] = [];
+    let needsPngStrip = isInitialVsmov;
     setErrorMsg(null);
     setIsBuffering(true);
+    setSubtitleTracks([]);
+    setActiveSubIdx(-1);
 
     const cleanupHls = () => {
       if (hlsRef.current) {
@@ -162,14 +277,61 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
         } catch {}
         activeBlobUrl = null;
       }
+      if (createdSubBlobs.length > 0) {
+        for (const b of createdSubBlobs) {
+          try {
+            URL.revokeObjectURL(b);
+          } catch {}
+        }
+        createdSubBlobs = [];
+      }
+    };
+
+    const loadSubtitlesAsBlobs = (subs: MovieSubtitleTrack[]) => {
+      if (!subs || subs.length === 0) return;
+      Promise.allSettled(
+        subs.slice(0, 5).map(async (sub) => {
+          const r = await fetch(sub.url, { mode: 'cors' });
+          if (!r.ok) throw new Error(`VTT HTTP ${r.status}`);
+          const vttText = await r.text();
+          const blobUrl = URL.createObjectURL(
+            new Blob([vttText], { type: 'text/vtt;charset=utf-8' })
+          );
+          return { label: sub.label, lang: sub.lang, blobUrl } as LoadedSubtitleTrack;
+        })
+      ).then((results) => {
+        const loaded = results
+          .filter(
+            (x): x is PromiseFulfilledResult<LoadedSubtitleTrack> => x.status === 'fulfilled'
+          )
+          .map((x) => x.value);
+        if (cancelled) {
+          loaded.forEach((x) => {
+            try {
+              URL.revokeObjectURL(x.blobUrl);
+            } catch {}
+          });
+          return;
+        }
+        createdSubBlobs = loaded.map((x) => x.blobUrl);
+        if (loaded.length > 0) {
+          setSubtitleTracks(loaded);
+          setActiveSubIdx(0);
+        }
+      });
+    };
+
+    const canFallbackToEmbed = () => {
+      const emb = resolvedEmbedOverride || episode.linkEmbed;
+      return Boolean(emb && !isCobephimEpRef(emb));
     };
 
     const handleFatalFallback = () => {
       if (cancelled) return;
-      if (playerMode === 'clean') {
+      if (playerMode === 'clean' && !needsPngStrip && !isInitialK20) {
         onNotifyToastRef.current?.('⚡ Chuyển sang luồng HLS trực tiếp...');
         setPlayerMode('direct');
-      } else if (episode.linkEmbed) {
+      } else if (canFallbackToEmbed()) {
         onNotifyToastRef.current?.('🖥️ Chuyển sang trình phát Embed dự phòng...');
         setPlayerMode('embed');
       } else {
@@ -182,22 +344,140 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
       cleanupHls();
       onBeforePlayRef.current?.();
 
+      let resolvedMediaUrl = episode.linkM3u8 || '';
+      let vsmovTargetEmbed = isInitialVsmov ? episode.linkEmbed : '';
+
+      // A) Tách luồng tập CoBePhim (cobephim-ep://slug/epId)
+      if (isInitialCobephim && episode.linkEmbed) {
+        try {
+          const cb = await resolveCobephimEpisode(episode.linkEmbed);
+          if (cancelled) return;
+          if (cb.isEncrypted4k) {
+            setIsBuffering(false);
+            setErrorMsg(
+              'Server 4K này dùng khóa mã hóa riêng của CoBePhim — vui lòng chọn server Phụ đề (KK) / Song Ngữ (VS) / Phụ đề (NC) ở ngay bên dưới!'
+            );
+            return;
+          }
+          if (cb.linkM3u8) {
+            resolvedMediaUrl = cb.linkM3u8;
+            if (cb.linkEmbed) setResolvedEmbedOverride(cb.linkEmbed);
+          } else if (isVsmovEmbedUrl(cb.linkEmbed)) {
+            vsmovTargetEmbed = cb.linkEmbed;
+            needsPngStrip = true;
+            setResolvedEmbedOverride(cb.linkEmbed);
+          } else if (cb.linkEmbed) {
+            setResolvedEmbedOverride(cb.linkEmbed);
+            setPlayerMode('embed');
+            return;
+          } else {
+            setIsBuffering(false);
+            setErrorMsg('Tập phim này chưa có nguồn phát mở — hãy thử chọn Server khác');
+            return;
+          }
+        } catch (err: any) {
+          if (!cancelled) {
+            setIsBuffering(false);
+            setErrorMsg(err?.message || 'Không tải được tập phim CoBePhim');
+          }
+          return;
+        }
+      }
+
+      // B) Tách luồng K20 / VidSrc-IMDb (k20-ep://... hoặc k20-imdb://...) -> ưu tiên Direct HLS/MP4 0% popup!
+      if (isInitialK20 && resolvedMediaUrl) {
+        try {
+          const k20 = await resolveK20Stream(resolvedMediaUrl);
+          if (cancelled) return;
+          const opts = k20.streams || [];
+          if (opts.length > 0) {
+            setK20Options(opts);
+            const safeIdx = Math.min(k20OptionIdx, opts.length - 1);
+            const picked = opts[safeIdx];
+            resolvedMediaUrl = picked.url;
+            if (picked.subtitles && picked.subtitles.length > 0) {
+              loadSubtitlesAsBlobs(picked.subtitles);
+            }
+          } else if (episode.linkEmbed) {
+            // Phim quốc tế hiếm chưa có trên K20 -> rơi mượt về Embed VidFast!
+            setPlayerMode('embed');
+            return;
+          } else {
+            setIsBuffering(false);
+            setErrorMsg('Chưa tìm thấy luồng phát trực tiếp cho tập này');
+            return;
+          }
+        } catch {
+          if (!cancelled) {
+            if (episode.linkEmbed) {
+              setPlayerMode('embed');
+            } else {
+              setIsBuffering(false);
+              setErrorMsg('Không kết nối được máy chủ K20 — bấm Thử lại');
+            }
+          }
+          return;
+        }
+      }
+
+      // C) Tách luồng VSMov (streamvsmov.com/video/...) -> master.m3u8 + phụ đề WebVTT (không logo, không QC!)
+      if (vsmovTargetEmbed) {
+        try {
+          const resolved = await resolveVsmovStream(vsmovTargetEmbed);
+          if (cancelled) return;
+          resolvedMediaUrl = resolved.m3u8Url;
+          needsPngStrip = true;
+          loadSubtitlesAsBlobs(resolved.subtitles);
+        } catch (err) {
+          console.warn('[MoviePlayer] VSMov resolve fallback -> embed:', err);
+          if (!cancelled) {
+            setPlayerMode('embed');
+          }
+          return;
+        }
+      }
+
+      if (!resolvedMediaUrl || cancelled) return;
+
+      // D) Nếu luồng là MP4 trực tiếp (vd CLB Phim Xưa 720p MP4) -> phát native HTML5 <video> (Range 206 seek siêu mượt!)
+      if (isDirectMp4Url(resolvedMediaUrl)) {
+        video.src = resolvedMediaUrl;
+        video.playbackRate = playbackRate;
+        video.load();
+        video.play().catch(() => {
+          setIsBuffering(false);
+          setIsPlaying(false);
+        });
+        return;
+      }
+
+      // Nếu là URL K20 proxy có đính kèm subs= -> nạp luôn phụ đề cho nút CC!
+      const k20InlineSubs = extractSubsFromK20Url(resolvedMediaUrl);
+      if (k20InlineSubs.length > 0) {
+        loadSubtitlesAsBlobs(k20InlineSubs);
+      }
+
+      const isK20ManagedHls =
+        /sc\.k-20\.xyz|sports\.k-20\.xyz/i.test(resolvedMediaUrl);
+
       const ua = navigator.userAgent || '';
       const isIosDevice =
         /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && 'ontouchend' in document);
       const canNativeHls = video.canPlayType('application/vnd.apple.mpegurl') !== '';
 
-      // 1) Ưu tiên hls.js (Chrome / Edge / Firefox / Android / Desktop / iPadOS hỗ trợ MSE):
-      //    Chạy được Blob M3U8 đã lọc QC 100% client-side (không bị chặn IP datacenter!)
+      // 1) Ưu tiên hls.js:
+      //    - KKPhim: lọc QC M3U8 client-side 100%
+      //    - VSMov: bóc header PNG -> MPEG-TS sạch logo & QC (cả trên iOS 17.1+ ManagedMediaSource!)
+      //    - K20 / NguonC: nạp trực tiếp playlist đã sạch QC kèm phụ đề gốc!
       try {
         const mod = await import('hls.js');
         if (cancelled) return;
         const Hls = mod.default;
-        if (Hls && Hls.isSupported() && !isIosDevice) {
-          let sourceUrl = episode.linkM3u8;
-          if (playerMode === 'clean') {
+        if (Hls && Hls.isSupported() && (!isIosDevice || needsPngStrip)) {
+          let sourceUrl = resolvedMediaUrl;
+          if (playerMode === 'clean' && !isK20ManagedHls) {
             try {
-              const cleaned = await fetchAndCleanMovieM3u8(episode.linkM3u8);
+              const cleaned = await fetchAndCleanMovieM3u8(resolvedMediaUrl);
               if (cancelled) {
                 URL.revokeObjectURL(cleaned.blobUrl);
                 return;
@@ -210,13 +490,12 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
                 );
               }
             } catch {
-              // Nếu CDN không cho CORS fetch trực tiếp -> dùng nguyên link m3u8 gốc
-              sourceUrl = episode.linkM3u8;
+              sourceUrl = resolvedMediaUrl;
             }
           }
 
           if (cancelled) return;
-          const hls = new Hls({
+          const hlsConfig: any = {
             enableWorker: true,
             lowLatencyMode: false,
             backBufferLength: 60,
@@ -224,7 +503,12 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
             maxMaxBufferLength: 60,
             fragLoadingTimeOut: 20000,
             manifestLoadingTimeOut: 15000,
-          });
+          };
+          if (needsPngStrip && Hls.DefaultConfig?.loader) {
+            hlsConfig.fLoader = createPngStripLoader(Hls.DefaultConfig.loader);
+          }
+
+          const hls = new Hls(hlsConfig);
           hlsRef.current = hls;
           hls.attachMedia(video);
 
@@ -264,9 +548,9 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
         console.warn('[MoviePlayer] hls.js load error:', err);
       }
 
-      // 2) Trên iPhone / CarPlay WKWebView (APTV / asCar): chạy Native Hardware HLS trực tiếp từ CDN gốc!
-      if (canNativeHls) {
-        video.src = episode.linkM3u8;
+      // 2) Trên iPhone / CarPlay WKWebView: chạy Native Hardware HLS trực tiếp!
+      if (canNativeHls && !needsPngStrip) {
+        video.src = resolvedMediaUrl;
         video.playbackRate = playbackRate;
         video.load();
         video.play().catch(() => {
@@ -285,7 +569,6 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
       cancelled = true;
       cleanupHls();
       if (video) {
-        // Lưu vị trí xem cuối cùng trước khi rời tập
         if (video.currentTime > 5 && Number.isFinite(video.duration) && video.duration > 30) {
           onProgressSaveRef.current(video.currentTime, video.duration);
         }
@@ -297,7 +580,16 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [episode?.linkM3u8, episode?.linkEmbed, episode?.slug, playerMode, reloadNonce]);
+  }, [episode?.linkM3u8, episode?.linkEmbed, episode?.slug, playerMode, reloadNonce, k20OptionIdx]);
+
+  // Đồng bộ bật/tắt track phụ đề WebVTT trên <video>
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !v.textTracks) return;
+    for (let i = 0; i < v.textTracks.length; i++) {
+      v.textTracks[i].mode = i === activeSubIdx ? 'showing' : 'hidden';
+    }
+  }, [subtitleTracks, activeSubIdx]);
 
   // Đếm ngược 8 giây tự sang tập kế tiếp
   useEffect(() => {
@@ -381,6 +673,18 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     revealHud();
   }, [revealHud]);
 
+  const cycleSubtitle = useCallback(() => {
+    if (subtitleTracks.length === 0) return;
+    setActiveSubIdx((prev) => {
+      const next = prev + 1 >= subtitleTracks.length ? -1 : prev + 1;
+      onNotifyToastRef.current?.(
+        next === -1 ? '💬 Đã tắt phụ đề' : `💬 Phụ đề: ${subtitleTracks[next].label}`
+      );
+      return next;
+    });
+    revealHud();
+  }, [subtitleTracks, revealHud]);
+
   const toggleFullscreen = useCallback(() => {
     const container = stageRef.current;
     const video = videoRef.current as any;
@@ -447,27 +751,84 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
       }`}
     >
       {/* TRÌNH PHÁT EMBED DỰ PHÒNG */}
-      {playerMode === 'embed' && episode.linkEmbed ? (
-        <div className="absolute inset-0 w-full h-full">
-          <iframe
-            key={episode.linkEmbed}
-            src={episode.linkEmbed}
-            title={`${movieTitle} - ${episode.name}`}
-            allow="autoplay; fullscreen; picture-in-picture"
-            allowFullScreen
-            className="w-full h-full border-0 bg-black"
-          />
-          {episode.linkM3u8 && (
-            <button
-              type="button"
-              onClick={() => setPlayerMode('clean')}
-              className="absolute top-3 right-3 z-20 min-h-[2.25rem] px-3 rounded-full bg-black/80 hover:bg-violet-600 text-white border border-white/25 text-xs font-extrabold flex items-center gap-1.5 backdrop-blur-md shadow-xl active:scale-95 transition"
-            >
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>Quay lại HLS Sạch QC</span>
-            </button>
-          )}
-        </div>
+      {playerMode === 'embed' && (resolvedEmbedOverride || episode.linkEmbed) ? (
+        (() => {
+          const rawEmbed = resolvedEmbedOverride || episode.linkEmbed;
+          const vfMatch = rawEmbed.match(/^https:\/\/vidfast\.vc\/(movie|tv)\/([^?]+)/i);
+          const altVidsrcUrl = vfMatch
+            ? `https://vidsrc.mov/embed/${vfMatch[1].toLowerCase()}/${vfMatch[2]}`
+            : '';
+          const finalEmbedUrl = useVidsrcMirror && altVidsrcUrl ? altVidsrcUrl : rawEmbed;
+
+          return (
+            <div className="absolute inset-0 w-full h-full">
+              <iframe
+                key={`${finalEmbedUrl}::${embedPopupShield ? 'shield' : 'open'}`}
+                src={finalEmbedUrl}
+                title={`${movieTitle} - ${episode.name}`}
+                allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+                allowFullScreen
+                referrerPolicy="no-referrer"
+                sandbox={
+                  embedPopupShield
+                    ? 'allow-scripts allow-same-origin allow-presentation allow-forms'
+                    : undefined
+                }
+                className="w-full h-full border-0 bg-black"
+              />
+              <div className="absolute top-2.5 right-2.5 z-20 flex flex-wrap items-center justify-end gap-1.5">
+                {altVidsrcUrl && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !useVidsrcMirror;
+                      setUseVidsrcMirror(next);
+                      onNotifyToastRef.current?.(
+                        next ? '🔄 Đã chuyển sang Embed dự phòng VidSrc.mov' : '🔄 Đã chuyển sang VidFast'
+                      );
+                    }}
+                    className="min-h-[2.1rem] px-2.5 rounded-full bg-black/80 hover:bg-cyan-600 text-white border border-white/25 text-[0.7rem] font-extrabold backdrop-blur-md shadow-xl active:scale-95 transition"
+                  >
+                    {useVidsrcMirror ? '← Về VidFast' : 'Đổi VidSrc'}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !embedPopupShield;
+                    setEmbedPopupShield(next);
+                    onNotifyToastRef.current?.(
+                      next
+                        ? '🛡️ Đã BẬT khóa sandbox chặn popup (nếu video báo chặn hãy tắt lại)'
+                        : '🔓 Đã TẮT khóa sandbox để phát trình phát gốc'
+                    );
+                  }}
+                  title="Bật/tắt HTML5 sandbox chặn popup (một số server embed có thể từ chối sandbox)"
+                  className={`min-h-[2.1rem] px-2.5 rounded-full border text-[0.7rem] font-extrabold flex items-center gap-1 backdrop-blur-md shadow-xl active:scale-95 transition ${
+                    embedPopupShield
+                      ? 'bg-emerald-500/90 border-emerald-300 text-slate-950'
+                      : 'bg-black/80 border-white/25 text-white/85 hover:text-white'
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                  <span>{embedPopupShield ? 'Sandbox: BẬT' : 'Sandbox: TẮT'}</span>
+                </button>
+
+                {canUseHls && (
+                  <button
+                    type="button"
+                    onClick={() => setPlayerMode('clean')}
+                    className="min-h-[2.1rem] px-2.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-300/60 text-[0.7rem] font-extrabold flex items-center gap-1 backdrop-blur-md shadow-xl active:scale-95 transition"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                    <span>HLS Sạch 0% Popup</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()
       ) : (
         <>
           {/* VIDEO ELEMENT HLS 1080P */}
@@ -534,7 +895,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
               }
             }}
             onError={() => {
-              if (playerMode === 'clean') {
+              if (playerMode === 'clean' && !isVsmovEmbedUrl(episode.linkEmbed)) {
                 setPlayerMode('direct');
               } else if (episode.linkEmbed) {
                 setPlayerMode('embed');
@@ -543,7 +904,18 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
                 setErrorMsg('Luồng phát gặp sự cố — thử đổi sang Trực tiếp hoặc Embed');
               }
             }}
-          />
+          >
+            {subtitleTracks.map((tr, idx) => (
+              <track
+                key={tr.blobUrl}
+                kind="subtitles"
+                src={tr.blobUrl}
+                srcLang={tr.lang}
+                label={tr.label}
+                default={idx === 0}
+              />
+            ))}
+          </video>
 
           {/* Hiệu ứng chớp khi chạm đúp tua -10s / +10s */}
           {seekFlash && (
@@ -684,7 +1056,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
                     <Zap className="w-3.5 h-3.5 shrink-0" />
                     <span className="hidden sm:inline">Gốc</span>
                   </button>
-                  {episode.linkEmbed && (
+                  {episode.linkEmbed && !isCobephimEpRef(episode.linkEmbed) && (
                     <button
                       type="button"
                       onClick={() => setPlayerMode('embed')}
@@ -695,6 +1067,43 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
                     </button>
                   )}
                 </div>
+
+                {k20Options.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextIdx = (k20OptionIdx + 1) % k20Options.length;
+                      setK20OptionIdx(nextIdx);
+                      onNotifyToastRef.current?.(`🎬 Đã đổi luồng: ${k20Options[nextIdx]?.label}`);
+                    }}
+                    title="Chuyển nhanh giữa các bản 4K / Thuyết minh / Vietsub / 720p"
+                    className="min-h-[2.1rem] max-w-[10rem] px-2.5 rounded-full bg-amber-400/95 text-slate-950 border border-amber-200 text-[0.7rem] font-black truncate active:scale-95 transition"
+                  >
+                    ⚡ {k20Options[k20OptionIdx]?.label || 'Đổi nguồn'}
+                  </button>
+                )}
+
+                {subtitleTracks.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={cycleSubtitle}
+                    title={
+                      activeSubIdx >= 0
+                        ? `Phụ đề: ${subtitleTracks[activeSubIdx]?.label} (bấm để đổi hoặc tắt)`
+                        : 'Bật phụ đề'
+                    }
+                    className={`min-h-[2.1rem] px-2.5 rounded-full border text-xs font-extrabold flex items-center gap-1 active:scale-95 transition ${
+                      activeSubIdx >= 0
+                        ? 'bg-emerald-500 border-emerald-400 text-slate-950 shadow'
+                        : 'bg-black/65 border-white/20 text-white/75 hover:text-white'
+                    }`}
+                  >
+                    <Subtitles className="w-3.5 h-3.5 shrink-0" />
+                    <span className="hidden sm:inline">
+                      {activeSubIdx >= 0 ? subtitleTracks[activeSubIdx]?.label : 'Tắt CC'}
+                    </span>
+                  </button>
+                )}
 
                 <button
                   type="button"
