@@ -91,6 +91,73 @@ export function buildNewsAudioProxyUrl(streamingUrl: string): string {
   return `/api/news?action=audio-proxy&url=${encodeURIComponent(streamingUrl)}`;
 }
 
+export function buildNewsTtsUrl(text: string): string {
+  return `/api/news?action=tts&q=${encodeURIComponent(text.trim().slice(0, 195))}`;
+}
+
+export function splitVietnameseTtsChunks(rawText: string, maxLen = 175): string[] {
+  const cleaned = rawText
+    .replace(/\s+/g, ' ')
+    .replace(/[“”"]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return [];
+
+  // Tách theo ranh giới câu tự nhiên (giữ nguyên số thập phân như 19.100 hoặc 3,5)
+  const rawSentences = cleaned
+    .split(/(?<=[.!?…;])\s+(?=[^\d])|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const chunks: string[] = [];
+
+  const pushWrapped = (segment: string) => {
+    let rest = segment.trim();
+    while (rest.length > maxLen) {
+      let cut = -1;
+      const slice = rest.slice(0, maxLen);
+      // Ưu tiên cắt tại dấu phẩy / hai chấm / gạch ngang gần cuối
+      for (const sep of [', ', ': ', ' - ', ' – ']) {
+        const idx = slice.lastIndexOf(sep);
+        if (idx >= Math.floor(maxLen * 0.4)) {
+          cut = idx + sep.length;
+          break;
+        }
+      }
+      if (cut < 0) {
+        const sp = slice.lastIndexOf(' ');
+        cut = sp >= Math.floor(maxLen * 0.4) ? sp : maxLen;
+      }
+      const part = rest.slice(0, cut).trim();
+      if (part) chunks.push(part);
+      rest = rest.slice(cut).trim();
+    }
+    if (rest) chunks.push(rest);
+  };
+
+  let buffer = '';
+  for (const s of rawSentences) {
+    if (s.length > maxLen) {
+      if (buffer) {
+        chunks.push(buffer);
+        buffer = '';
+      }
+      pushWrapped(s);
+    } else if (!buffer) {
+      buffer = s;
+    } else if (buffer.length + 1 + s.length <= maxLen) {
+      buffer = `${buffer} ${s}`;
+    } else {
+      chunks.push(buffer);
+      buffer = s;
+    }
+  }
+  if (buffer) chunks.push(buffer);
+
+  // Giới hạn tối đa 60 đoạn (~10.000 ký tự, đủ đọc trọn vẹn cả bài báo dài)
+  return chunks.slice(0, 60);
+}
+
 export function formatNewsRelativeTime(unixSeconds?: number): string {
   if (!unixSeconds || !Number.isFinite(unixSeconds)) return '';
   const diffSec = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);

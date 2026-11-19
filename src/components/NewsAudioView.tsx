@@ -531,8 +531,22 @@ export const NewsAudioView: React.FC<NewsAudioViewProps> = ({
                             : 'bg-amber-500 text-slate-950 shadow'
                         }`}
                       >
-                        <Volume2 className="w-4 h-4" />
-                        <span>{news.isTtsSpeaking ? 'Dừng đọc máy' : 'Đọc giọng máy (TTS)'}</span>
+                        {news.isTtsMode && news.isBuffering ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Volume2 className="w-4 h-4" />
+                        )}
+                        <span>
+                          {news.isTtsSpeaking
+                            ? `Tạm dừng${
+                                news.ttsTotalChunks > 0
+                                  ? ` (${news.ttsChunkIndex + 1}/${news.ttsTotalChunks})`
+                                  : ''
+                              }`
+                            : news.isTtsMode && news.ttsTotalChunks > 0
+                            ? `Nghe tiếp (${news.ttsChunkIndex + 1}/${news.ttsTotalChunks})`
+                            : 'Đọc giọng máy (AI Việt)'}
+                        </span>
                       </button>
                     </div>
                   )}
@@ -561,26 +575,60 @@ export const NewsAudioView: React.FC<NewsAudioViewProps> = ({
                   </p>
                 )}
 
-                {/* Dòng 3: Thanh tua .m4a + Nút điều khiển lớn chuẩn cảm ứng ô tô */}
-                {hasStudioAudio && (
+                {/* Dòng 3: Thanh tua .m4a (hoặc theo đoạn TTS MP3) + Nút điều khiển lớn chuẩn cảm ứng ô tô */}
+                {(hasStudioAudio || news.isTtsMode) && (
                   <div className="space-y-1">
                     <div>
                       <input
                         type="range"
                         aria-label="Thanh tua Báo Audio"
                         min={0}
-                        max={safeDuration || 100}
+                        max={
+                          news.isTtsMode
+                            ? Math.max(1, news.ttsTotalChunks - 1)
+                            : safeDuration || 100
+                        }
                         step={1}
-                        value={Math.min(news.currentTime, safeDuration || 100)}
-                        style={{ '--progress': `${progressPct}%` } as React.CSSProperties}
+                        value={
+                          news.isTtsMode
+                            ? news.ttsChunkIndex
+                            : Math.min(news.currentTime, safeDuration || 100)
+                        }
+                        style={
+                          {
+                            '--progress': `${
+                              news.isTtsMode
+                                ? news.ttsTotalChunks > 1
+                                  ? Math.min(
+                                      100,
+                                      Math.max(
+                                        0,
+                                        (news.ttsChunkIndex / (news.ttsTotalChunks - 1)) * 100
+                                      )
+                                    )
+                                  : 100
+                                : progressPct
+                            }%`,
+                          } as React.CSSProperties
+                        }
                         onChange={(e) => news.seekTo(parseFloat(e.target.value))}
                         className={theme.scrubber}
                       />
                       <div
                         className={`flex justify-between text-[0.72rem] font-mono font-bold -mt-1.5 px-0.5 ${theme.textMuted}`}
                       >
-                        <span>{formatSeconds(news.currentTime)}</span>
-                        <span>{safeDuration > 0 ? `-${formatSeconds(remainingTime)}` : '--:--'}</span>
+                        <span>
+                          {news.isTtsMode
+                            ? `Đoạn ${news.ttsChunkIndex + 1}/${Math.max(1, news.ttsTotalChunks)}`
+                            : formatSeconds(news.currentTime)}
+                        </span>
+                        <span>
+                          {news.isTtsMode
+                            ? 'AI TTS Việt'
+                            : safeDuration > 0
+                            ? `-${formatSeconds(remainingTime)}`
+                            : '--:--'}
+                        </span>
                       </div>
                     </div>
 
@@ -598,22 +646,24 @@ export const NewsAudioView: React.FC<NewsAudioViewProps> = ({
                       <button
                         type="button"
                         onClick={() => news.seekRelative(-15)}
-                        aria-label="Tua lùi 15 giây"
+                        aria-label={news.isTtsMode ? 'Đoạn trước' : 'Tua lùi 15 giây'}
                         className={`w-11 h-11 rounded-full border flex flex-col items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
-                        <span className="text-[0.6rem] font-black leading-none mt-0.5">-15s</span>
+                        <span className="text-[0.6rem] font-black leading-none mt-0.5">
+                          {news.isTtsMode ? '-1 câu' : '-15s'}
+                        </span>
                       </button>
 
                       <button
                         type="button"
                         onClick={news.togglePlay}
-                        aria-label={news.isPlaying ? 'Tạm dừng đọc báo' : 'Phát báo audio'}
+                        aria-label={isActuallySpeaking ? 'Tạm dừng đọc báo' : 'Phát báo audio'}
                         className={`w-14 h-14 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
                       >
                         {news.isBuffering || news.isLoadingArticle ? (
                           <Loader2 className="w-6 h-6 animate-spin" />
-                        ) : news.isPlaying ? (
+                        ) : isActuallySpeaking ? (
                           <Pause className={`w-6 h-6 ${theme.primaryCtaIcon}`} />
                         ) : (
                           <Play className={`w-6 h-6 ml-0.5 ${theme.primaryCtaIcon}`} />
@@ -623,11 +673,13 @@ export const NewsAudioView: React.FC<NewsAudioViewProps> = ({
                       <button
                         type="button"
                         onClick={() => news.seekRelative(15)}
-                        aria-label="Tua tới 15 giây"
+                        aria-label={news.isTtsMode ? 'Đoạn tiếp' : 'Tua tới 15 giây'}
                         className={`w-11 h-11 rounded-full border flex flex-col items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
                       >
                         <RotateCw className="w-3.5 h-3.5" />
-                        <span className="text-[0.6rem] font-black leading-none mt-0.5">+15s</span>
+                        <span className="text-[0.6rem] font-black leading-none mt-0.5">
+                          {news.isTtsMode ? '+1 câu' : '+15s'}
+                        </span>
                       </button>
 
                       <button

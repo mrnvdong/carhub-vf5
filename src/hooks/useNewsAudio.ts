@@ -7,9 +7,11 @@ import {
 } from '../types';
 import {
   buildNewsAudioProxyUrl,
+  buildNewsTtsUrl,
   fetchNewsArticle,
   fetchNewsFeed,
   getVoiceShortName,
+  splitVietnameseTtsChunks,
 } from '../services/news';
 
 const SPEED_OPTIONS = [0.85, 1, 1.25, 1.5, 1.75];
@@ -42,7 +44,10 @@ export interface NewsAudioController {
   // Điều khiển phát Audio
   isPlaying: boolean;
   isBuffering: boolean;
+  isTtsMode: boolean;
   isTtsSpeaking: boolean;
+  ttsChunkIndex: number;
+  ttsTotalChunks: number;
   audioError: string | null;
   currentTime: number;
   duration: number;
@@ -149,7 +154,10 @@ export function useNewsAudio(
 
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isBuffering, setIsBuffering] = useState<boolean>(false);
-  const [isTtsSpeaking, setIsTtsSpeaking] = useState<boolean>(false);
+  const [isTtsMode, setIsTtsMode] = useState<boolean>(false);
+  const [isSpeechFallbackSpeaking, setIsSpeechFallbackSpeaking] = useState<boolean>(false);
+  const [ttsChunkIndex, setTtsChunkIndex] = useState<number>(0);
+  const [ttsTotalChunks, setTtsTotalChunks] = useState<number>(0);
   const [audioError, setAudioError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
@@ -165,6 +173,13 @@ export function useNewsAudio(
   const currentStreamingUrlRef = useRef<string>('');
   const usedProxyFallbackRef = useRef<boolean>(false);
   const pendingSeekTimeRef = useRef<number | null>(null);
+
+  // State ref cho hàng đợi đọc giọng máy MP3 (Server TTS qua /api/news?action=tts + dự phòng Web Speech chia nhỏ câu)
+  const isTtsModeRef = useRef<boolean>(false);
+  const ttsChunksRef = useRef<string[]>([]);
+  const ttsChunkIdxRef = useRef<number>(0);
+  const speechSessionRef = useRef<number>(0);
+  const speechFallbackActiveRef = useRef<boolean>(false);
 
   const onBeforePlayRef = useRef(onBeforePlayAudio);
   onBeforePlayRef.current = onBeforePlayAudio;
@@ -185,7 +200,9 @@ export function useNewsAudio(
     });
   }, []);
 
-  const stopBrowserTts = useCallback(() => {
+  const stopSpeechFallbackOnly = useCallback(() => {
+    speechSessionRef.current += 1;
+    speechFallbackActiveRef.current = false;
     try {
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -193,8 +210,128 @@ export function useNewsAudio(
     } catch {
       // ignore
     }
-    setIsTtsSpeaking(false);
+    setIsSpeechFallbackSpeaking(false);
   }, []);
+
+  const stopBrowserTts = useCallback(() => {
+    stopSpeechFallbackOnly();
+    isTtsModeRef.current = false;
+    ttsChunksRef.current = [];
+    ttsChunkIdxRef.current = 0;
+    setIsTtsMode(false);
+    setTtsChunkIndex(0);
+    setTtsTotalChunks(0);
+  }, [stopSpeechFallbackOnly]);
+
+  // Phát 1 đoạn MP3 tiếng Việt qua chính thẻ <audio> duy nhất (tương thích 100% iOS Safari / CarPlay WKWebView!)
+  const playServerTtsChunk = useCallback(
+    (chunkIdx: number) => {
+      const audio = audioRef.current;
+      const chunks = ttsChunksRef.current;
+      if (!audio || !chunks.length || chunkIdx < 0 || chunkIdx >= chunks.length) {
+        return;
+      }
+
+      stopSpeechFallbackOnly();
+      isTtsModeRef.current = true;
+      ttsChunkIdxRef.current = chunkIdx;
+      currentStreamingUrlRef.current = '';
+      usedProxyFallbackRef.current = false;
+      pendingSeekTimeRef.current = null;
+
+      setIsTtsMode(true);
+      setTtsChunkIndex(chunkIdx);
+      setTtsTotalChunks(chunks.length);
+      setAudioError(null);
+      setIsBuffering(true);
+
+      const url = buildNewsTtsUrl(chunks[chunkIdx]);
+      onBeforePlayRef.current?.();
+
+      audio.src = url;
+      audio.playbackRate = playbackRateRef.current;
+      audio.load();
+      audio.play().catch((err) => {
+        console.warn('[NewsTTS] audio.play() rejected:', err);
+        setIsBuffering(false);
+        setIsPlaying(false);
+        setAudioError('Chạm lại nút Phát để mở tiếng giọng đọc');
+      });
+
+      // Nạp trước đoạn tiếp theo vào cache trình duyệt & Cloudflare Edge để nối câu không bị khựng!
+      if (chunkIdx + 1 < chunks.length) {
+        fetch(buildNewsTtsUrl(chunks[chunkIdx + 1])).catch(() => {});
+      }
+    },
+    [stopSpeechFallbackOnly]
+  );
+
+  // Dự phòng cuối cùng bằng Web Speech API (chia nhỏ câu <=175 ký tự + delay 80ms sau cancel để không bị Chrome/Safari nuốt!)
+  const startWebSpeechFallback = useCallback(
+    (startIdx: number, onAllDone?: () => void) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        setAudioError('Thiết bị không hỗ trợ phát giọng đọc máy');
+        return;
+      }
+      const chunks = ttsChunksRef.current;
+      if (!chunks.length || startIdx >= chunks.length) return;
+
+      const sessionId = ++speechSessionRef.current;
+      speechFallbackActiveRef.current = true;
+      setAudioError(null);
+      setIsBuffering(false);
+      setIsPlaying(false);
+      setIsSpeechFallbackSpeaking(true);
+
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
+
+      const speakIdx = (idx: number) => {
+        if (speechSessionRef.current !== sessionId || !speechFallbackActiveRef.current) return;
+        if (idx >= chunks.length) {
+          speechFallbackActiveRef.current = false;
+          setIsSpeechFallbackSpeaking(false);
+          onAllDone?.();
+          return;
+        }
+
+        ttsChunkIdxRef.current = idx;
+        setTtsChunkIndex(idx);
+
+        const utter = new SpeechSynthesisUtterance(chunks[idx]);
+        utter.lang = 'vi-VN';
+        utter.rate = Math.min(1.5, Math.max(0.85, playbackRateRef.current));
+        try {
+          const viVoice = window.speechSynthesis
+            .getVoices()
+            .find((v) => v.lang.toLowerCase().startsWith('vi'));
+          if (viVoice) utter.voice = viVoice;
+        } catch {
+          // ignore
+        }
+
+        utter.onend = () => {
+          if (speechSessionRef.current !== sessionId) return;
+          speakIdx(idx + 1);
+        };
+        utter.onerror = () => {
+          if (speechSessionRef.current !== sessionId) return;
+          speechFallbackActiveRef.current = false;
+          setIsSpeechFallbackSpeaking(false);
+          setAudioError('Không phát được giọng đọc máy trên thiết bị này');
+        };
+
+        window.speechSynthesis.speak(utter);
+      };
+
+      // Chờ 80ms sau cancel() để tránh lỗi Chrome/Safari hủy luôn câu vừa nạp!
+      window.setTimeout(() => speakIdx(startIdx), 80);
+    },
+    []
+  );
 
   // Chọn giọng khớp preferredVoiceId (hoặc giọng đầu tiên nếu là bản tin /audio.epi)
   const pickVoiceFromList = useCallback(
@@ -250,10 +387,10 @@ export function useNewsAudio(
     if (audio && !audio.paused) {
       audio.pause();
     }
-    stopBrowserTts();
+    stopSpeechFallbackOnly();
     setIsPlaying(false);
     setIsBuffering(false);
-  }, [stopBrowserTts]);
+  }, [stopSpeechFallbackOnly]);
 
   // Tải feed tin tức mỗi khi đổi danh mục / tìm kiếm / làm mới
   useEffect(() => {
@@ -621,44 +758,52 @@ export function useNewsAudio(
     });
   }, []);
 
-  // Đọc bằng giọng máy trình duyệt (TTS vi-VN) cho các bài mới ra lò chưa có file .m4a
+  // Đọc bằng giọng máy MP3 tiếng Việt (Server TTS chia câu nối liền qua thẻ <audio> -> chạy mượt 100% cả trên iOS CarPlay!)
   const toggleBrowserTts = useCallback(() => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      onNotifyToastRef.current?.('Trình duyệt không hỗ trợ giọng đọc máy TTS');
+    const audio = audioRef.current;
+
+    // Nếu đang chạy nhánh dự phòng Web Speech -> bấm để dừng
+    if (speechFallbackActiveRef.current) {
+      stopSpeechFallbackOnly();
       return;
     }
 
-    if (isTtsSpeaking) {
-      stopBrowserTts();
+    // Nếu bài hiện tại đã ở chế độ đọc giọng máy MP3 -> Tạm dừng / Phát tiếp ngay tại đoạn đang đọc!
+    if (isTtsModeRef.current && ttsChunksRef.current.length > 0 && audio) {
+      if (!audio.paused) {
+        audio.pause();
+        setIsPlaying(false);
+        return;
+      }
+      if (audio.src) {
+        onBeforePlayRef.current?.();
+        audio.playbackRate = playbackRateRef.current;
+        audio.play().catch(() => {
+          playServerTtsChunk(ttsChunkIdxRef.current);
+        });
+        return;
+      }
+      playServerTtsChunk(ttsChunkIdxRef.current);
       return;
     }
 
     const detail = activeArticleRef.current;
-    const text = detail?.plainText || activeItemRef.current?.title || '';
-    if (!text) return;
-
-    const audio = audioRef.current;
-    if (audio && !audio.paused) {
-      audio.pause();
+    const rawText =
+      detail?.plainText ||
+      [activeItemRef.current?.title, activeItemRef.current?.description].filter(Boolean).join('. ');
+    const chunks = splitVietnameseTtsChunks(rawText);
+    if (!chunks.length) {
+      onNotifyToastRef.current?.('Bài báo này không có nội dung văn bản để đọc');
+      return;
     }
-    onBeforePlayRef.current?.();
-    window.speechSynthesis.cancel();
 
-    const utter = new SpeechSynthesisUtterance(text.slice(0, 4500));
-    utter.lang = 'vi-VN';
-    utter.rate = Math.min(1.5, Math.max(0.85, playbackRateRef.current));
-    utter.onstart = () => setIsTtsSpeaking(true);
-    utter.onend = () => {
-      setIsTtsSpeaking(false);
-      if (autoPlayNextRef.current) {
-        playNextArticle(true);
-      }
-    };
-    utter.onerror = () => setIsTtsSpeaking(false);
-
-    setIsTtsSpeaking(true);
-    window.speechSynthesis.speak(utter);
-  }, [isTtsSpeaking, stopBrowserTts, playNextArticle]);
+    ttsChunksRef.current = chunks;
+    ttsChunkIdxRef.current = 0;
+    setTtsTotalChunks(chunks.length);
+    setTtsChunkIndex(0);
+    onNotifyToastRef.current?.(`🔊 Đang phát giọng đọc AI tiếng Việt (${chunks.length} đoạn)`);
+    playServerTtsChunk(0);
+  }, [stopSpeechFallbackOnly, playServerTtsChunk]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -670,8 +815,8 @@ export function useNewsAudio(
       return;
     }
 
-    // Nếu bài hiện tại không có file .m4a studio -> chuyển sang đọc TTS giọng máy!
-    if (detail && detail.voices.length === 0) {
+    // Nếu đang ở chế độ đọc giọng máy HOẶC bài hiện tại không có file .m4a từ Báo Mới -> điều khiển TTS MP3!
+    if (isTtsModeRef.current || (detail && detail.voices.length === 0)) {
       toggleBrowserTts();
       return;
     }
@@ -700,26 +845,46 @@ export function useNewsAudio(
     });
   }, [playLatestAudioBulletin, toggleBrowserTts, pickVoiceFromList, loadAudioStream]);
 
-  const seekTo = useCallback((sec: number) => {
-    const audio = audioRef.current;
-    if (!audio || !Number.isFinite(sec)) return;
-    const maxD = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : sec;
-    const clamped = Math.max(0, Math.min(sec, maxD));
-    audio.currentTime = clamped;
-    setCurrentTime(clamped);
-  }, []);
+  const seekTo = useCallback(
+    (val: number) => {
+      if (isTtsModeRef.current && ttsChunksRef.current.length > 0) {
+        const idx = Math.max(0, Math.min(Math.round(val), ttsChunksRef.current.length - 1));
+        playServerTtsChunk(idx);
+        return;
+      }
+      const audio = audioRef.current;
+      if (!audio || !Number.isFinite(val)) return;
+      const maxD = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : val;
+      const clamped = Math.max(0, Math.min(val, maxD));
+      audio.currentTime = clamped;
+      setCurrentTime(clamped);
+    },
+    [playServerTtsChunk]
+  );
 
-  const seekRelative = useCallback((deltaSec: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const target = (audio.currentTime || 0) + deltaSec;
-    const maxD = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : target;
-    const clamped = Math.max(0, Math.min(target, maxD));
-    audio.currentTime = clamped;
-    setCurrentTime(clamped);
-  }, []);
+  const seekRelative = useCallback(
+    (deltaSec: number) => {
+      if (isTtsModeRef.current && ttsChunksRef.current.length > 0) {
+        const step = deltaSec >= 0 ? 1 : -1;
+        const nextIdx = Math.max(
+          0,
+          Math.min(ttsChunkIdxRef.current + step, ttsChunksRef.current.length - 1)
+        );
+        playServerTtsChunk(nextIdx);
+        return;
+      }
+      const audio = audioRef.current;
+      if (!audio) return;
+      const target = (audio.currentTime || 0) + deltaSec;
+      const maxD = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : target;
+      const clamped = Math.max(0, Math.min(target, maxD));
+      audio.currentTime = clamped;
+      setCurrentTime(clamped);
+    },
+    [playServerTtsChunk]
+  );
 
-  // Lắng nghe sự kiện từ thẻ <audio> duy nhất
+  // Lắng nghe sự kiện từ thẻ <audio> duy nhất (hỗ trợ cả file .m4a Báo Mới lẫn hàng đợi TTS MP3!)
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -728,7 +893,7 @@ export function useNewsAudio(
       const d = Number.isFinite(audio.duration) ? audio.duration : 0;
       setDuration(d);
       audio.playbackRate = playbackRateRef.current;
-      if (pendingSeekTimeRef.current !== null && d > 0) {
+      if (!isTtsModeRef.current && pendingSeekTimeRef.current !== null && d > 0) {
         const seekTarget = Math.min(pendingSeekTimeRef.current, Math.max(0, d - 1));
         audio.currentTime = seekTarget;
         setCurrentTime(seekTarget);
@@ -759,6 +924,18 @@ export function useNewsAudio(
     };
 
     const handleEnded = () => {
+      // Nếu đang đọc giọng máy TTS MP3 -> nối tiếp đoạn tiếp theo không bị gián đoạn!
+      if (isTtsModeRef.current && ttsChunksRef.current.length > 0) {
+        const nextIdx = ttsChunkIdxRef.current + 1;
+        if (nextIdx < ttsChunksRef.current.length) {
+          playServerTtsChunk(nextIdx);
+          return;
+        }
+        // Đã đọc xong đoạn cuối của bài!
+        ttsChunkIdxRef.current = 0;
+        setTtsChunkIndex(0);
+      }
+
       setIsPlaying(false);
       setIsBuffering(false);
       if (autoPlayNextRef.current) {
@@ -767,6 +944,16 @@ export function useNewsAudio(
     };
 
     const handleError = () => {
+      // Nếu TTS MP3 server gặp sự cố -> tự chuyển sang dự phòng Web Speech API chia câu ngắn!
+      if (isTtsModeRef.current && ttsChunksRef.current.length > 0) {
+        startWebSpeechFallback(ttsChunkIdxRef.current, () => {
+          if (autoPlayNextRef.current) {
+            playNextArticle(true);
+          }
+        });
+        return;
+      }
+
       const origUrl = currentStreamingUrlRef.current;
       if (origUrl && !usedProxyFallbackRef.current) {
         usedProxyFallbackRef.current = true;
@@ -802,7 +989,7 @@ export function useNewsAudio(
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('error', handleError);
     };
-  }, [playNextArticle]);
+  }, [playNextArticle, playServerTtsChunk, startWebSpeechFallback]);
 
   // Đồng bộ nút vô-lăng CarPlay (MediaSession API) khi đang nghe Báo Audio
   useEffect(() => {
@@ -856,6 +1043,8 @@ export function useNewsAudio(
     return items.findIndex((x) => x.id === activeItem.id);
   }, [items, activeItem]);
 
+  const isTtsSpeaking = (isTtsMode && isPlaying) || isSpeechFallbackSpeaking;
+
   return {
     audioRef,
     category,
@@ -880,7 +1069,10 @@ export function useNewsAudio(
     playLatestAudioBulletin,
     isPlaying,
     isBuffering,
+    isTtsMode,
     isTtsSpeaking,
+    ttsChunkIndex,
+    ttsTotalChunks,
     audioError,
     currentTime,
     duration,

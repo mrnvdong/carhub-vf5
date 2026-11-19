@@ -484,6 +484,96 @@ export const onRequest: PagesFunction = async (context) => {
     }
   }
 
+  // =========================================================================
+  // 4. ACTION = TTS (Chuyển câu tiếng Việt -> MP3 64kbps thực, hỗ trợ HTTP Range chuẩn iOS CarPlay!)
+  // =========================================================================
+  if (action === 'tts') {
+    const rawText = (reqUrl.searchParams.get('q') || '').trim().replace(/\s+/g, ' ');
+    if (!rawText) {
+      return new Response(JSON.stringify({ error: 'Thiếu văn bản cần đọc' }), {
+        status: 400,
+        headers: JSON_HEADERS,
+      });
+    }
+    const text = rawText.slice(0, 200);
+    const encoded = encodeURIComponent(text);
+
+    const ttsCandidates = [
+      `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=vi&q=${encoded}`,
+      `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q=${encoded}`,
+    ];
+
+    let mp3Bytes: Uint8Array | null = null;
+    for (const candidateUrl of ttsCandidates) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        try {
+          const upstream = await fetch(candidateUrl, {
+            method: 'GET',
+            redirect: 'follow',
+            signal: controller.signal,
+            headers: {
+              'User-Agent': MOBILE_UA,
+              Referer: 'https://translate.google.com/',
+            },
+          });
+          if (upstream.ok) {
+            const buf = new Uint8Array(await upstream.arrayBuffer());
+            if (buf.byteLength > 256) {
+              mp3Bytes = buf;
+              break;
+            }
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch {
+        // Thử upstream dự phòng tiếp theo
+      }
+    }
+
+    if (!mp3Bytes) {
+      return new Response(
+        JSON.stringify({ error: 'Không tạo được âm thanh giọng đọc tiếng Việt' }),
+        { status: 502, headers: JSON_HEADERS }
+      );
+    }
+
+    const total = mp3Bytes.byteLength;
+    const rangeHeader = request.headers.get('Range');
+    if (rangeHeader) {
+      const m = rangeHeader.match(/bytes=(\d+)-(\d*)/i);
+      if (m) {
+        const start = Math.min(parseInt(m[1], 10), Math.max(0, total - 1));
+        const end = m[2] ? Math.min(parseInt(m[2], 10), total - 1) : total - 1;
+        const slice = mp3Bytes.subarray(start, end + 1);
+        return new Response(slice, {
+          status: 206,
+          headers: {
+            'Content-Type': 'audio/mpeg',
+            'Content-Length': String(slice.byteLength),
+            'Content-Range': `bytes ${start}-${end}/${total}`,
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+          },
+        });
+      }
+    }
+
+    return new Response(mp3Bytes, {
+      status: 200,
+      headers: {
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': String(total),
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+      },
+    });
+  }
+
   return new Response(JSON.stringify({ error: 'Unknown action' }), {
     status: 400,
     headers: JSON_HEADERS,

@@ -1874,9 +1874,21 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                                 : 'bg-amber-500 text-slate-950'
                             }`}
                           >
-                            <Volume2 className="w-3.5 h-3.5" />
+                            {news.isTtsMode && news.isBuffering ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Volume2 className="w-3.5 h-3.5" />
+                            )}
                             <span>
-                              {news.isTtsSpeaking ? 'Dừng đọc giọng máy' : 'Đọc giọng máy (TTS)'}
+                              {news.isTtsSpeaking
+                                ? `Tạm dừng${
+                                    news.ttsTotalChunks > 0
+                                      ? ` (${news.ttsChunkIndex + 1}/${news.ttsTotalChunks})`
+                                      : ''
+                                  }`
+                                : news.isTtsMode && news.ttsTotalChunks > 0
+                                ? `Nghe tiếp (${news.ttsChunkIndex + 1}/${news.ttsTotalChunks})`
+                                : 'Đọc giọng máy (AI Việt)'}
                             </span>
                           </button>
                         )}
@@ -2334,13 +2346,33 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       type="range"
                       aria-label="Thanh tiến trình Báo Audio Cockpit"
                       min={0}
-                      max={news.duration > 0 ? news.duration : 100}
+                      max={
+                        news.isTtsMode
+                          ? Math.max(1, news.ttsTotalChunks - 1)
+                          : news.duration > 0
+                          ? news.duration
+                          : 100
+                      }
                       step={1}
-                      value={Math.min(news.currentTime, news.duration > 0 ? news.duration : 100)}
+                      value={
+                        news.isTtsMode
+                          ? news.ttsChunkIndex
+                          : Math.min(news.currentTime, news.duration > 0 ? news.duration : 100)
+                      }
                       style={
                         {
                           '--progress': `${
-                            news.duration > 0
+                            news.isTtsMode
+                              ? news.ttsTotalChunks > 1
+                                ? Math.min(
+                                    100,
+                                    Math.max(
+                                      0,
+                                      (news.ttsChunkIndex / (news.ttsTotalChunks - 1)) * 100
+                                    )
+                                  )
+                                : 100
+                              : news.duration > 0
                               ? Math.min(100, Math.max(0, (news.currentTime / news.duration) * 100))
                               : 0
                           }%`,
@@ -2352,9 +2384,15 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     <div
                       className={`flex justify-between text-[0.7rem] font-mono font-bold -mt-1.5 px-0.5 ${theme.textMuted}`}
                     >
-                      <span>{formatSeconds(news.currentTime)}</span>
                       <span>
-                        {news.duration > 0
+                        {news.isTtsMode
+                          ? `Đoạn ${news.ttsChunkIndex + 1}/${Math.max(1, news.ttsTotalChunks)}`
+                          : formatSeconds(news.currentTime)}
+                      </span>
+                      <span>
+                        {news.isTtsMode
+                          ? 'AI TTS'
+                          : news.duration > 0
                           ? `-${formatSeconds(Math.max(0, news.duration - news.currentTime))}`
                           : 'BÁO AUDIO'}
                       </span>
@@ -2365,7 +2403,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     <button
                       type="button"
                       onClick={() => news.seekRelative(-15)}
-                      aria-label="Tua lùi 15 giây"
+                      aria-label={news.isTtsMode ? 'Đoạn trước' : 'Tua lùi 15 giây'}
                       className={`mc-hide-xs w-10 h-10 rounded-full flex flex-col items-center justify-center active:scale-90 transition ${
                         isLightTheme
                           ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-200/70'
@@ -2373,7 +2411,9 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       }`}
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
-                      <span className="text-[0.55rem] font-black leading-none mt-0.5">-15s</span>
+                      <span className="text-[0.55rem] font-black leading-none mt-0.5">
+                        {news.isTtsMode ? '-1 câu' : '-15s'}
+                      </span>
                     </button>
 
                     <button
@@ -2414,7 +2454,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     <button
                       type="button"
                       onClick={() => news.seekRelative(15)}
-                      aria-label="Tua tới 15 giây"
+                      aria-label={news.isTtsMode ? 'Đoạn tiếp' : 'Tua tới 15 giây'}
                       className={`mc-hide-xs w-10 h-10 rounded-full flex flex-col items-center justify-center active:scale-90 transition ${
                         isLightTheme
                           ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-200/70'
@@ -2422,7 +2462,9 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       }`}
                     >
                       <RotateCw className="w-3.5 h-3.5" />
-                      <span className="text-[0.55rem] font-black leading-none mt-0.5">+15s</span>
+                      <span className="text-[0.55rem] font-black leading-none mt-0.5">
+                        {news.isTtsMode ? '+1 câu' : '+15s'}
+                      </span>
                     </button>
                   </div>
                 </div>
