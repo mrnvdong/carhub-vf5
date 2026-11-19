@@ -12,6 +12,7 @@ export interface CarThemeTokens {
   railNavActive: string;
   railCockpitActive: string;
   railTvActive: string;
+  railNewsActive: string;
   railToolBtn: string;
   card: string;
   cardElevated: string;
@@ -46,6 +47,7 @@ const LIGHT_THEME: CarThemeTokens = {
   railNavActive: 'bg-slate-900 text-white border border-slate-900 shadow-sm',
   railCockpitActive: 'bg-emerald-600 text-white border border-emerald-600 shadow-sm',
   railTvActive: 'bg-blue-600 text-white border border-blue-600 shadow-sm',
+  railNewsActive: 'bg-amber-600 text-white border border-amber-600 shadow-sm',
   railToolBtn: 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700',
   card: 'bg-white/92 backdrop-blur-2xl border-slate-300/85 shadow-[0_10px_28px_rgba(15,23,42,0.09)]',
   cardElevated:
@@ -86,6 +88,7 @@ const DARK_THEME: CarThemeTokens = {
   railCockpitActive:
     'bg-emerald-500/25 text-emerald-200 border border-emerald-400/45 shadow-inner',
   railTvActive: 'bg-sky-500/25 text-sky-200 border border-sky-400/50 shadow-inner',
+  railNewsActive: 'bg-amber-500/25 text-amber-200 border border-amber-400/50 shadow-inner',
   railToolBtn: 'bg-white/10 hover:bg-white/20 border-white/15 text-white/80',
   card: 'bg-white/[0.06] backdrop-blur-2xl border-white/15 shadow-2xl',
   cardElevated: 'bg-white/[0.08] backdrop-blur-2xl border-white/15 shadow-xl',

@@ -44,6 +44,11 @@ import {
   ListVideo,
   Activity,
   Square,
+  Newspaper,
+  Mic,
+  Headphones,
+  RotateCcw,
+  RotateCw,
 } from 'lucide-react';
 import {
   ActiveNavSummary,
@@ -64,6 +69,12 @@ import {
   getChannelFavKey,
   stripVietnameseTones,
 } from '../hooks/useTvLive';
+import { NewsAudioController } from '../hooks/useNewsAudio';
+import {
+  NEWS_CATEGORIES,
+  formatNewsRelativeTime,
+  getVoiceShortName,
+} from '../services/news';
 import { MapErrorBoundary } from './MapErrorBoundary';
 import { getCarTheme } from '../utils/theme';
 
@@ -136,6 +147,10 @@ interface CockpitViewProps {
   onTvSlotRectChange: (rect: VideoSlotRect | null) => void;
   onPauseMusic: () => void;
   onOpenFullTv: () => void;
+  news: NewsAudioController;
+  cockpitNewsMode: boolean;
+  onChangeCockpitNewsMode: (active: boolean) => void;
+  onOpenFullNews: () => void;
   uiScale: UiScale;
   onChangeUiScale: (scale: UiScale) => void;
 }
@@ -198,6 +213,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     onTvSlotRectChange,
     onPauseMusic,
     onOpenFullTv,
+    news,
+    cockpitNewsMode,
+    onChangeCockpitNewsMode,
+    onOpenFullNews,
     uiScale,
     onChangeUiScale,
   }) => {
@@ -219,6 +238,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     const [tvSearch, setTvSearch] = useState<string>('');
     const [tvOnlyLive, setTvOnlyLive] = useState<boolean>(false);
     const [tvFailedLogos, setTvFailedLogos] = useState<Record<string, boolean>>({});
+    const [showNewsPicker, setShowNewsPicker] = useState<boolean>(false);
 
     const handleActiveNavChange = useCallback(
       (summary: ActiveNavSummary | null) => {
@@ -275,10 +295,14 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       }
     });
 
-    // Đóng picker nếu thoát chế độ TV
+    // Đóng picker nếu thoát chế độ TV hoặc Báo Audio
     useEffect(() => {
       if (!cockpitTvMode) setShowTvPicker(false);
     }, [cockpitTvMode]);
+
+    useEffect(() => {
+      if (!cockpitNewsMode) setShowNewsPicker(false);
+    }, [cockpitNewsMode]);
 
     // Danh sách kênh trong Quick Picker của Cockpit (100% không ẩn kênh nào!)
     const tvBaseChannels = useMemo(() => {
@@ -366,8 +390,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     );
 
     const effectiveVideoMode = isVideoMode && !isSoundCloudTrack;
-    const showVideoSlot = isVisible && effectiveVideoMode && !cockpitTvMode && !isMapExpanded;
-    const showTvSlot = isVisible && cockpitTvMode && !showTvPicker && !isMapExpanded;
+    const showVideoSlot =
+      isVisible && effectiveVideoMode && !cockpitTvMode && !cockpitNewsMode && !isMapExpanded;
+    const showTvSlot =
+      isVisible && cockpitTvMode && !cockpitNewsMode && !showTvPicker && !isMapExpanded;
 
     // Đo tọa độ chính xác của khung Video 16:9 YouTube và đồng bộ trước khi vẽ frame (0 giật!)
     const syncVideoSlotRect = useCallback(() => {
@@ -553,14 +579,20 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
           container.style.setProperty('--map-pct', `${pct}%`);
           if (badgeTextRef.current) {
             badgeTextRef.current.textContent = `Bản đồ ${pct}% • ${
-              cockpitTvMode ? 'TV Live' : isVideoMode ? 'Video' : 'Nhạc'
+              cockpitNewsMode
+                ? 'Báo Audio'
+                : cockpitTvMode
+                ? 'TV Live'
+                : isVideoMode
+                ? 'Video'
+                : 'Nhạc'
             } ${100 - pct}%`;
           }
           syncVideoSlotRect();
           syncTvSlotRect();
         });
       },
-      [mapSide, isVideoMode, cockpitTvMode, syncVideoSlotRect, syncTvSlotRect]
+      [mapSide, isVideoMode, cockpitTvMode, cockpitNewsMode, syncVideoSlotRect, syncTvSlotRect]
     );
 
     const handleDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -731,7 +763,90 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             3. KHUNG GIẢI TRÍ COCKPIT (Cấu trúc 3 tầng cố định cân đối chuẩn CarPlay — đổi Nhạc ↔ Video ↔ TV 0 giật!)
            ===================================================================== */}
         {isMapExpanded ? (
-          cockpitTvMode && tv.activeChannel ? (
+          cockpitNewsMode ? (
+            <div
+              className={`shrink-0 rounded-2xl border px-3 py-2 flex items-center justify-between gap-2.5 ${theme.cardElevated}`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <div
+                  className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden ${
+                    isLightTheme ? 'bg-amber-50 border-amber-300' : 'bg-amber-500/20 border-amber-400/40'
+                  }`}
+                >
+                  {news.activeItem?.thumb ? (
+                    <img
+                      src={news.activeItem.thumb}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Newspaper className="w-5 h-5 text-amber-500" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[9px] font-black shrink-0">
+                      BÁO AUDIO
+                    </span>
+                    <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
+                      {news.activeItem?.title || 'Chạm Phát để nghe bản tin Báo Mới'}
+                    </h4>
+                  </div>
+                  <p className={`text-[11px] font-bold truncate ${theme.textSub}`}>
+                    {news.activeItem
+                      ? `${news.activeItem.publisherName}${
+                          news.activeVoice
+                            ? ` • ${getVoiceShortName(news.activeVoice.id, news.activeVoice.name)}`
+                            : ''
+                        } • ${news.playbackRate}x`
+                      : '4 giọng AI miền Bắc & miền Nam'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => news.playPrevArticle()}
+                  disabled={!news.hasPrevArticle}
+                  aria-label="Bài báo trước"
+                  className={`w-9 h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 ${theme.iconBtn}`}
+                >
+                  <SkipBack className="w-4 h-4 fill-current" />
+                </button>
+                <button
+                  type="button"
+                  onClick={news.togglePlay}
+                  aria-label={news.isPlaying ? 'Tạm dừng báo audio' : 'Phát báo audio'}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-90 ${theme.primaryCta}`}
+                >
+                  {news.isBuffering || news.isLoadingArticle ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : news.isPlaying || news.isTtsSpeaking ? (
+                    <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
+                  ) : (
+                    <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => news.playNextArticle(true)}
+                  disabled={!news.hasNextArticle}
+                  aria-label="Bài báo tiếp theo"
+                  className={`w-9 h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 ${theme.iconBtn}`}
+                >
+                  <SkipForward className="w-4 h-4 fill-current" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleToggleExpandMap}
+                  className="min-h-[36px] px-3 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold active:scale-95 transition"
+                >
+                  Mở Báo
+                </button>
+              </div>
+            </div>
+          ) : cockpitTvMode && tv.activeChannel ? (
             <div
               className={`shrink-0 rounded-2xl border px-3 py-2 flex items-center justify-between gap-2.5 ${theme.cardElevated}`}
             >
@@ -1205,22 +1320,22 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             </div>
 
             {/* =================================================================
-                3B. KHUNG GIẢI TRÍ NHẠC / VIDEO / TV LIVE (Cấu trúc 3 tầng cố định cân đối chuẩn CarPlay)
+                3B. KHUNG GIẢI TRÍ NHẠC / VIDEO / TV LIVE / BÁO AUDIO (Cấu trúc 3 tầng cố định cân đối chuẩn CarPlay)
                ================================================================= */}
             <div
-              {...(cockpitTvMode ? {} : gestureHandlers)}
+              {...(cockpitTvMode || cockpitNewsMode ? {} : gestureHandlers)}
               className={`cockpit-media-cq flex-1 min-w-0 min-h-[250px] car:min-h-0 rounded-2xl sm:rounded-3xl border p-3 sm:p-3.5 short:p-2 vshort:p-1.5 flex flex-col justify-between gap-2 short:gap-1.5 vshort:gap-1 relative overflow-hidden ${theme.card}`}
             >
-              {heartBurst && !cockpitTvMode && (
+              {heartBurst && !cockpitTvMode && !cockpitNewsMode && (
                 <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-black/15">
                   <Heart className="w-20 h-20 text-rose-500 fill-rose-500 animate-ping" />
                 </div>
               )}
 
-              {/* TẦNG 1 (CỐ ĐỊNH): THANH CHUYỂN NHẠC / VIDEO / TV + HÀNH ĐỘNG NHANH (Tự co giãn @container media-card + flex-wrap chống đè nút 100%) */}
+              {/* TẦNG 1 (CỐ ĐỊNH): THANH CHUYỂN NHẠC / VIDEO / TV / BÁO + HÀNH ĐỘNG NHANH (Tự co giãn @container media-card + flex-wrap chống đè nút 100%) */}
               <div className="flex flex-wrap items-center justify-between gap-x-1.5 gap-y-1.5 shrink-0">
                 <div className="flex items-center gap-1.5 min-w-0 shrink-0">
-                  {/* Segmented Switch iOS: Nhạc | Video | TV */}
+                  {/* Segmented Switch iOS: Nhạc | Video | TV | Báo */}
                   <div
                     className={`inline-flex items-center p-0.5 rounded-full border shrink-0 ${theme.segTrack}`}
                   >
@@ -1228,12 +1343,16 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       type="button"
                       onClick={() => {
                         onChangeCockpitTvMode(false);
+                        onChangeCockpitNewsMode(false);
                         setShowTvPicker(false);
+                        setShowNewsPicker(false);
                         if (isVideoMode) onToggleViewMode();
                       }}
                       aria-label="Chế độ Nghe nhạc và Lời bài hát"
                       className={`mc-seg-btn min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 whitespace-nowrap transition-colors ${
-                        !cockpitTvMode && !effectiveVideoMode ? theme.segActive : theme.segIdle
+                        !cockpitTvMode && !cockpitNewsMode && !effectiveVideoMode
+                          ? theme.segActive
+                          : theme.segIdle
                       }`}
                     >
                       <Music className="mc-hide-md w-3.5 h-3.5 shrink-0" />
@@ -1243,7 +1362,9 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       type="button"
                       onClick={() => {
                         onChangeCockpitTvMode(false);
+                        onChangeCockpitNewsMode(false);
                         setShowTvPicker(false);
+                        setShowNewsPicker(false);
                         if (isSoundCloudTrack) {
                           onChangeMusicSource('youtube');
                           if (!isVideoMode) onToggleViewMode();
@@ -1253,7 +1374,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       }}
                       aria-label="Chế độ Phát Video YouTube"
                       className={`mc-seg-btn min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 whitespace-nowrap transition-colors ${
-                        !cockpitTvMode && effectiveVideoMode
+                        !cockpitTvMode && !cockpitNewsMode && effectiveVideoMode
                           ? isLightTheme
                             ? 'bg-blue-600 text-white shadow-sm'
                             : 'bg-sky-400 text-slate-950 shadow-sm'
@@ -1266,12 +1387,14 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     <button
                       type="button"
                       onClick={() => {
+                        onChangeCockpitNewsMode(false);
+                        setShowNewsPicker(false);
                         onChangeCockpitTvMode(true);
                         onPauseMusic();
                       }}
                       aria-label="Chế độ Xem TV & Radio trực tiếp ngay trong Cockpit"
                       className={`mc-seg-btn min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 whitespace-nowrap transition-colors ${
-                        cockpitTvMode
+                        cockpitTvMode && !cockpitNewsMode
                           ? 'bg-rose-600 text-white shadow-sm'
                           : theme.segIdle
                       }`}
@@ -1279,10 +1402,27 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       <Tv className="mc-hide-md w-3.5 h-3.5 shrink-0" />
                       <span>TV</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onChangeCockpitTvMode(false);
+                        setShowTvPicker(false);
+                        onChangeCockpitNewsMode(true);
+                      }}
+                      aria-label="Chế độ Nghe Báo Audio Báo Mới ngay trong Cockpit"
+                      className={`mc-seg-btn min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 whitespace-nowrap transition-colors ${
+                        cockpitNewsMode
+                          ? 'bg-amber-500 text-slate-950 shadow-sm'
+                          : theme.segIdle
+                      }`}
+                    >
+                      <Newspaper className="mc-hide-md w-3.5 h-3.5 shrink-0" />
+                      <span>Báo</span>
+                    </button>
                   </div>
 
                   {/* Khi ở Nhạc/Video: Nút đổi nhanh nguồn YouTube <-> SoundCloud */}
-                  {!cockpitTvMode && (
+                  {!cockpitTvMode && !cockpitNewsMode && (
                     <button
                       type="button"
                       onClick={() =>
@@ -1315,7 +1455,75 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 </div>
 
                 {/* Nhóm nút hành động bên phải */}
-                {cockpitTvMode ? (
+                {cockpitNewsMode ? (
+                  <div className="flex items-center gap-1 shrink-0 ml-auto">
+                    <button
+                      type="button"
+                      onClick={() => setShowNewsPicker((v) => !v)}
+                      aria-label="Mở danh sách chọn bài báo nhanh"
+                      title="Chọn bài báo & chuyên mục"
+                      className={`min-h-[2.25rem] min-w-[2.25rem] px-2.5 rounded-full border text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition ${
+                        showNewsPicker
+                          ? 'bg-amber-500 border-amber-400 text-slate-950 shadow-sm'
+                          : theme.iconBtn
+                      }`}
+                    >
+                      <ListVideo className="w-4 h-4 shrink-0" />
+                      <span className="mc-hide-sm">Tin</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={news.cycleVoice}
+                      aria-label="Đổi giọng đọc Báo Audio"
+                      title={`Đổi giọng đọc (hiện tại: ${
+                        news.activeVoice
+                          ? news.activeVoice.name
+                          : getVoiceShortName(news.preferredVoiceId)
+                      })`}
+                      className={`min-h-[2.25rem] min-w-[2.25rem] px-2 rounded-full border text-xs font-extrabold flex items-center justify-center gap-1 active:scale-90 transition ${
+                        isLightTheme
+                          ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-800'
+                          : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-400/45 text-amber-200'
+                      }`}
+                    >
+                      <Mic className="w-3.5 h-3.5 shrink-0" />
+                      <span className="mc-hide-md whitespace-nowrap">
+                        {news.activeVoice
+                          ? getVoiceShortName(news.activeVoice.id, news.activeVoice.name)
+                          : getVoiceShortName(news.preferredVoiceId)}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onOpenFullNews}
+                      aria-label="Mở màn hình Báo Audio đầy đủ"
+                      title="Mở toàn bộ trang Báo Audio & Đọc báo"
+                      className={`w-9 h-9 rounded-full border flex items-center justify-center active:scale-90 transition ${
+                        isLightTheme
+                          ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-700'
+                          : 'bg-white/10 hover:bg-white/20 border-white/15 text-amber-300'
+                      }`}
+                    >
+                      <Maximize2 className="w-4 h-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={toggleMapSide}
+                      aria-label="Đổi vị trí Trái Phải giữa Báo và Bản đồ"
+                      title="Đổi bên Trái / Phải với Bản đồ"
+                      className={`hidden car:flex mc-hide-lg w-9 h-9 rounded-full border items-center justify-center active:scale-90 transition ${
+                        isLightTheme
+                          ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-700'
+                          : 'bg-white/10 hover:bg-white/20 border-white/15 text-emerald-300'
+                      }`}
+                    >
+                      <ArrowLeftRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : cockpitTvMode ? (
                   <div className="flex items-center gap-1 shrink-0 ml-auto">
                     <button
                       type="button"
@@ -1448,8 +1656,235 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 )}
               </div>
 
-              {/* TẦNG 2 (TRUNG TÂM CÂN ĐỐI TỈ LỆ): TV LIVE (hoặc Bảng chọn kênh TV) / VIDEO 16:9 / ALBUM + KARAOKE */}
-              {cockpitTvMode ? (
+              {/* TẦNG 2 (TRUNG TÂM CÂN ĐỐI TỈ LỆ): BÁO AUDIO / TV LIVE / VIDEO 16:9 / ALBUM + KARAOKE */}
+              {cockpitNewsMode ? (
+                <div className="flex-1 min-h-0 flex flex-col gap-2 short:gap-1.5 overflow-hidden">
+                  {showNewsPicker ? (
+                    <div className="flex-1 min-h-0 flex flex-col gap-1.5 overflow-hidden">
+                      {/* Thanh chuyên mục Báo Mới nhanh */}
+                      <div className="flex items-center gap-1 overflow-x-auto no-scrollbar shrink-0">
+                        {NEWS_CATEGORIES.slice(0, 10).map((cat) => {
+                          const active = !news.searchQuery && news.category === cat.id;
+                          return (
+                            <button
+                              key={cat.id}
+                              type="button"
+                              onClick={() => news.setCategory(cat.id)}
+                              className={`min-h-[2.1rem] px-2.5 rounded-full text-xs font-extrabold whitespace-nowrap border active:scale-95 transition shrink-0 ${
+                                active
+                                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-sm'
+                                  : theme.chipIdle
+                              }`}
+                            >
+                              {cat.icon} {cat.label}
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          onClick={() => setShowNewsPicker(false)}
+                          aria-label="Đóng danh sách tin nhanh"
+                          className={`w-8 h-8 rounded-full border flex items-center justify-center shrink-0 active:scale-90 ${theme.iconBtn}`}
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {/* Danh sách bài báo trong Cockpit */}
+                      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-1.5 pr-0.5">
+                        {news.isLoadingFeed && news.items.length === 0 ? (
+                          <div className="py-8 flex flex-col items-center justify-center gap-2">
+                            <Loader2 className="w-6 h-6 text-amber-500 animate-spin" />
+                            <span className={`text-xs font-bold ${theme.textSub}`}>
+                              Đang nạp tin Báo Mới...
+                            </span>
+                          </div>
+                        ) : (
+                          news.items.slice(0, 35).map((item) => {
+                            const active = news.activeItem?.id === item.id;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => {
+                                  news.selectArticle(item, true);
+                                  setShowNewsPicker(false);
+                                }}
+                                className={`w-full text-left flex items-center gap-2 p-2 rounded-xl border active:scale-[0.99] transition ${
+                                  active ? theme.itemActive : theme.itemIdle
+                                }`}
+                              >
+                                {item.thumb ? (
+                                  <img
+                                    src={item.thumb}
+                                    alt=""
+                                    loading="lazy"
+                                    className="w-12 h-9 rounded-lg object-cover shrink-0 bg-slate-900"
+                                  />
+                                ) : (
+                                  <div className="w-12 h-9 rounded-lg bg-amber-500/20 flex items-center justify-center shrink-0">
+                                    <Newspaper className="w-4 h-4 text-amber-500" />
+                                  </div>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <p
+                                    className={`text-xs font-extrabold line-clamp-2 leading-snug ${
+                                      active
+                                        ? isLightTheme
+                                          ? 'text-blue-700'
+                                          : 'text-amber-300'
+                                        : theme.text
+                                    }`}
+                                  >
+                                    {item.title}
+                                  </p>
+                                  <p className={`text-[0.68rem] font-semibold truncate mt-0.5 ${theme.textMuted}`}>
+                                    {item.publisherName} • {formatNewsRelativeTime(item.date)}
+                                  </p>
+                                </div>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  ) : !news.activeItem ? (
+                    <div className="flex-1 min-h-0 flex flex-col justify-center items-center text-center gap-2.5 px-2">
+                      <button
+                        type="button"
+                        onClick={() => news.playLatestAudioBulletin()}
+                        disabled={news.isLoadingFeed && news.items.length === 0}
+                        className="min-h-[3rem] px-5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs sm:text-sm font-black flex items-center gap-2 shadow-lg active:scale-95 transition disabled:opacity-50"
+                      >
+                        {news.isLoadingFeed && news.items.length === 0 ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Headphones className="w-4 h-4" />
+                        )}
+                        <span>Nghe bản tin Báo Mới ngay</span>
+                      </button>
+
+                      {/* Gợi ý nhanh 2-3 tiêu đề nóng ngay trong Cockpit */}
+                      {news.items.length > 0 && (
+                        <div className="w-full space-y-1 text-left">
+                          {news.items.slice(0, 3).map((it) => (
+                            <button
+                              key={it.id}
+                              type="button"
+                              onClick={() => news.selectArticle(it, true)}
+                              className={`w-full px-2.5 py-1.5 rounded-xl border text-left active:scale-[0.99] transition ${theme.itemIdle}`}
+                            >
+                              <p className={`text-xs font-extrabold line-clamp-1 ${theme.text}`}>
+                                • {it.title}
+                              </p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex-1 min-h-0 flex flex-col justify-center gap-2 short:gap-1.5">
+                      {/* Ảnh đại diện + Tiêu đề bài báo + Nguồn + Tốc độ đọc */}
+                      <div className="flex items-start gap-2.5 shrink-0">
+                        <div
+                          onClick={news.togglePlay}
+                          className={`relative w-16 h-12 sm:w-20 sm:h-14 rounded-xl overflow-hidden shrink-0 border shadow cursor-pointer bg-slate-900 ${
+                            isLightTheme ? 'border-slate-300' : 'border-white/15'
+                          }`}
+                        >
+                          {news.activeItem.thumb ? (
+                            <img
+                              src={news.activeItem.thumb}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-amber-400">
+                              <Newspaper className="w-6 h-6" />
+                            </div>
+                          )}
+                          {(news.isBuffering || news.isLoadingArticle) && (
+                            <div className="absolute inset-0 bg-black/55 flex items-center justify-center">
+                              <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <h3
+                            onClick={() => setShowNewsPicker(true)}
+                            className={`text-xs sm:text-sm font-black line-clamp-2 leading-snug cursor-pointer ${theme.text}`}
+                          >
+                            {news.activeArticle?.title || news.activeItem.title}
+                          </h3>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                            <span className={`text-[0.68rem] font-extrabold truncate max-w-[9rem] ${theme.textSub}`}>
+                              {news.activeArticle?.publisherName || news.activeItem.publisherName}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={news.cyclePlaybackRate}
+                              className={`px-1.5 py-0.5 rounded-md border text-[0.65rem] font-mono font-black active:scale-95 ${
+                                news.playbackRate !== 1
+                                  ? 'bg-amber-500 border-amber-400 text-slate-950'
+                                  : theme.iconBtn
+                              }`}
+                            >
+                              {news.playbackRate}x
+                            </button>
+                            <span
+                              className={`px-1.5 py-0.5 rounded-md text-[0.65rem] font-extrabold ${
+                                isLightTheme
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-amber-500/20 text-amber-300'
+                              }`}
+                            >
+                              {news.activeVoice
+                                ? getVoiceShortName(news.activeVoice.id, news.activeVoice.name)
+                                : news.activeArticle && news.activeArticle.voices.length === 0
+                                ? 'TTS'
+                                : getVoiceShortName(news.preferredVoiceId)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Khung tóm tắt nội dung báo (bấm để mở đọc chi tiết hoặc nghe TTS nếu bài chưa có .m4a) */}
+                      <div
+                        onClick={onOpenFullNews}
+                        className={`flex-1 min-h-[3.25rem] max-h-[10rem] rounded-2xl border px-3 py-2 flex flex-col justify-center gap-1.5 shadow-inner cursor-pointer overflow-hidden ${theme.well}`}
+                      >
+                        <p className={`text-xs sm:text-sm font-semibold line-clamp-3 leading-relaxed ${theme.text}`}>
+                          {news.activeArticle?.description ||
+                            news.activeArticle?.blocks.find((b) => b.type === 'text' && !b.isCaption)
+                              ?.text ||
+                            news.activeItem.description ||
+                            'Chạm để mở toàn bộ nội dung bài báo trên Báo Mới'}
+                        </p>
+                        {news.activeArticle && news.activeArticle.voices.length === 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              news.toggleBrowserTts();
+                            }}
+                            className={`self-start min-h-[2rem] px-2.5 rounded-full text-[0.7rem] font-black flex items-center gap-1 active:scale-95 ${
+                              news.isTtsSpeaking
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-amber-500 text-slate-950'
+                            }`}
+                          >
+                            <Volume2 className="w-3.5 h-3.5" />
+                            <span>
+                              {news.isTtsSpeaking ? 'Dừng đọc giọng máy' : 'Đọc giọng máy (TTS)'}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : cockpitTvMode ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-1.5 overflow-hidden">
                   {/* Khung neo sân khấu TV (Bộ phát TV duy nhất khớp 100% khung này — 0ms reload khi chuyển TV Live <-> Cockpit!) */}
                   {!showTvPicker && (
@@ -1891,8 +2326,107 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 </div>
               )}
 
-              {/* TẦNG 3 (CỐ ĐỊNH ĐÁY): ĐIỀU KHIỂN TV LIVE HOẶC THANH TUA & ĐIỀU KHIỂN NHẠC/VIDEO */}
-              {cockpitTvMode ? (
+              {/* TẦNG 3 (CỐ ĐỊNH ĐÁY): ĐIỀU KHIỂN BÁO AUDIO / TV LIVE / NHẠC & VIDEO */}
+              {cockpitNewsMode ? (
+                <div className="shrink-0 space-y-1 short:space-y-0.5">
+                  <div>
+                    <input
+                      type="range"
+                      aria-label="Thanh tiến trình Báo Audio Cockpit"
+                      min={0}
+                      max={news.duration > 0 ? news.duration : 100}
+                      step={1}
+                      value={Math.min(news.currentTime, news.duration > 0 ? news.duration : 100)}
+                      style={
+                        {
+                          '--progress': `${
+                            news.duration > 0
+                              ? Math.min(100, Math.max(0, (news.currentTime / news.duration) * 100))
+                              : 0
+                          }%`,
+                        } as React.CSSProperties
+                      }
+                      onChange={(e) => news.seekTo(parseFloat(e.target.value))}
+                      className={theme.scrubber}
+                    />
+                    <div
+                      className={`flex justify-between text-[0.7rem] font-mono font-bold -mt-1.5 px-0.5 ${theme.textMuted}`}
+                    >
+                      <span>{formatSeconds(news.currentTime)}</span>
+                      <span>
+                        {news.duration > 0
+                          ? `-${formatSeconds(Math.max(0, news.duration - news.currentTime))}`
+                          : 'BÁO AUDIO'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-around px-1">
+                    <button
+                      type="button"
+                      onClick={() => news.seekRelative(-15)}
+                      aria-label="Tua lùi 15 giây"
+                      className={`mc-hide-xs w-10 h-10 rounded-full flex flex-col items-center justify-center active:scale-90 transition ${
+                        isLightTheme
+                          ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-200/70'
+                          : 'text-white/65 hover:text-white'
+                      }`}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span className="text-[0.55rem] font-black leading-none mt-0.5">-15s</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => news.playPrevArticle()}
+                      disabled={!news.hasPrevArticle}
+                      aria-label="Bài báo trước"
+                      className={`w-11 h-11 short:w-10 short:h-10 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
+                    >
+                      <SkipBack className="w-5 h-5 fill-current" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={news.togglePlay}
+                      aria-label={news.isPlaying ? 'Tạm dừng báo audio' : 'Phát báo audio'}
+                      className={`w-13 h-13 sm:w-14 sm:h-14 short:w-12 short:h-12 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
+                    >
+                      {news.isBuffering || news.isLoadingArticle ? (
+                        <Loader2 className="w-6 h-6 animate-spin" />
+                      ) : news.isPlaying || news.isTtsSpeaking ? (
+                        <Pause className={`w-6 h-6 ${theme.primaryCtaIcon}`} />
+                      ) : (
+                        <Play className={`w-6 h-6 ml-0.5 ${theme.primaryCtaIcon}`} />
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => news.playNextArticle(true)}
+                      disabled={!news.hasNextArticle}
+                      aria-label="Bài báo tiếp theo"
+                      className={`w-11 h-11 short:w-10 short:h-10 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
+                    >
+                      <SkipForward className="w-5 h-5 fill-current" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => news.seekRelative(15)}
+                      aria-label="Tua tới 15 giây"
+                      className={`mc-hide-xs w-10 h-10 rounded-full flex flex-col items-center justify-center active:scale-90 transition ${
+                        isLightTheme
+                          ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-200/70'
+                          : 'text-white/65 hover:text-white'
+                      }`}
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                      <span className="text-[0.55rem] font-black leading-none mt-0.5">+15s</span>
+                    </button>
+                  </div>
+                </div>
+              ) : cockpitTvMode ? (
                 <div className="shrink-0 flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
                   <button
                     type="button"

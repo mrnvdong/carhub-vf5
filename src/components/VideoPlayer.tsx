@@ -45,6 +45,7 @@ import {
   Plus,
   FastForward,
   Navigation,
+  Newspaper,
 } from 'lucide-react';
 import {
   StreamData,
@@ -70,9 +71,11 @@ import { fetchSponsorSegments, getSponsorCategoryLabel } from '../services/spons
 import { useCarHardwareControls } from '../hooks/useCarHardwareControls';
 import { useCockpitTelemetry } from '../hooks/useCockpitTelemetry';
 import { useTvLive } from '../hooks/useTvLive';
+import { useNewsAudio, NewsAudioController } from '../hooks/useNewsAudio';
 import { CockpitView, VideoSlotRect } from './CockpitView';
 import { TvLiveView } from './TvLiveView';
 import { TvPlayerStage } from './TvPlayerStage';
+import { NewsAudioView } from './NewsAudioView';
 import { getCarTheme } from '../utils/theme';
 
 interface VideoPlayerProps {
@@ -268,8 +271,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isDraggingCockpitSplit, setIsDraggingCockpitSplit] = useState<boolean>(false);
   const [isTvSessionActive, setIsTvSessionActive] = useState<boolean>(() => railSection === 'tv');
   const [cockpitTvMode, setCockpitTvMode] = useState<boolean>(() => railSection === 'tv');
+  const [cockpitNewsMode, setCockpitNewsMode] = useState<boolean>(() => railSection === 'news');
   const [hasTvPageSlot, setHasTvPageSlot] = useState<boolean>(false);
   const [hasCockpitTvSlot, setHasCockpitTvSlot] = useState<boolean>(false);
+  const newsControllerRef = useRef<NewsAudioController | null>(null);
 
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [dragTime, setDragTime] = useState<number | null>(null);
@@ -292,6 +297,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const isNowPlayingView = railSection === 'nowPlaying';
   const isCockpitView = railSection === 'cockpit';
   const isTvView = railSection === 'tv';
+  const isNewsView = railSection === 'news';
 
   const isTvViewRef = useRef<boolean>(isTvView);
   isTvViewRef.current = isTvView;
@@ -302,31 +308,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const showVideoInViewport = effectiveVideoMode && isNowPlayingView;
   const showVideoInCockpit =
-    effectiveVideoMode && isCockpitView && !cockpitTvMode && !isFullscreen && hasCockpitVideoSlot;
+    effectiveVideoMode &&
+    isCockpitView &&
+    !cockpitTvMode &&
+    !cockpitNewsMode &&
+    !isFullscreen &&
+    hasCockpitVideoSlot;
 
   const showTvInPage = isTvSessionActive && isTvView && !isFullscreen && hasTvPageSlot;
   const showTvInCockpit =
-    isTvSessionActive && isCockpitView && cockpitTvMode && !isFullscreen && hasCockpitTvSlot;
+    isTvSessionActive &&
+    isCockpitView &&
+    cockpitTvMode &&
+    !cockpitNewsMode &&
+    !isFullscreen &&
+    hasCockpitTvSlot;
   const showTvVisible = showTvInPage || showTvInCockpit;
 
-  // Chuyển tab TV Live <-> Cockpit: tự kích hoạt session & tự bật chế độ TV trong Cockpit để giữ nguyên 1 bộ phát (0ms reload!)
+  // Chuyển tab TV Live <-> Cockpit: giữ nguyên 1 bộ phát duy nhất (0ms reload!)
   useEffect(() => {
     if (isTvView) {
       setIsTvSessionActive(true);
       setCockpitTvMode(true);
+      setCockpitNewsMode(false);
     } else if (isNowPlayingView) {
       setIsTvSessionActive(false);
       setCockpitTvMode(false);
+      setCockpitNewsMode(false);
     }
   }, [isTvView, isNowPlayingView]);
 
-  // Nếu người dùng chọn bài nhạc mới từ Tìm kiếm / Khám phá / Playlist -> tắt TV để không chồng tiếng & không tốn 4G
+  // Nếu người dùng chọn bài nhạc mới từ Tìm kiếm / Khám phá / Playlist -> tắt TV & Báo Audio để không chồng tiếng
   const prevStreamIdForTvRef = useRef<string>(streamData.id);
   useEffect(() => {
     if (prevStreamIdForTvRef.current !== streamData.id) {
       prevStreamIdForTvRef.current = streamData.id;
       setIsTvSessionActive(false);
       setCockpitTvMode(false);
+      setCockpitNewsMode(false);
+      newsControllerRef.current?.pauseNews();
     }
   }, [streamData.id]);
 
@@ -337,12 +357,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handleOpenFullTv = useCallback(() => {
     setIsTvSessionActive(true);
     setCockpitTvMode(true);
+    setCockpitNewsMode(false);
+    newsControllerRef.current?.pauseNews();
     onChangeRailSection('tv');
   }, [onChangeRailSection]);
 
   const handleChangeCockpitTvMode = useCallback((active: boolean) => {
     setCockpitTvMode(active);
     setIsTvSessionActive(active);
+    if (active) {
+      setCockpitNewsMode(false);
+      newsControllerRef.current?.pauseNews();
+    }
+  }, []);
+
+  const handleOpenFullNews = useCallback(() => {
+    setCockpitNewsMode(true);
+    setCockpitTvMode(false);
+    onChangeRailSection('news');
+  }, [onChangeRailSection]);
+
+  const handleOpenCockpitWithNews = useCallback(() => {
+    setCockpitNewsMode(true);
+    setCockpitTvMode(false);
+    setIsTvSessionActive(false);
+    onChangeRailSection('cockpit');
+  }, [onChangeRailSection]);
+
+  const handleChangeCockpitNewsMode = useCallback((active: boolean) => {
+    setCockpitNewsMode(active);
+    if (active) {
+      setCockpitTvMode(false);
+      setIsTvSessionActive(false);
+    }
   }, []);
 
   const applyTvStageWrapperPosition = useCallback((rect: VideoSlotRect | null) => {
@@ -999,6 +1046,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handlePlayExplicit = useCallback(() => {
     setIsTvSessionActive(false);
     setCockpitTvMode(false);
+    setCockpitNewsMode(false);
+    newsControllerRef.current?.pauseNews();
     if (isSoundCloudTrackRef.current) {
       const audio = audioRef.current;
       if (audio) {
@@ -1040,7 +1089,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     } catch {}
     postEmbedCommand('pauseVideo');
     setIsPlaying(false);
+    newsControllerRef.current?.pauseNews();
+    setCockpitNewsMode(false);
   }, [postEmbedCommand]);
+
+  const pauseMusicAndTvForNews = useCallback(() => {
+    try {
+      audioRef.current?.pause();
+    } catch {}
+    postEmbedCommand('pauseVideo');
+    setIsPlaying(false);
+    setIsTvSessionActive(false);
+    setCockpitTvMode(false);
+    setCockpitNewsMode(true);
+  }, [postEmbedCommand]);
+
+  // Bộ phát Báo Audio Báo Mới dùng chung toàn app (1 thẻ <audio> duy nhất -> chuyển Báo Audio <-> Cockpit 0ms reload!)
+  const newsController = useNewsAudio(
+    isNewsView || cockpitNewsMode,
+    pauseMusicAndTvForNews,
+    showToast
+  );
+  newsControllerRef.current = newsController;
 
   const togglePlay = useCallback(() => {
     if (isPlaying) {
@@ -1130,9 +1200,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [hasNext, hasPrev, onNext, onPrev, showToast, togglePlay, triggerDoubleTapHeart]
   );
 
-  // Điều khiển phím cứng vô lăng VF5 & Apple CarPlay MediaSession
+  // Điều khiển phím cứng vô lăng VF5 & Apple CarPlay MediaSession (nhường quyền cho Báo Audio khi đang nghe báo!)
   useCarHardwareControls({
-    enabled: true,
+    enabled: !newsController.isPlaying,
     streamData,
     isPlaying,
     currentTime,
@@ -1226,6 +1296,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         isFullscreen ? 'fixed inset-0 z-50 bg-black text-white' : theme.shell
       }`}
     >
+      {/* AUDIO NATIVE DUY NHẤT CHO BÁO AUDIO BÁO MỚI (0ms reload khi chuyển giữa Báo Audio <-> Cockpit!) */}
+      <audio ref={newsController.audioRef} playsInline preload="auto" className="hidden" />
+
       {/* AUDIO NATIVE DUY NHẤT CHO SOUNDCLOUD (MP3 Progressive + iOS Native HLS + Lazy hls.js) */}
       <audio
         ref={audioRef}
@@ -1406,6 +1479,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             <button
               type="button"
+              onClick={() => onChangeRailSection('news')}
+              className={`relative flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+                railSection === 'news' ? theme.railNewsActive : theme.railNavIdle
+              }`}
+            >
+              <Newspaper className="w-5 h-5 shrink-0" />
+              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
+                Báo Audio
+              </span>
+              {(newsController.isPlaying || newsController.isTtsSpeaking) &&
+                railSection !== 'news' && (
+                  <span className="absolute top-1.5 right-2 w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                )}
+            </button>
+
+            <button
+              type="button"
               onClick={() => onChangeRailSection('nowPlaying')}
               className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'nowPlaying' ? theme.railNavActive : theme.railNavIdle
@@ -1521,9 +1611,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => {
-                if (isCockpitView && cockpitTvMode) {
+                if (isCockpitView && (cockpitTvMode || cockpitNewsMode)) {
                   setCockpitTvMode(false);
                   setIsTvSessionActive(false);
+                  setCockpitNewsMode(false);
+                  newsController.pauseNews();
                 }
                 onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
               }}
@@ -2537,6 +2629,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onTvSlotRectChange={handleCockpitTvSlotRectChange}
             onPauseMusic={pauseAllMusicForTv}
             onOpenFullTv={handleOpenFullTv}
+            news={newsController}
+            cockpitNewsMode={cockpitNewsMode}
+            onChangeCockpitNewsMode={handleChangeCockpitNewsMode}
+            onOpenFullNews={handleOpenFullNews}
             uiScale={uiScale}
             onChangeUiScale={onChangeUiScale}
           />
@@ -2556,9 +2652,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
 
         {/* -------------------------------------------------------------------
+            B3. MÀN HÌNH ĐỌC BÁO & BÁO AUDIO TỪ BÁO MỚI (4 giọng đọc AI .m4a + Đọc báo sạch!)
+           ------------------------------------------------------------------- */}
+        {isNewsView && (
+          <NewsAudioView
+            news={newsController}
+            isLightTheme={isLightTheme}
+            onOpenCockpitWithNews={handleOpenCockpitWithNews}
+          />
+        )}
+
+        {/* -------------------------------------------------------------------
             C. MÀN HÌNH KHÁM PHÁ / PLAYLIST ĐỒNG BỘ / LỊCH SỬ + MINI PLAYER
            ------------------------------------------------------------------- */}
-        {!isNowPlayingView && !isCockpitView && !isTvView && (
+        {!isNowPlayingView && !isCockpitView && !isTvView && !isNewsView && (
           <div
             key={`browse-${railSection}-${viewMode}-${selectedPlaylistId}`}
             className="flex-1 flex flex-col min-h-0 max-w-[1920px] mx-auto w-full animate-ios-browse-in"
@@ -2885,63 +2992,129 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
             </div>
 
-            {/* MINI PLAYER NỔI PHÍA DƯỚI */}
-            <div
-              onClick={() => onChangeRailSection('nowPlaying')}
-              className={`shrink-0 mt-2 short:mt-1.5 border rounded-2xl px-3 py-2 short:py-1.5 flex items-center justify-between gap-2.5 cursor-pointer ios-spring-fast animate-ios-mini-up active:scale-[0.99] ${theme.miniPlayer}`}
-            >
-              <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                <img
-                  src={streamData.thumbnailUrl}
-                  alt={streamData.title}
-                  className={`${
-                    isVideoMode ? 'w-14 aspect-video' : 'w-10 h-10 short:w-9 short:h-9'
-                  } rounded-xl object-cover shrink-0 shadow bg-black`}
-                />
-                <div className="min-w-0">
-                  <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
-                    {streamData.title}
-                  </h4>
-                  <p className={`text-[11px] truncate ${theme.textSub}`}>{streamData.uploader}</p>
+            {/* MINI PLAYER NỔI PHÍA DƯỚI (Tự hiện Báo Audio nếu đang nghe báo!) */}
+            {(newsController.isPlaying || newsController.isTtsSpeaking) && newsController.activeItem ? (
+              <div
+                onClick={() => onChangeRailSection('news')}
+                className={`shrink-0 mt-2 short:mt-1.5 border rounded-2xl px-3 py-2 short:py-1.5 flex items-center justify-between gap-2.5 cursor-pointer ios-spring-fast animate-ios-mini-up active:scale-[0.99] ${theme.miniPlayer}`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <div className="w-10 h-10 short:w-9 short:h-9 rounded-xl overflow-hidden shrink-0 bg-amber-500/20 flex items-center justify-center shadow">
+                    {newsController.activeItem.thumb ? (
+                      <img
+                        src={newsController.activeItem.thumb}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Newspaper className="w-5 h-5 text-amber-500" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[0.6rem] font-black shrink-0">
+                        BÁO AUDIO
+                      </span>
+                      <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
+                        {newsController.activeItem.title}
+                      </h4>
+                    </div>
+                    <p className={`text-[11px] truncate ${theme.textSub}`}>
+                      {newsController.activeItem.publisherName} • {newsController.playbackRate}x
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  className="flex items-center gap-1.5 shrink-0"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={() => newsController.playPrevArticle()}
+                    disabled={!newsController.hasPrevArticle}
+                    aria-label="Bài báo trước"
+                    className={`w-10 h-10 short:w-9 short:h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
+                  >
+                    <SkipBack className="w-4 h-4 fill-current" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={newsController.togglePlay}
+                    aria-label="Tạm dừng báo audio"
+                    className={`w-11 h-11 short:w-10 short:h-10 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
+                  >
+                    <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => newsController.playNextArticle(true)}
+                    disabled={!newsController.hasNextArticle}
+                    aria-label="Bài báo tiếp theo"
+                    className={`w-10 h-10 short:w-9 short:h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
+                  >
+                    <SkipForward className="w-4 h-4 fill-current" />
+                  </button>
                 </div>
               </div>
-
+            ) : (
               <div
-                className="flex items-center gap-1.5 shrink-0"
-                onClick={(e) => e.stopPropagation()}
+                onClick={() => onChangeRailSection('nowPlaying')}
+                className={`shrink-0 mt-2 short:mt-1.5 border rounded-2xl px-3 py-2 short:py-1.5 flex items-center justify-between gap-2.5 cursor-pointer ios-spring-fast animate-ios-mini-up active:scale-[0.99] ${theme.miniPlayer}`}
               >
-                <button
-                  type="button"
-                  onClick={onPrev}
-                  disabled={!hasPrev}
-                  aria-label="Bài trước"
-                  className={`w-10 h-10 short:w-9 short:h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <img
+                    src={streamData.thumbnailUrl}
+                    alt={streamData.title}
+                    className={`${
+                      isVideoMode ? 'w-14 aspect-video' : 'w-10 h-10 short:w-9 short:h-9'
+                    } rounded-xl object-cover shrink-0 shadow bg-black`}
+                  />
+                  <div className="min-w-0">
+                    <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
+                      {streamData.title}
+                    </h4>
+                    <p className={`text-[11px] truncate ${theme.textSub}`}>{streamData.uploader}</p>
+                  </div>
+                </div>
+
+                <div
+                  className="flex items-center gap-1.5 shrink-0"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <SkipBack className="w-4 h-4 fill-current" />
-                </button>
-                <button
-                  type="button"
-                  onClick={togglePlay}
-                  aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-                  className={`w-11 h-11 short:w-10 short:h-10 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
-                >
-                  {isPlaying ? (
-                    <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
-                  ) : (
-                    <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={onNext}
-                  disabled={!hasNext}
-                  aria-label="Bài tiếp theo"
-                  className={`w-10 h-10 short:w-9 short:h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
-                >
-                  <SkipForward className="w-4 h-4 fill-current" />
-                </button>
+                  <button
+                    type="button"
+                    onClick={onPrev}
+                    disabled={!hasPrev}
+                    aria-label="Bài trước"
+                    className={`w-10 h-10 short:w-9 short:h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
+                  >
+                    <SkipBack className="w-4 h-4 fill-current" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={togglePlay}
+                    aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
+                    className={`w-11 h-11 short:w-10 short:h-10 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
+                  >
+                    {isPlaying ? (
+                      <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
+                    ) : (
+                      <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onNext}
+                    disabled={!hasNext}
+                    aria-label="Bài tiếp theo"
+                    className={`w-10 h-10 short:w-9 short:h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
+                  >
+                    <SkipForward className="w-4 h-4 fill-current" />
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>

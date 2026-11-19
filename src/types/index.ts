@@ -84,8 +84,9 @@ export type ViewMode = 'classic' | 'ytmusic';
 export type RepeatMode = 'off' | 'all' | 'one';
 export type NightMode = 'auto' | 'on' | 'off';
 export type MapTheme = 'vector3d' | 'dark3d' | 'osm' | 'satellite';
-export type RailSection = 'nowPlaying' | 'cockpit' | 'tv' | 'browse' | 'favorites' | 'history';
+export type RailSection = 'nowPlaying' | 'cockpit' | 'tv' | 'news' | 'browse' | 'favorites' | 'history';
 export type QueueSource = 'explore' | 'mix' | 'favorites' | 'playlist' | 'history';
+export type CockpitMediaTab = 'music' | 'video' | 'tv' | 'news';
 
 export interface TvChannel {
   id: string;
@@ -132,4 +133,79 @@ export interface TvPingResult {
   latencyMs?: number;
   checkedAt?: number;
   reason?: string;
+}
+
+export type NewsCategoryId =
+  | 'hot'
+  | 'audio'
+  | 'tin-moi'
+  | 'xa-hoi'
+  | 'kinh-te'
+  | 'xe-co'
+  | 'the-gioi'
+  | 'cong-nghe'
+  | 'the-thao'
+  | 'phap-luat'
+  | 'giai-tri'
+  | 'doi-song';
+
+export interface NewsCategory {
+  id: NewsCategoryId;
+  label: string;
+  icon: string;
+}
+
+export interface NewsItem {
+  id: string;
+  title: string;
+  description: string;
+  url: string;
+  thumb: string;
+  date: number;
+  publisherName: string;
+  publisherIcon: string;
+  isAudioPost: boolean;
+  durationText?: string;
+  sectionTitle?: string;
+}
+
+export interface NewsVoice {
+  id: number;
+  name: string;
+  streamingUrl: string;
+}
+
+export interface NewsBodyBlock {
+  type: 'text' | 'image';
+  text?: string;
+  url?: string;
+  isCaption?: boolean;
+  isAuthor?: boolean;
+}
+
+export interface NewsArticleDetail {
+  id: string;
+  title: string;
+  description: string;
+  url: string;
+  originalUrl?: string;
+  thumb: string;
+  date: number;
+  categoryName?: string;
+  publisherName: string;
+  publisherIcon: string;
+  durationText?: string;
+  voices: NewsVoice[];
+  blocks: NewsBodyBlock[];
+  plainText: string;
+}
+
+export interface NewsFeedResponse {
+  cat: string;
+  query?: string;
+  page: number;
+  hasMore: boolean;
+  total: number;
+  items: NewsItem[];
+  error?: string;
 }
