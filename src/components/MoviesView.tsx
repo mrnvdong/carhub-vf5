@@ -75,7 +75,6 @@ const MOVIE_SOURCE_OPTIONS: Array<{
   { id: 'nguonc', icon: '🎥', label: 'NguonC', activeClass: 'bg-emerald-600 text-white shadow' },
   { id: 'cobephim', icon: '🎀', label: 'CoBePhim', activeClass: 'bg-fuchsia-600 text-white shadow' },
   { id: 'k20', icon: '⚡', label: 'K20 4K', activeClass: 'bg-amber-500 text-slate-950 shadow' },
-  { id: 'vidsrc', icon: '🌍', label: 'Quốc tế', activeClass: 'bg-cyan-600 text-white shadow' },
 ];
 
 function getSourceLabel(src: MovieSource): string {
@@ -83,7 +82,6 @@ function getSourceLabel(src: MovieSource): string {
   if (src === 'nguonc') return 'NguonC';
   if (src === 'cobephim') return 'CoBePhim';
   if (src === 'k20') return 'K20';
-  if (src === 'vidsrc') return 'Quốc tế';
   return 'KKPhim';
 }
 
@@ -92,7 +90,6 @@ function getSourceBadgeClass(src: MovieSource): string {
   if (src === 'nguonc') return 'bg-emerald-600 text-white';
   if (src === 'cobephim') return 'bg-fuchsia-600 text-white';
   if (src === 'k20') return 'bg-amber-500 text-slate-950';
-  if (src === 'vidsrc') return 'bg-cyan-600 text-white';
   return 'bg-violet-600 text-white';
 }
 
@@ -104,7 +101,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   const theme = getCarTheme(isLightTheme);
   const browseScrollRef = useRef<HTMLDivElement>(null);
 
-  // 6 kho phim đa nền tảng: KKPhim | VSMov | NguonC | CoBePhim | K20 (4K/Xưa/Thể Thao) | Quốc tế (IMDb/VidSrc)
+  // 5 kho phim sạch chuẩn: KKPhim | VSMov | NguonC | CoBePhim | K20 (4K/Phim Xưa/Thể Thao Live)
   const [movieSource, setMovieSourceState] = useState<MovieSource>(() => {
     try {
       const saved = localStorage.getItem('carhub_movie_source');
@@ -112,8 +109,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
         saved === 'vsmov' ||
         saved === 'nguonc' ||
         saved === 'cobephim' ||
-        saved === 'k20' ||
-        saved === 'vidsrc'
+        saved === 'k20'
       ) {
         return saved;
       }
@@ -153,13 +149,11 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
       nextSource === 'vsmov'
         ? '🍿 Đã chuyển sang VSMov (1080p Sạch QC & Chiếu rạp)'
         : nextSource === 'nguonc'
-        ? '🎥 Đã chuyển sang NguonC (33.700+ phim • HLS Sạch QC)'
+        ? '🎥 Đã chuyển sang NguonC (33.700+ phim)'
         : nextSource === 'cobephim'
         ? '🎀 Đã chuyển sang CoBePhim (Song Ngữ & Đa Server)'
         : nextSource === 'k20'
         ? '⚡ Đã chuyển sang K20 (Phim 4K • CLB Phim Xưa • Thể Thao Live)'
-        : nextSource === 'vidsrc'
-        ? '🌍 Đã chuyển sang Quốc tế IMDb (Ưu tiên HLS 4K/TM 0% Popup!)'
         : '🎬 Đã chuyển sang KKPhim (1080p HLS Sạch QC)'
     );
   };
@@ -232,7 +226,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           page,
           limit: 24,
           category: movieSource === 'k20' ? '' : selectedGenre,
-          country: movieSource === 'vidsrc' || movieSource === 'k20' ? '' : selectedCountry,
+          country: movieSource === 'k20' ? '' : selectedCountry,
           year: movieSource === 'cobephim' || movieSource === 'k20' ? '' : selectedYear,
           sortLang: movieSource === 'kkphim' || movieSource === 'nguonc' ? selectedSortLang : '',
           keyword: searchKeyword,
@@ -278,7 +272,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
 
   const activeFiltersCount =
     (movieSource !== 'k20' && selectedGenre ? 1 : 0) +
-    (movieSource !== 'vidsrc' && movieSource !== 'k20' && selectedCountry ? 1 : 0) +
+    (movieSource !== 'k20' && selectedCountry ? 1 : 0) +
     (movieSource !== 'cobephim' && movieSource !== 'k20' && selectedYear ? 1 : 0) +
     ((movieSource === 'kkphim' || movieSource === 'nguonc') && selectedSortLang ? 1 : 0);
 
@@ -510,12 +504,8 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     if (!movieDetail) return;
     const curSrc = movieDetail.source || activeTarget?.source || movieSource;
     const otherSrc: MovieSource =
-      targetSrc || (curSrc === 'kkphim' ? 'vsmov' : curSrc === 'vsmov' ? 'vidsrc' : 'kkphim');
-    // Khi nhảy sang VidSrc (IMDb quốc tế) ưu tiên tên gốc tiếng Anh để ra kết quả chuẩn nhất!
-    const kw =
-      otherSrc === 'vidsrc'
-        ? (movieDetail.originName || movieDetail.name).replace(/\s*•.*$/, '').trim()
-        : movieDetail.name || movieDetail.originName;
+      targetSrc || (curSrc === 'kkphim' ? 'vsmov' : 'kkphim');
+    const kw = movieDetail.name || movieDetail.originName;
     setActiveTarget(null);
     setMovieDetail(null);
     setMovieSourceState(otherSrc);
@@ -586,7 +576,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
 
           {movieDetail && (
             <div className="flex items-center gap-1.5 shrink-0">
-              {(['kkphim', 'vsmov', 'nguonc', 'cobephim', 'vidsrc'] as MovieSource[])
+              {(['kkphim', 'vsmov', 'nguonc', 'cobephim', 'k20'] as MovieSource[])
                 .filter((s) => s !== activeSrc)
                 .slice(0, 2)
                 .map((other) => (
@@ -663,7 +653,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0 flex flex-wrap items-center gap-2">
                       <span className={`text-xs font-black uppercase tracking-wider ${theme.textSub}`}>
-                        🎙️ {activeSrc === 'vidsrc' && movieDetail.type === 'series' ? 'Mùa phim' : 'Nguồn phát'} ({getSourceLabel(activeSrc)})
+                        🎙️ Nguồn phát ({getSourceLabel(activeSrc)})
                       </span>
                       {activeEpisode?.filename && activeEpisode.filename !== activeEpisode.name && (
                         <span className={`text-xs font-bold truncate max-w-[20rem] ${theme.text}`}>
@@ -967,10 +957,6 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                   ? isLightTheme
                     ? 'bg-amber-100 border-amber-300 text-amber-800'
                     : 'bg-amber-500/20 border-amber-400/45 text-amber-300'
-                  : movieSource === 'vidsrc'
-                  ? isLightTheme
-                    ? 'bg-cyan-100 border-cyan-300 text-cyan-700'
-                    : 'bg-cyan-500/20 border-cyan-400/45 text-cyan-300'
                   : isLightTheme
                   ? 'bg-violet-100 border-violet-300 text-violet-700'
                   : 'bg-violet-500/20 border-violet-400/45 text-violet-300'
@@ -998,8 +984,6 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                   ? `Lịch sử phim đang xem (${history.length})`
                   : searchKeyword
                   ? `Kết quả "${searchKeyword}" (${totalItems} phim)`
-                  : movieSource === 'vidsrc'
-                  ? 'Kho quốc tế IMDb • Ưu tiên HLS 4K/TM 0% Popup'
                   : movieSource === 'k20'
                   ? 'K20 Tổng Hợp • Phim 4K • CLB Phim Xưa • Thể Thao Live'
                   : movieSource === 'cobephim'
@@ -1008,7 +992,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                       totalItems > 0
                         ? `${totalItems.toLocaleString('vi-VN')} phim HD/FHD`
                         : movieSource === 'nguonc'
-                        ? '33.700+ phim • HLS Sạch QC'
+                        ? '33.700+ phim HD/FHD'
                         : movieSource === 'vsmov'
                         ? '38.000+ phim Sạch QC & Chiếu rạp'
                         : '30.000+ phim 1080p Sạch QC'
@@ -1017,7 +1001,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             </div>
           </div>
 
-          {/* Thanh chuyển 6 nguồn phim 1 hàng gọn gàng (cuộn mượt trên màn nhỏ, không vỡ dòng!) */}
+          {/* Thanh chuyển 5 nguồn phim 1 hàng gọn gàng (cuộn mượt trên màn nhỏ, không vỡ dòng!) */}
           <div
             className={`flex items-center p-1 rounded-xl border gap-1 overflow-x-auto no-scrollbar max-w-full ${theme.segTrack}`}
           >
@@ -1051,9 +1035,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder={
-                movieSource === 'vidsrc'
-                  ? 'Tìm tên phim Anh hoặc IMDb ID (tt...)...'
-                  : movieSource === 'k20'
+                movieSource === 'k20'
                   ? 'Tìm phim 4K, phim xưa TVB, phim lẻ K20...'
                   : 'Tìm tên phim, diễn viên...'
               }
@@ -1165,7 +1147,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                 active
                   ? tab.id === 'phim-thuyet-minh' || tab.id === 'song-ngu'
                     ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow'
-                    : tab.id === 'phim-long-tieng' || tab.id === 'subteam' || tab.id === 'top-imdb' || tab.id === 'series-imdb' || tab.id === 'phim-xua'
+                    : tab.id === 'phim-long-tieng' || tab.id === 'subteam' || tab.id === 'phim-xua'
                     ? 'bg-amber-400 text-slate-950 border-amber-300 shadow'
                     : tab.id === 'phim-chieu-rap' || tab.id === 'the-thao'
                     ? 'bg-rose-600 text-white border-rose-500 shadow'
@@ -1177,8 +1159,6 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                     ? 'bg-fuchsia-600 text-white border-fuchsia-500 shadow'
                     : movieSource === 'k20'
                     ? 'bg-amber-500 text-slate-950 border-amber-400 shadow'
-                    : movieSource === 'vidsrc'
-                    ? 'bg-cyan-600 text-white border-cyan-500 shadow'
                     : 'bg-violet-600 text-white border-violet-500 shadow'
                   : theme.chipIdle
               }`}
@@ -1196,7 +1176,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           className={`shrink-0 rounded-2xl border p-3 grid gap-2 animate-ios-sheet-in ${
             movieSource === 'kkphim' || movieSource === 'nguonc'
               ? 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-5'
-              : movieSource === 'vidsrc' || movieSource === 'cobephim'
+              : movieSource === 'cobephim'
               ? 'grid-cols-2 sm:grid-cols-3'
               : 'grid-cols-2 sm:grid-cols-4'
           } ${theme.cardElevated}`}
@@ -1222,28 +1202,26 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             </select>
           </label>
 
-          {movieSource !== 'vidsrc' && (
-            <label className="flex flex-col gap-1">
-              <span className={`text-[0.68rem] font-extrabold flex items-center gap-1 ${theme.textSub}`}>
-                <Globe className="w-3.5 h-3.5" /> Quốc gia
-              </span>
-              <select
-                value={selectedCountry}
-                onChange={(e) => {
-                  setSelectedCountry(e.target.value);
-                  setPage(1);
-                }}
-                className={`min-h-[2.35rem] px-2.5 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
-              >
-                <option value="">Tất cả quốc gia</option>
-                {countries.map((c) => (
-                  <option key={c.slug} value={c.slug}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          <label className="flex flex-col gap-1">
+            <span className={`text-[0.68rem] font-extrabold flex items-center gap-1 ${theme.textSub}`}>
+              <Globe className="w-3.5 h-3.5" /> Quốc gia
+            </span>
+            <select
+              value={selectedCountry}
+              onChange={(e) => {
+                setSelectedCountry(e.target.value);
+                setPage(1);
+              }}
+              className={`min-h-[2.35rem] px-2.5 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
+            >
+              <option value="">Tất cả quốc gia</option>
+              {countries.map((c) => (
+                <option key={c.slug} value={c.slug}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
 
           {movieSource !== 'cobephim' && (
             <label className="flex flex-col gap-1">
@@ -1293,7 +1271,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             className={`flex items-end ${
               movieSource === 'kkphim' || movieSource === 'nguonc'
                 ? 'col-span-2 sm:col-span-4 lg:col-span-1'
-                : movieSource === 'vidsrc' || movieSource === 'cobephim'
+                : movieSource === 'cobephim'
                 ? 'col-span-2 sm:col-span-1'
                 : 'col-span-1'
             }`}

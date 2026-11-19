@@ -166,9 +166,6 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
   const [resolvedEmbedOverride, setResolvedEmbedOverride] = useState<string>('');
   const [k20Options, setK20Options] = useState<K20ResolvedOption[]>([]);
   const [k20OptionIdx, setK20OptionIdx] = useState<number>(0);
-  // Mặc định TẮT sandbox ở chế độ Embed dự phòng vì VidFast/VidSrc từ chối iframe sandbox; các phim IMDb đã ưu tiên phát Direct HLS sạch 0% popup qua K20 trước!
-  const [embedPopupShield, setEmbedPopupShield] = useState<boolean>(false);
-  const [useVidsrcMirror, setUseVidsrcMirror] = useState<boolean>(false);
 
   const hudTimerRef = useRef<number | null>(null);
   const lastTapRef = useRef<{ time: number; side: 'left' | 'right' | 'center' }>({
@@ -196,11 +193,9 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     setErrorMsg(null);
     setCurrentTime(0);
     setDuration(0);
-    setUseVidsrcMirror(false);
     setResolvedEmbedOverride('');
     setK20Options([]);
     setK20OptionIdx(0);
-    setEmbedPopupShield(false);
     if (
       episode?.linkM3u8 ||
       isVsmovEmbedUrl(episode?.linkEmbed) ||
@@ -229,7 +224,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     scheduleHideHud();
   }, [scheduleHideHud]);
 
-  // Nạp luồng HLS / MP4 cho tất cả 6 nguồn: KKPhim, VSMov (PNG-TS + VTT), NguonC, CoBePhim, K20 (4K/MP4/Live), VidSrc (K20 Direct HLS 0% popup!)
+  // Nạp luồng HLS / MP4 cho tất cả 5 nguồn: KKPhim, VSMov (PNG-TS + VTT), NguonC, CoBePhim, K20 (4K/MP4/Live)
   useEffect(() => {
     const isInitialVsmov = Boolean(!episode?.linkM3u8 && isVsmovEmbedUrl(episode?.linkEmbed));
     const isInitialCobephim = Boolean(!episode?.linkM3u8 && isCobephimEpRef(episode?.linkEmbed));
@@ -384,7 +379,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
         }
       }
 
-      // B) Tách luồng K20 / VidSrc-IMDb (k20-ep://... hoặc k20-imdb://...) -> ưu tiên Direct HLS/MP4 0% popup!
+      // B) Tách luồng K20 (k20-ep://...) -> ưu tiên Direct HLS 4K / MP4 / Sports Live
       if (isInitialK20 && resolvedMediaUrl) {
         try {
           const k20 = await resolveK20Stream(resolvedMediaUrl);
@@ -399,7 +394,6 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
               loadSubtitlesAsBlobs(picked.subtitles);
             }
           } else if (episode.linkEmbed) {
-            // Phim quốc tế hiếm chưa có trên K20 -> rơi mượt về Embed VidFast!
             setPlayerMode('embed');
             return;
           } else {
@@ -750,85 +744,29 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
         isFullscreen ? 'h-screen rounded-none' : 'aspect-video rounded-2xl sm:rounded-3xl'
       }`}
     >
-      {/* TRÌNH PHÁT EMBED DỰ PHÒNG */}
+      {/* TRÌNH PHÁT EMBED */}
       {playerMode === 'embed' && (resolvedEmbedOverride || episode.linkEmbed) ? (
-        (() => {
-          const rawEmbed = resolvedEmbedOverride || episode.linkEmbed;
-          const vfMatch = rawEmbed.match(/^https:\/\/vidfast\.vc\/(movie|tv)\/([^?]+)/i);
-          const altVidsrcUrl = vfMatch
-            ? `https://vidsrc.mov/embed/${vfMatch[1].toLowerCase()}/${vfMatch[2]}`
-            : '';
-          const finalEmbedUrl = useVidsrcMirror && altVidsrcUrl ? altVidsrcUrl : rawEmbed;
-
-          return (
-            <div className="absolute inset-0 w-full h-full">
-              <iframe
-                key={`${finalEmbedUrl}::${embedPopupShield ? 'shield' : 'open'}`}
-                src={finalEmbedUrl}
-                title={`${movieTitle} - ${episode.name}`}
-                allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
-                allowFullScreen
-                referrerPolicy="origin"
-                sandbox={
-                  embedPopupShield
-                    ? 'allow-scripts allow-same-origin allow-presentation allow-forms'
-                    : undefined
-                }
-                className="w-full h-full border-0 bg-black"
-              />
-              <div className="absolute top-2.5 right-2.5 z-20 flex flex-wrap items-center justify-end gap-1.5">
-                {altVidsrcUrl && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !useVidsrcMirror;
-                      setUseVidsrcMirror(next);
-                      onNotifyToastRef.current?.(
-                        next ? '🔄 Đã chuyển sang Embed dự phòng VidSrc.mov' : '🔄 Đã chuyển sang VidFast'
-                      );
-                    }}
-                    className="min-h-[2.1rem] px-2.5 rounded-full bg-black/80 hover:bg-cyan-600 text-white border border-white/25 text-[0.7rem] font-extrabold backdrop-blur-md shadow-xl active:scale-95 transition"
-                  >
-                    {useVidsrcMirror ? '← Về VidFast' : 'Đổi VidSrc'}
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !embedPopupShield;
-                    setEmbedPopupShield(next);
-                    onNotifyToastRef.current?.(
-                      next
-                        ? '🛡️ Đã BẬT khóa sandbox chặn popup (nếu video báo chặn hãy tắt lại)'
-                        : '🔓 Đã TẮT khóa sandbox để phát trình phát gốc'
-                    );
-                  }}
-                  title="Bật/tắt HTML5 sandbox chặn popup (một số server embed có thể từ chối sandbox)"
-                  className={`min-h-[2.1rem] px-2.5 rounded-full border text-[0.7rem] font-extrabold flex items-center gap-1 backdrop-blur-md shadow-xl active:scale-95 transition ${
-                    embedPopupShield
-                      ? 'bg-emerald-500/90 border-emerald-300 text-slate-950'
-                      : 'bg-black/80 border-white/25 text-white/85 hover:text-white'
-                  }`}
-                >
-                  <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                  <span>{embedPopupShield ? 'Sandbox: BẬT' : 'Sandbox: TẮT'}</span>
-                </button>
-
-                {canUseHls && (
-                  <button
-                    type="button"
-                    onClick={() => setPlayerMode('clean')}
-                    className="min-h-[2.1rem] px-2.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-300/60 text-[0.7rem] font-extrabold flex items-center gap-1 backdrop-blur-md shadow-xl active:scale-95 transition"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                    <span>HLS Sạch 0% Popup</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })()
+        <div className="absolute inset-0 w-full h-full">
+          <iframe
+            key={resolvedEmbedOverride || episode.linkEmbed}
+            src={resolvedEmbedOverride || episode.linkEmbed}
+            title={`${movieTitle} - ${episode.name}`}
+            allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+            allowFullScreen
+            referrerPolicy="origin"
+            className="w-full h-full border-0 bg-black"
+          />
+          {canUseHls && (
+            <button
+              type="button"
+              onClick={() => setPlayerMode('clean')}
+              className="absolute top-2.5 right-2.5 z-20 min-h-[2.1rem] px-3 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-300/60 text-xs font-extrabold flex items-center gap-1.5 backdrop-blur-md shadow-xl active:scale-95 transition"
+            >
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>Quay lại HLS Sạch QC</span>
+            </button>
+          )}
+        </div>
       ) : (
         <>
           {/* VIDEO ELEMENT HLS 1080P */}

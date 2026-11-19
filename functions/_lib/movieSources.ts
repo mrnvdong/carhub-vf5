@@ -144,13 +144,6 @@ async function fetchText(
   }
 }
 
-// Chuyển embed*.streamc.xyz/embed.php?hash=... sang luồng HLS sạch trực tiếp qua K20 (KHÔNG logo, KHÔNG QC!)
-export function streamcEmbedToHls(embedUrl: string): string {
-  const m = embedUrl.match(/^https?:\/\/([a-z0-9-]+\.streamc\.xyz)\/embed\.php\?[^#]*hash=([a-f0-9]+)/i);
-  if (!m) return '';
-  return `${K20_BASE}/nguonc-hls.m3u8?hash=${encodeURIComponent(m[2])}&eh=${encodeURIComponent(m[1])}`;
-}
-
 export function extractK20SubtitlesFromUrl(streamUrl: string): Array<{ label: string; lang: string; url: string }> {
   try {
     const u = new URL(streamUrl);
@@ -1029,22 +1022,6 @@ export async function handleResolveK20(mediaType: string, rawId: string) {
   );
   const streams = normalizeK20StreamList(res?.streams || []);
   return { streams };
-}
-
-// Dùng cho nguồn VidSrc/Quốc tế: tự bóc luồng 4K / Thuyết minh / Vietsub Direct HLS từ K20 theo IMDb ID (0% popup!)
-export async function fetchK20DirectStreamsForImdb(
-  kind: 'movie' | 'series',
-  imdbId: string
-): Promise<Array<{ label: string; url: string; isMp4: boolean; subtitles: any[] }>> {
-  try {
-    const res = await fetchJson(
-      `${K20_BASE}/stream/${kind}/${encodeURIComponent(imdbId)}.json`,
-      3800
-    );
-    return normalizeK20StreamList(res?.streams || []);
-  } catch {
-    return [];
-  }
 }
 
 export async function handleK20Detail(slug: string) {

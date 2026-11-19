@@ -1,11 +1,10 @@
 // Cloudflare Pages Function: /api/movie
-// Engine Phim Rạp ĐA NGUỒN (6 kho phim & trực tiếp):
-// 1) KKPhim   (https://phimapi.com)              — 30.600+ phim, 1080p HLS Sạch QC
-// 2) VSMov    (https://vsmov.com/api)            — 38.500+ phim, Chiếu rạp & Subteam (bóc PNG-TS sạch logo/QC)
-// 3) NguonC   (https://phim.nguonc.com/api)      — 33.700+ phim (HLS sạch QC qua K20 + Embed)
-// 4) CoBePhim (https://cobephim.club)            — Song Ngữ, Đa Server KK/VS/NC
-// 5) K20      (https://sc.k-20.xyz)              — Phim 4K, CLB Phim Xưa MP4, Thể Thao Live (Xôi Lạc, Vebo, SoCoLive...)
-// 6) VidSrc   (https://vidsrc.mov + K20 Direct HLS) — Kho IMDb quốc tế, ưu tiên HLS sạch 0% popup + Embed dự phòng
+// Engine Phim Rạp ĐA NGUỒN (5 kho phim & trực tiếp sạch popup):
+// 1) KKPhim   (https://phimapi.com)         — 30.600+ phim, 1080p HLS Sạch QC
+// 2) VSMov    (https://vsmov.com/api)       — 38.500+ phim, Chiếu rạp & Subteam (bóc PNG-TS sạch logo/QC)
+// 3) NguonC   (https://phim.nguonc.com/api) — 33.700+ phim HD/FHD
+// 4) CoBePhim (https://cobephim.club)       — Song Ngữ, Đa Server KK/VS/NC
+// 5) K20      (https://sc.k-20.xyz)         — Phim 4K, CLB Phim Xưa MP4, Thể Thao Live (Xôi Lạc, Vebo, SoCoLive...)
 
 import {
   NGUONC_COUNTRIES,
@@ -24,46 +23,13 @@ import {
   handleResolveK20,
 } from '../_lib/movieSources';
 
-type MovieSource = 'kkphim' | 'vsmov' | 'nguonc' | 'cobephim' | 'k20' | 'vidsrc';
+type MovieSource = 'kkphim' | 'vsmov' | 'nguonc' | 'cobephim' | 'k20';
 
 const PHIMAPI_BASE = 'https://phimapi.com';
 const CDN_IMAGE_BASE = 'https://phimimg.com';
 
 const VSMOV_API_BASE = 'https://vsmov.com/api';
 const VSMOV_IMAGE_BASE = 'https://vsmov.com/storage/images';
-
-const VIDSRC_EMBED_BASE = 'https://vidsrc.mov/embed';
-const VIDFAST_EMBED_BASE = 'https://vidfast.vc';
-const CINEMETA_BASE = 'https://v3-cinemeta.strem.io';
-
-const VIDSRC_GENRES: Array<{ name: string; slug: string; canonical: string }> = [
-  { name: 'Hành động (Action)', slug: 'action', canonical: 'Action' },
-  { name: 'Phiêu lưu (Adventure)', slug: 'adventure', canonical: 'Adventure' },
-  { name: 'Hoạt hình (Animation)', slug: 'animation', canonical: 'Animation' },
-  { name: 'Viễn tưởng (Sci-Fi)', slug: 'sci-fi', canonical: 'Sci-Fi' },
-  { name: 'Giật gân (Thriller)', slug: 'thriller', canonical: 'Thriller' },
-  { name: 'Kinh dị (Horror)', slug: 'horror', canonical: 'Horror' },
-  { name: 'Hài hước (Comedy)', slug: 'comedy', canonical: 'Comedy' },
-  { name: 'Tâm lý (Drama)', slug: 'drama', canonical: 'Drama' },
-  { name: 'Tình cảm (Romance)', slug: 'romance', canonical: 'Romance' },
-  { name: 'Tội phạm (Crime)', slug: 'crime', canonical: 'Crime' },
-  { name: 'Bí ẩn (Mystery)', slug: 'mystery', canonical: 'Mystery' },
-  { name: 'Thần thoại (Fantasy)', slug: 'fantasy', canonical: 'Fantasy' },
-  { name: 'Gia đình (Family)', slug: 'family', canonical: 'Family' },
-  { name: 'Chiến tranh (War)', slug: 'war', canonical: 'War' },
-  { name: 'Lịch sử (History)', slug: 'history', canonical: 'History' },
-  { name: 'Tài liệu (Documentary)', slug: 'documentary', canonical: 'Documentary' },
-  { name: 'Tiểu sử (Biography)', slug: 'biography', canonical: 'Biography' },
-  { name: 'Thể thao (Sport)', slug: 'sport', canonical: 'Sport' },
-  { name: 'Miền Tây (Western)', slug: 'western', canonical: 'Western' },
-];
-
-const VIDSRC_GENRE_CANONICAL = new Map<string, string>(
-  VIDSRC_GENRES.map((g) => [g.slug, g.canonical])
-);
-const VIDSRC_GENRE_LABEL = new Map<string, string>(
-  VIDSRC_GENRES.map((g) => [g.slug, g.name])
-);
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
@@ -187,213 +153,6 @@ function normalizeMovieItem(
           .filter((c: any) => c.name && c.slug)
       : [],
   };
-}
-
-function normalizeCinemetaItem(meta: any, fallbackKind: 'movie' | 'series' = 'movie') {
-  const imdbId = String(meta?.imdb_id || meta?.id || '').trim();
-  const kind: 'movie' | 'series' =
-    meta?.type === 'series' || fallbackKind === 'series' ? 'series' : 'movie';
-  const yearMatch = String(meta?.releaseInfo || meta?.year || '').match(/\d{4}/);
-  const year = yearMatch ? Number(yearMatch[0]) : 0;
-  const ratingRaw = parseFloat(String(meta?.imdbRating || '0'));
-  const rating = Number.isFinite(ratingRaw) && ratingRaw > 0 ? Math.round(ratingRaw * 10) / 10 : 0;
-
-  const rawPoster = typeof meta?.poster === 'string' ? meta.poster.trim() : '';
-  const posterUrl = rawPoster
-    ? rawPoster.replace('/poster/small/', '/poster/medium/')
-    : imdbId.startsWith('tt')
-    ? `https://images.metahub.space/poster/medium/${imdbId}/img`
-    : '';
-  const rawBg = typeof meta?.background === 'string' ? meta.background.trim() : '';
-  const thumbUrl =
-    rawBg ||
-    (imdbId.startsWith('tt')
-      ? `https://images.metahub.space/background/medium/${imdbId}/img`
-      : posterUrl);
-
-  const rawGenres: string[] = Array.isArray(meta?.genres)
-    ? meta.genres
-    : Array.isArray(meta?.genre)
-    ? meta.genre
-    : [];
-  const categories = rawGenres
-    .map((g) => {
-      const clean = decodeEntities(g);
-      const slug = clean.toLowerCase().replace(/\s+/g, '-');
-      return { name: VIDSRC_GENRE_LABEL.get(slug) || clean, slug };
-    })
-    .filter((c) => c.name && c.slug);
-
-  const countryStr = typeof meta?.country === 'string' ? meta.country : '';
-  const countries = countryStr
-    .split(',')
-    .map((c) => c.trim())
-    .filter(Boolean)
-    .map((c) => ({ name: c, slug: c.toLowerCase().replace(/[^a-z0-9]+/g, '-') }));
-
-  return {
-    id: imdbId,
-    source: 'vidsrc' as MovieSource,
-    name: decodeEntities(meta?.name) || imdbId,
-    originName: imdbId ? `${imdbId.toUpperCase()} • ${kind === 'series' ? 'TV Series' : 'Movie'}` : '',
-    slug: `${kind}--${imdbId.toLowerCase()}`,
-    type: kind,
-    posterUrl,
-    thumbUrl,
-    year,
-    quality: '1080p',
-    lang: 'Multi-Sub',
-    time: decodeEntities(meta?.runtime),
-    episodeCurrent: kind === 'series' ? 'Series TV' : 'Full HD',
-    episodeTotal: '',
-    chieurap: false,
-    subDocQuyen: false,
-    rating,
-    categories,
-    countries,
-  };
-}
-
-function parseVidsrcSlug(rawSlug: string): {
-  kind: 'movie' | 'series';
-  id: string;
-  isTmdb: boolean;
-} | null {
-  const s = rawSlug.trim().toLowerCase();
-  const prefixed = s.match(/^(movie|series)--(tmdb-)?(tt\d{5,12}|\d{2,10})$/i);
-  if (prefixed) {
-    const kind = prefixed[1] === 'series' ? 'series' : 'movie';
-    const isTmdb = Boolean(prefixed[2]) || !prefixed[3].startsWith('tt');
-    return { kind, id: prefixed[3], isTmdb };
-  }
-  if (/^tt\d{5,12}$/i.test(s)) {
-    return { kind: 'movie', id: s, isTmdb: false };
-  }
-  if (/^\d{2,10}$/.test(s)) {
-    return { kind: 'movie', id: s, isTmdb: true };
-  }
-  return null;
-}
-
-function buildVidsrcServers(
-  kind: 'movie' | 'series',
-  mediaId: string,
-  title: string,
-  videos: any[],
-  isTmdb = false
-) {
-  if (kind === 'movie') {
-    const servers: Array<{ serverName: string; episodes: any[] }> = [];
-
-    // Ưu tiên 1: Tự bóc luồng Direct HLS (4K / Thuyết minh / Vietsub) từ K20 ngay trong Player -> mở trang 150ms, 0% popup, không iframe!
-    if (!isTmdb) {
-      servers.push({
-        serverName: '🛡️ HLS Sạch 0% Popup (4K / TM / Vietsub)',
-        episodes: [
-          {
-            name: 'Full 4K/1080p',
-            slug: 'k20-direct',
-            filename: `${title} • Direct HLS (4K / Thuyết minh / Vietsub)`,
-            linkM3u8: `k20-imdb://movie/${mediaId}`,
-            linkEmbed: `${VIDFAST_EMBED_BASE}/movie/${mediaId}?autoPlay=true&theme=06B6D4`,
-          },
-        ],
-      });
-    }
-
-    // Dự phòng Embed: VidFast & VidSrc.mov (nếu phim quốc tế quá mới chưa có bản Việt/K20)
-    servers.push(
-      {
-        serverName: 'VidFast (Embed 1080p)',
-        episodes: [
-          {
-            name: 'Full 1080p',
-            slug: 'full',
-            filename: `${title} • VidFast`,
-            linkEmbed: `${VIDFAST_EMBED_BASE}/movie/${mediaId}?autoPlay=true&theme=06B6D4`,
-            linkM3u8: '',
-          },
-        ],
-      },
-      {
-        serverName: 'VidSrc.mov (Embed dự phòng)',
-        episodes: [
-          {
-            name: 'Full 1080p',
-            slug: 'full-vidsrc',
-            filename: `${title} • VidSrc.mov`,
-            linkEmbed: `${VIDSRC_EMBED_BASE}/movie/${mediaId}`,
-            linkM3u8: '',
-          },
-        ],
-      }
-    );
-    return servers;
-  }
-
-  // TV Series: gom theo từng Mùa (Season 1, Mùa 2...)
-  // Mỗi tập gắn linkM3u8 = k20-imdb://series/{imdbId}:{s}:{e} -> tự thử phát Direct HLS sạch 0% popup trước, nếu chưa có mới rơi về VidFast Embed!
-  const nowMs = Date.now() + 24 * 60 * 60 * 1000;
-  const seasonMap = new Map<number, any[]>();
-  const allVideos = Array.isArray(videos) ? videos : [];
-  const hasPositiveSeason = allVideos.some((v) => Number(v?.season) >= 1);
-
-  for (const v of allVideos) {
-    const season = Number(v?.season);
-    const epNum = Number(v?.episode ?? v?.number);
-    if (!Number.isFinite(season) || !Number.isFinite(epNum) || epNum < 1) continue;
-    if (hasPositiveSeason && season < 1) continue;
-    if (v?.released) {
-      const relMs = Date.parse(String(v.released));
-      if (Number.isFinite(relMs) && relMs > nowMs) continue;
-    }
-    const list = seasonMap.get(season) || [];
-    list.push({ ...v, _epNum: epNum });
-    seasonMap.set(season, list);
-  }
-
-  const sortedSeasons = Array.from(seasonMap.keys()).sort((a, b) => a - b);
-  const servers = sortedSeasons.map((seasonNum) => {
-    const eps = (seasonMap.get(seasonNum) || [])
-      .sort((a, b) => a._epNum - b._epNum)
-      .filter((v, idx, arr) => idx === 0 || v._epNum !== arr[idx - 1]._epNum);
-
-    return {
-      serverName: seasonNum === 0 ? 'Đặc biệt' : `Mùa ${seasonNum} (🛡️ HLS Sạch)`,
-      episodes: eps.map((v) => {
-        const epTitle = decodeEntities(v?.name || v?.title);
-        const sPad = String(seasonNum).padStart(2, '0');
-        const ePad = String(v._epNum).padStart(2, '0');
-        return {
-          name: `Tập ${v._epNum}`,
-          slug: `s${seasonNum}e${v._epNum}`,
-          filename: epTitle ? `S${sPad}E${ePad} • ${epTitle}` : `S${sPad}E${ePad}`,
-          linkEmbed: `${VIDFAST_EMBED_BASE}/tv/${mediaId}/${seasonNum}/${v._epNum}?autoPlay=true&theme=06B6D4`,
-          linkM3u8: !isTmdb ? `k20-imdb://series/${mediaId}:${seasonNum}:${v._epNum}` : '',
-        };
-      }),
-    };
-  });
-
-  if (servers.length > 0) {
-    return servers;
-  }
-
-  return [
-    {
-      serverName: 'Mùa 1 (🛡️ HLS Sạch)',
-      episodes: Array.from({ length: 12 }, (_, idx) => {
-        const n = idx + 1;
-        return {
-          name: `Tập ${n}`,
-          slug: `s1e${n}`,
-          filename: `S01E${String(n).padStart(2, '0')}`,
-          linkEmbed: `${VIDFAST_EMBED_BASE}/tv/${mediaId}/1/${n}?autoPlay=true&theme=06B6D4`,
-          linkM3u8: !isTmdb ? `k20-imdb://series/${mediaId}:1:${n}` : '',
-        };
-      }),
-    },
-  ];
 }
 
 async function fetchJson(url: string, timeoutMs = 10000): Promise<any> {
@@ -560,27 +319,12 @@ export const onRequest: PagesFunction = async (context) => {
       ? 'cobephim'
       : rawSource === 'k20'
       ? 'k20'
-      : rawSource === 'vidsrc'
-      ? 'vidsrc'
       : 'kkphim';
 
   // =========================================================================
-  // 1. ACTION = META (Danh sách Thể loại & Quốc gia cho cả 6 nguồn phim)
+  // 1. ACTION = META (Danh sách Thể loại & Quốc gia cho 5 kho phim)
   // =========================================================================
   if (action === 'meta') {
-    if (source === 'vidsrc') {
-      return new Response(
-        JSON.stringify({
-          source: 'vidsrc',
-          genres: VIDSRC_GENRES.map((g) => ({ name: g.name, slug: g.slug })),
-          countries: [],
-        }),
-        {
-          status: 200,
-          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=86400, s-maxage=86400' },
-        }
-      );
-    }
     if (source === 'nguonc') {
       return new Response(
         JSON.stringify({ source: 'nguonc', genres: NGUONC_GENRES, countries: NGUONC_COUNTRIES }),
@@ -709,77 +453,6 @@ export const onRequest: PagesFunction = async (context) => {
       } catch (err: any) {
         return new Response(
           JSON.stringify({ source: 'k20', error: err?.message || 'Lỗi tải kho K20', items: [], page: 1, totalPages: 1, totalItems: 0 }),
-          { status: 502, headers: JSON_HEADERS }
-        );
-      }
-    }
-
-    // --- NHÁNH VIDSRC (https://vidsrc.mov/embed + Danh mục quốc tế IMDb/Cinemeta) ---
-    if (source === 'vidsrc') {
-      try {
-        const mediaType: 'movie' | 'series' =
-          type === 'phim-bo' || type === 'series-imdb' ? 'series' : 'movie';
-        const skip = (page - 1) * limit;
-        const extraParts: string[] = [];
-
-        let catalogId = type === 'top-imdb' || type === 'series-imdb' ? 'imdbRating' : 'top';
-        if (year && /^\d{4}$/.test(year)) {
-          catalogId = 'year';
-          extraParts.push(`genre=${year}`);
-        } else {
-          const canonicalGenre = category
-            ? VIDSRC_GENRE_CANONICAL.get(category)
-            : type === 'hoat-hinh'
-            ? 'Animation'
-            : undefined;
-          if (canonicalGenre) {
-            extraParts.push(`genre=${encodeURIComponent(canonicalGenre)}`);
-          }
-        }
-        if (skip > 0) {
-          extraParts.push(`skip=${skip}`);
-        }
-
-        const extraSeg = extraParts.length > 0 ? `/${extraParts.join('&')}` : '';
-        const endpoint = `${CINEMETA_BASE}/catalog/${mediaType}/${catalogId}${extraSeg}.json`;
-        const res = await fetchJson(endpoint);
-        const rawMetas = Array.isArray(res?.metas) ? res.metas : [];
-
-        // Cinemeta trả tối đa ~50 item mỗi batch -> cắt đúng `limit` để chuyển trang mượt, không trùng
-        const items = rawMetas
-          .slice(0, limit)
-          .map((m: any) => normalizeCinemetaItem(m, mediaType))
-          .filter((x: any) => x.id);
-        const hasMore = rawMetas.length >= limit;
-        const totalPages = hasMore ? Math.max(page + 1, 20) : page;
-
-        return new Response(
-          JSON.stringify({
-            source: 'vidsrc',
-            title: 'Kho Phim Quốc Tế VidSrc.mov',
-            page,
-            totalPages,
-            totalItems: hasMore ? totalPages * limit : skip + items.length,
-            items,
-          }),
-          {
-            status: 200,
-            headers: {
-              ...JSON_HEADERS,
-              'Cache-Control': 'public, max-age=300, s-maxage=300',
-            },
-          }
-        );
-      } catch (err: any) {
-        return new Response(
-          JSON.stringify({
-            source: 'vidsrc',
-            error: err?.message || 'Không tải được danh sách phim từ VidSrc',
-            items: [],
-            page: 1,
-            totalPages: 1,
-            totalItems: 0,
-          }),
           { status: 502, headers: JSON_HEADERS }
         );
       }
@@ -1011,166 +684,6 @@ export const onRequest: PagesFunction = async (context) => {
         });
       }
 
-      if (source === 'vidsrc') {
-        const kwLower = keyword.toLowerCase();
-
-        // 1) Hỗ trợ dán trực tiếp IMDb ID (vd: tt17048514) hoặc TMDB ID số (vd: 927085) chuẩn tài liệu vidsrc.mov!
-        if (/^tt\d{5,12}$/i.test(kwLower)) {
-          const [mRes, sRes] = await Promise.allSettled([
-            fetchJson(`${CINEMETA_BASE}/meta/movie/${kwLower}.json`),
-            fetchJson(`${CINEMETA_BASE}/meta/series/${kwLower}.json`),
-          ]);
-          const found: any[] = [];
-          if (mRes.status === 'fulfilled' && mRes.value?.meta?.id) {
-            found.push(normalizeCinemetaItem(mRes.value.meta, 'movie'));
-          }
-          if (sRes.status === 'fulfilled' && sRes.value?.meta?.id) {
-            found.push(normalizeCinemetaItem(sRes.value.meta, 'series'));
-          }
-          if (found.length === 0) {
-            found.push({
-              id: kwLower,
-              source: 'vidsrc',
-              name: `Phim IMDb ${kwLower.toUpperCase()}`,
-              originName: 'Phát trực tiếp qua VidSrc.mov',
-              slug: `movie--${kwLower}`,
-              type: 'movie',
-              posterUrl: `https://images.metahub.space/poster/medium/${kwLower}/img`,
-              thumbUrl: `https://images.metahub.space/background/medium/${kwLower}/img`,
-              year: 0,
-              quality: '1080p',
-              lang: 'Multi-Sub',
-              time: '',
-              episodeCurrent: 'Full HD',
-              episodeTotal: '',
-              chieurap: false,
-              subDocQuyen: false,
-              rating: 0,
-              categories: [],
-              countries: [],
-            });
-          }
-          return new Response(
-            JSON.stringify({
-              source: 'vidsrc',
-              title: `VidSrc IMDb: ${kwLower.toUpperCase()}`,
-              keyword,
-              page: 1,
-              totalPages: 1,
-              totalItems: found.length,
-              items: found,
-            }),
-            { status: 200, headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=300, s-maxage=300' } }
-          );
-        }
-
-        if (/^\d{2,10}$/.test(kwLower)) {
-          const tmdbItems = [
-            {
-              id: kwLower,
-              source: 'vidsrc',
-              name: `Movie TMDB #${kwLower}`,
-              originName: 'VidSrc.mov • Phát trực tiếp bằng TMDB ID',
-              slug: `movie--tmdb-${kwLower}`,
-              type: 'movie',
-              posterUrl: '',
-              thumbUrl: '',
-              year: 0,
-              quality: '1080p',
-              lang: 'Multi-Sub',
-              time: '',
-              episodeCurrent: 'Full HD',
-              episodeTotal: '',
-              chieurap: false,
-              subDocQuyen: false,
-              rating: 0,
-              categories: [],
-              countries: [],
-            },
-            {
-              id: kwLower,
-              source: 'vidsrc',
-              name: `TV Series TMDB #${kwLower}`,
-              originName: 'VidSrc.mov • Phát trực tiếp Series bằng TMDB ID',
-              slug: `series--tmdb-${kwLower}`,
-              type: 'series',
-              posterUrl: '',
-              thumbUrl: '',
-              year: 0,
-              quality: '1080p',
-              lang: 'Multi-Sub',
-              time: '',
-              episodeCurrent: 'Series TV',
-              episodeTotal: '',
-              chieurap: false,
-              subDocQuyen: false,
-              rating: 0,
-              categories: [],
-              countries: [],
-            },
-          ];
-          return new Response(
-            JSON.stringify({
-              source: 'vidsrc',
-              title: `VidSrc TMDB #${kwLower}`,
-              keyword,
-              page: 1,
-              totalPages: 1,
-              totalItems: tmdbItems.length,
-              items: tmdbItems,
-            }),
-            { status: 200, headers: JSON_HEADERS }
-          );
-        }
-
-        // 2) Tìm kiếm song song cả Phim lẻ (movie) và Series TV (series) trên kho IMDb quốc tế
-        const qEnc = encodeURIComponent(keyword);
-        const [movieRes, seriesRes] = await Promise.allSettled([
-          fetchJson(`${CINEMETA_BASE}/catalog/movie/top/search=${qEnc}.json`),
-          fetchJson(`${CINEMETA_BASE}/catalog/series/top/search=${qEnc}.json`),
-        ]);
-
-        const movieList =
-          movieRes.status === 'fulfilled' && Array.isArray(movieRes.value?.metas)
-            ? movieRes.value.metas.map((m: any) => normalizeCinemetaItem(m, 'movie'))
-            : [];
-        const seriesList =
-          seriesRes.status === 'fulfilled' && Array.isArray(seriesRes.value?.metas)
-            ? seriesRes.value.metas.map((m: any) => normalizeCinemetaItem(m, 'series'))
-            : [];
-
-        // Xen kẽ phim lẻ & series để người dùng thấy cả hai ngay đầu kết quả
-        const merged: any[] = [];
-        const seen = new Set<string>();
-        const maxLen = Math.max(movieList.length, seriesList.length);
-        for (let i = 0; i < maxLen; i++) {
-          for (const candidate of [movieList[i], seriesList[i]]) {
-            if (!candidate || !candidate.slug || seen.has(candidate.slug)) continue;
-            seen.add(candidate.slug);
-            merged.push(candidate);
-          }
-        }
-
-        return new Response(
-          JSON.stringify({
-            source: 'vidsrc',
-            title: `Tìm kiếm VidSrc: "${keyword}"`,
-            keyword,
-            page: 1,
-            totalPages: 1,
-            totalItems: merged.length,
-            items: merged.slice(0, Math.max(limit, 36)),
-          }),
-          {
-            status: 200,
-            headers: {
-              ...JSON_HEADERS,
-              'Cache-Control': 'public, max-age=180, s-maxage=180',
-            },
-          }
-        );
-      }
-
       if (source === 'vsmov') {
         const res = await fetchJson(`${VSMOV_API_BASE}/tim-kiem?${params.toString()}`);
         const imgDomain = res?.pathImage || VSMOV_IMAGE_BASE;
@@ -1233,7 +746,16 @@ export const onRequest: PagesFunction = async (context) => {
         }
       );
     } catch (err: any) {
-      const srcLabel = source === 'vsmov' ? 'VSMov' : source === 'vidsrc' ? 'VidSrc' : 'KKPhim';
+      const srcLabel =
+        source === 'vsmov'
+          ? 'VSMov'
+          : source === 'nguonc'
+          ? 'NguonC'
+          : source === 'cobephim'
+          ? 'CoBePhim'
+          : source === 'k20'
+          ? 'K20'
+          : 'KKPhim';
       return new Response(
         JSON.stringify({
           source,
@@ -1300,116 +822,6 @@ export const onRequest: PagesFunction = async (context) => {
       } catch (err: any) {
         return new Response(
           JSON.stringify({ error: err?.message || 'Không tải được chi tiết phim K20' }),
-          { status: 502, headers: JSON_HEADERS }
-        );
-      }
-    }
-
-    if (source === 'vidsrc') {
-      const parsed = parseVidsrcSlug(slug);
-      if (!parsed) {
-        return new Response(JSON.stringify({ error: 'ID phim VidSrc không hợp lệ' }), {
-          status: 400,
-          headers: JSON_HEADERS,
-        });
-      }
-
-      try {
-        let kind: 'movie' | 'series' = parsed.kind;
-        let meta: any = null;
-
-        if (!parsed.isTmdb) {
-          try {
-            const r1 = await fetchJson(`${CINEMETA_BASE}/meta/${kind}/${parsed.id}.json`);
-            if (r1?.meta?.id) meta = r1.meta;
-          } catch {}
-          if (!meta) {
-            const altKind: 'movie' | 'series' = kind === 'movie' ? 'series' : 'movie';
-            try {
-              const r2 = await fetchJson(`${CINEMETA_BASE}/meta/${altKind}/${parsed.id}.json`);
-              if (r2?.meta?.id) {
-                meta = r2.meta;
-                kind = altKind;
-              }
-            } catch {}
-          }
-        }
-
-        const baseItem = meta
-          ? normalizeCinemetaItem(meta, kind)
-          : {
-              id: parsed.id,
-              source: 'vidsrc' as MovieSource,
-              name: parsed.isTmdb
-                ? `${kind === 'series' ? 'TV Series' : 'Movie'} TMDB #${parsed.id}`
-                : `IMDb ${parsed.id.toUpperCase()}`,
-              originName: 'VidSrc.mov • 1080p Multi-Sub',
-              slug,
-              type: kind,
-              posterUrl: !parsed.isTmdb
-                ? `https://images.metahub.space/poster/medium/${parsed.id}/img`
-                : '',
-              thumbUrl: !parsed.isTmdb
-                ? `https://images.metahub.space/background/medium/${parsed.id}/img`
-                : '',
-              year: 0,
-              quality: '1080p',
-              lang: 'Multi-Sub',
-              time: '',
-              episodeCurrent: kind === 'series' ? 'Series TV' : 'Full HD',
-              episodeTotal: '',
-              chieurap: false,
-              subDocQuyen: false,
-              rating: 0,
-              categories: [],
-              countries: [],
-            };
-
-        const servers = buildVidsrcServers(
-          kind,
-          parsed.id,
-          baseItem.name,
-          meta?.videos || [],
-          parsed.isTmdb
-        );
-        const totalEps = servers.reduce((acc, s) => acc + s.episodes.length, 0);
-
-        const detail = {
-          ...baseItem,
-          episodeCurrent:
-            kind === 'series'
-              ? `${servers.length} mùa • ${totalEps} tập`
-              : 'Full 1080p',
-          episodeTotal: kind === 'series' ? `${totalEps} tập` : '1080p',
-          content:
-            decodeEntities(meta?.description) ||
-            'Phát trực tiếp chuẩn 1080p từ VidSrc.mov, hỗ trợ đa ngôn ngữ phụ đề (chọn biểu tượng CC trong trình phát).',
-          status: kind === 'series' ? 'TV Series' : 'Released',
-          trailerUrl: '',
-          notify: '',
-          showtimes: '',
-          view: 0,
-          actors: Array.isArray(meta?.cast)
-            ? meta.cast.map((a: any) => decodeEntities(a)).filter(Boolean)
-            : [],
-          directors: Array.isArray(meta?.director)
-            ? meta.director.map((d: any) => decodeEntities(d)).filter(Boolean)
-            : typeof meta?.director === 'string' && meta.director
-            ? [decodeEntities(meta.director)]
-            : [],
-          servers,
-        };
-
-        return new Response(JSON.stringify(detail), {
-          status: 200,
-          headers: {
-            ...JSON_HEADERS,
-            'Cache-Control': 'public, max-age=600, s-maxage=600',
-          },
-        });
-      } catch (err: any) {
-        return new Response(
-          JSON.stringify({ error: err?.message || 'Không tải được chi tiết phim từ VidSrc' }),
           { status: 502, headers: JSON_HEADERS }
         );
       }
@@ -1724,7 +1136,7 @@ export const onRequest: PagesFunction = async (context) => {
   }
 
   // =========================================================================
-  // 8. ACTION = RESOLVE-K20 (Tách luồng Direct HLS/MP4 sạch từ sc.k-20.xyz cho K20 & VidSrc/IMDb!)
+  // 8. ACTION = RESOLVE-K20 (Tách luồng Direct HLS/MP4 sạch từ sc.k-20.xyz cho nguồn K20)
   // =========================================================================
   if (action === 'resolve-k20') {
     const mediaType = (reqUrl.searchParams.get('type') || 'movie').trim().toLowerCase();

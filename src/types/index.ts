@@ -233,7 +233,7 @@ export interface NewsTtsProviderInfo {
   voices: NewsTtsVoiceOption[];
 }
 
-export type MovieSource = 'kkphim' | 'vsmov' | 'nguonc' | 'cobephim' | 'k20' | 'vidsrc';
+export type MovieSource = 'kkphim' | 'vsmov' | 'nguonc' | 'cobephim' | 'k20';
 
 export type MovieListType =
   | 'moi-cap-nhat'
@@ -251,8 +251,6 @@ export type MovieListType =
   | 'phim-4k'
   | 'phim-xua'
   | 'the-thao'
-  | 'top-imdb'
-  | 'series-imdb'
   | 'hoat-hinh'
   | 'tv-shows'
   | 'phim-vietsub';

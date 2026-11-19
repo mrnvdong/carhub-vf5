@@ -64,21 +64,11 @@ export const K20_TABS: MovieTabOption[] = [
   { id: 'phim-bo', label: 'Phim bộ K20', icon: '📺' },
 ];
 
-export const VIDSRC_TABS: MovieTabOption[] = [
-  { id: 'moi-cap-nhat', label: 'Thịnh hành', icon: '🔥' },
-  { id: 'phim-le', label: 'Phim lẻ Top', icon: '🎬' },
-  { id: 'phim-bo', label: 'Series TV', icon: '📺' },
-  { id: 'top-imdb', label: 'Top IMDb', icon: '⭐' },
-  { id: 'series-imdb', label: 'Series IMDb', icon: '🏆' },
-  { id: 'hoat-hinh', label: 'Hoạt hình', icon: '🎨' },
-];
-
 export function getMovieTabsForSource(source: MovieSource): MovieTabOption[] {
   if (source === 'vsmov') return VSMOV_TABS;
   if (source === 'nguonc') return NGUONC_TABS;
   if (source === 'cobephim') return COBEPHIM_TABS;
   if (source === 'k20') return K20_TABS;
-  if (source === 'vidsrc') return VIDSRC_TABS;
   return KKPHIM_TABS;
 }
 
@@ -222,7 +212,7 @@ export function isCobephimEpRef(url?: string | null): boolean {
 }
 
 export function isK20StreamRef(url?: string | null): boolean {
-  return Boolean(url && (url.startsWith('k20-ep://') || url.startsWith('k20-imdb://')));
+  return Boolean(url && url.startsWith('k20-ep://'));
 }
 
 export function isDirectMp4Url(url?: string | null): boolean {
@@ -279,7 +269,7 @@ export async function resolveK20Stream(refUrl: string): Promise<K20ResolvedRespo
   if (cached && Date.now() - cached.ts < 3 * 60_000) {
     return cached.data;
   }
-  const clean = refUrl.replace(/^k20-(?:ep|imdb):\/\//, '');
+  const clean = refUrl.replace(/^k20-ep:\/\//, '');
   const slashIdx = clean.indexOf('/');
   const mediaType = slashIdx > 0 ? clean.slice(0, slashIdx) : 'movie';
   const id = slashIdx > 0 ? clean.slice(slashIdx + 1) : clean;
