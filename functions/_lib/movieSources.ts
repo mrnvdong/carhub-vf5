@@ -364,9 +364,7 @@ export async function handleNguoncDetail(slug: string) {
         ? srv.items
             .map((ep: any) => {
               const embed = typeof ep?.embed === 'string' ? ep.embed.trim() : '';
-              const directM3u8 =
-                (typeof ep?.m3u8 === 'string' && ep.m3u8.trim()) ||
-                (embed ? streamcEmbedToHls(embed) : '');
+              const directM3u8 = typeof ep?.m3u8 === 'string' ? ep.m3u8.trim() : '';
               return {
                 name: normalizeEpisodeLabel(ep?.name),
                 slug: String(ep?.slug || '').trim() || slugifyVn(String(ep?.name || 'full')),
@@ -685,10 +683,6 @@ function classifyCobephimLink(rawType: string, rawLink: string): {
   if (type === 'm3u8' || /\.m3u8(\?|$)/i.test(link)) {
     return { linkM3u8: link, linkEmbed: '', isEncrypted4k: false };
   }
-  const ncHls = streamcEmbedToHls(link);
-  if (ncHls) {
-    return { linkM3u8: ncHls, linkEmbed: link, isEncrypted4k: false };
-  }
   return { linkM3u8: '', linkEmbed: link, isEncrypted4k: false };
 }
 
@@ -922,11 +916,11 @@ export async function handleK20List(opts: { type: string; page: number; limit: n
     fallbackType = 'tv';
     badgeQuality = 'LIVE';
   } else if (type === 'phim-le') {
-    url = `${K20_BASE}/catalog/movie/nguonc-movie${skipSeg}.json`;
+    url = `${K20_BASE}/catalog/movie/kkphim-movie${skipSeg}.json`;
     fallbackType = 'movie';
     badgeQuality = 'HD';
   } else if (type === 'phim-bo') {
-    url = `${K20_BASE}/catalog/series/nguonc-series${skipSeg}.json`;
+    url = `${K20_BASE}/catalog/series/kkphim-series${skipSeg}.json`;
     fallbackType = 'series';
     badgeQuality = 'HD';
   }
@@ -951,18 +945,18 @@ export async function handleK20List(opts: { type: string; page: number; limit: n
 
 export async function handleK20Search(keyword: string) {
   const q = encodeURIComponent(keyword);
-  const [r4k, rClb, rNcM, rNcS] = await Promise.allSettled([
+  const [r4k, rClb, rKkM, rKkS] = await Promise.allSettled([
     fetchJson(`${K20_BASE}/catalog/movie/vsmov-4k/search=${q}.json`, 10000),
     fetchJson(`${K20_BASE}/catalog/movie/clbpx-movie/search=${q}.json`, 10000),
-    fetchJson(`${K20_BASE}/catalog/movie/nguonc-movie/search=${q}.json`, 10000),
-    fetchJson(`${K20_BASE}/catalog/series/nguonc-series/search=${q}.json`, 10000),
+    fetchJson(`${K20_BASE}/catalog/movie/kkphim-movie/search=${q}.json`, 10000),
+    fetchJson(`${K20_BASE}/catalog/series/kkphim-series/search=${q}.json`, 10000),
   ]);
 
   const buckets = [
     { res: r4k, type: 'movie', q: '4K' },
     { res: rClb, type: 'movie', q: '720p' },
-    { res: rNcM, type: 'movie', q: 'HD' },
-    { res: rNcS, type: 'series', q: 'HD' },
+    { res: rKkM, type: 'movie', q: 'HD' },
+    { res: rKkS, type: 'series', q: 'HD' },
   ];
 
   const seen = new Set<string>();
@@ -994,6 +988,8 @@ function normalizeK20StreamList(rawStreams: any[]) {
     .map((s: any) => {
       const url = typeof s?.url === 'string' ? s.url.trim() : '';
       if (!url || !/^https?:\/\//i.test(url)) return null;
+      // Bỏ qua nguonc-hls.m3u8 vì proxy-segment.ts của K20 đang bị CDN NguonC trả 403
+      if (url.includes('/nguonc-hls.m3u8')) return null;
       const firstLine = decodeEntities(String(s?.title || '').split('\n')[0]);
       const srcName = decodeEntities(s?.name || '');
       const label = firstLine || srcName || 'K20 Stream';

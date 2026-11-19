@@ -768,7 +768,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
                 title={`${movieTitle} - ${episode.name}`}
                 allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
                 allowFullScreen
-                referrerPolicy="no-referrer"
+                referrerPolicy="origin"
                 sandbox={
                   embedPopupShield
                     ? 'allow-scripts allow-same-origin allow-presentation allow-forms'
