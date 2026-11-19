@@ -512,16 +512,7 @@ export const NewsAudioView: React.FC<NewsAudioViewProps> = ({
                       })}
                     </div>
                   ) : (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`text-xs font-bold px-2.5 py-1 rounded-lg border ${
-                          isLightTheme
-                            ? 'bg-slate-200/80 border-slate-300 text-slate-700'
-                            : 'bg-white/10 border-white/15 text-white/75'
-                        }`}
-                      >
-                        Bài mới chưa có file .m4a từ Báo Mới
-                      </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
                         onClick={news.toggleBrowserTts}
@@ -545,9 +536,45 @@ export const NewsAudioView: React.FC<NewsAudioViewProps> = ({
                               }`
                             : news.isTtsMode && news.ttsTotalChunks > 0
                             ? `Nghe tiếp (${news.ttsChunkIndex + 1}/${news.ttsTotalChunks})`
+                            : news.ttsProviderInfo?.isNeural
+                            ? `Đọc ${news.ttsProviderInfo.providerLabel}`
                             : 'Đọc giọng máy (AI Việt)'}
                         </span>
                       </button>
+
+                      {/* Nút chọn giọng Neural (Azure Hoài My / Nam Minh hoặc FPT.AI Ban Mai / Lê Minh / Lan Nhi / Minh Quang) */}
+                      {news.ttsProviderInfo && news.ttsProviderInfo.voices.length > 1 ? (
+                        news.ttsProviderInfo.voices.map((v) => {
+                          const selected =
+                            (news.ttsVoiceId || news.ttsProviderInfo?.defaultVoice) === v.id;
+                          return (
+                            <button
+                              key={v.id}
+                              type="button"
+                              onClick={() => news.selectTtsVoice(v.id)}
+                              className={`min-h-[2.1rem] px-2.5 rounded-full text-xs font-extrabold border active:scale-95 transition ${
+                                selected
+                                  ? isLightTheme
+                                    ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm'
+                                    : 'bg-emerald-500 border-emerald-400 text-slate-950 shadow-sm'
+                                  : theme.chipIdle
+                              }`}
+                            >
+                              {v.label}
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <span
+                          className={`text-[0.7rem] font-bold px-2.5 py-1 rounded-full border ${
+                            isLightTheme
+                              ? 'bg-slate-100 border-slate-300 text-slate-600'
+                              : 'bg-white/10 border-white/15 text-white/70'
+                          }`}
+                        >
+                          {news.ttsProviderInfo?.providerLabel || 'TTS Dự phòng'}
+                        </span>
+                      )}
                     </div>
                   )}
 
@@ -624,7 +651,7 @@ export const NewsAudioView: React.FC<NewsAudioViewProps> = ({
                         </span>
                         <span>
                           {news.isTtsMode
-                            ? 'AI TTS Việt'
+                            ? news.ttsProviderInfo?.providerLabel || 'AI TTS Việt'
                             : safeDuration > 0
                             ? `-${formatSeconds(remainingTime)}`
                             : '--:--'}

@@ -218,6 +218,21 @@ export interface NewsFeedResponse {
   error?: string;
 }
 
+export interface NewsTtsVoiceOption {
+  id: string;
+  label: string;
+  provider: 'azure' | 'fpt' | 'vieneu' | 'google';
+}
+
+export interface NewsTtsProviderInfo {
+  provider: 'azure' | 'fpt' | 'vieneu' | 'google';
+  providerLabel: string;
+  isNeural: boolean;
+  maxChunkLen: number;
+  defaultVoice: string;
+  voices: NewsTtsVoiceOption[];
+}
+
 export type MovieListType =
   | 'moi-cap-nhat'
   | 'phim-thuyet-minh'

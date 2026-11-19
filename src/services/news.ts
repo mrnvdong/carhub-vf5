@@ -3,6 +3,7 @@ import {
   NewsCategory,
   NewsCategoryId,
   NewsFeedResponse,
+  NewsTtsProviderInfo,
 } from '../types';
 
 export const NEWS_CATEGORIES: NewsCategory[] = [
@@ -91,8 +92,38 @@ export function buildNewsAudioProxyUrl(streamingUrl: string): string {
   return `/api/news?action=audio-proxy&url=${encodeURIComponent(streamingUrl)}`;
 }
 
-export function buildNewsTtsUrl(text: string): string {
-  return `/api/news?action=tts&q=${encodeURIComponent(text.trim().slice(0, 195))}`;
+let ttsInfoCache: NewsTtsProviderInfo | null = null;
+
+export async function fetchNewsTtsInfo(): Promise<NewsTtsProviderInfo> {
+  if (ttsInfoCache) return ttsInfoCache;
+  try {
+    const res = await fetch('/api/news?action=tts-info');
+    if (res.ok) {
+      const data = (await res.json()) as NewsTtsProviderInfo;
+      if (data?.provider && Array.isArray(data.voices)) {
+        ttsInfoCache = data;
+        return data;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return {
+    provider: 'google',
+    providerLabel: 'Google TTS (Dự phòng)',
+    isNeural: false,
+    maxChunkLen: 175,
+    defaultVoice: 'vi',
+    voices: [{ id: 'vi', label: 'Giọng mặc định', provider: 'google' }],
+  };
+}
+
+export function buildNewsTtsUrl(text: string, voiceId?: string): string {
+  const params = new URLSearchParams();
+  params.set('action', 'tts');
+  params.set('q', text.trim().slice(0, 480));
+  if (voiceId) params.set('voice', voiceId);
+  return `/api/news?${params.toString()}`;
 }
 
 export function splitVietnameseTtsChunks(rawText: string, maxLen = 175): string[] {

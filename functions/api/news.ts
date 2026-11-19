@@ -200,8 +200,286 @@ function isAllowedAudioHost(rawUrl: string): boolean {
   }
 }
 
-export const onRequest: PagesFunction = async (context) => {
-  const { request } = context;
+interface NewsEnv {
+  AZURE_SPEECH_KEY?: string;
+  AZURE_SPEECH_REGION?: string;
+  FPT_TTS_API_KEY?: string;
+  VIENEU_API_URL?: string;
+  VIENEU_API_KEY?: string;
+}
+
+interface TtsVoiceOption {
+  id: string;
+  label: string;
+  provider: 'azure' | 'fpt' | 'vieneu' | 'google';
+}
+
+const AZURE_VOICES: TtsVoiceOption[] = [
+  { id: 'vi-VN-HoaiMyNeural', label: 'Hoài My (Nữ)', provider: 'azure' },
+  { id: 'vi-VN-NamMinhNeural', label: 'Nam Minh (Nam)', provider: 'azure' },
+];
+
+const FPT_VOICES: TtsVoiceOption[] = [
+  { id: 'banmai', label: 'Ban Mai (Nữ Bắc)', provider: 'fpt' },
+  { id: 'leminh', label: 'Lê Minh (Nam Bắc)', provider: 'fpt' },
+  { id: 'lannhi', label: 'Lan Nhi (Nữ Nam)', provider: 'fpt' },
+  { id: 'minhquang', label: 'Minh Quang (Nam Nam)', provider: 'fpt' },
+];
+
+const VIENEU_VOICES: TtsVoiceOption[] = [
+  { id: 'Hải Đăng', label: 'Hải Đăng (Nam Bắc)', provider: 'vieneu' },
+  { id: 'Mai Anh', label: 'Mai Anh (Nữ Bắc)', provider: 'vieneu' },
+  { id: 'Thùy Dung', label: 'Thùy Dung (Nữ Nam)', provider: 'vieneu' },
+  { id: 'Quang Sơn', label: 'Quang Sơn (Nam Trung)', provider: 'vieneu' },
+];
+
+function buildTtsProviderInfo(env: NewsEnv) {
+  const hasAzure = Boolean(env?.AZURE_SPEECH_KEY?.trim());
+  const hasFpt = Boolean(env?.FPT_TTS_API_KEY?.trim());
+  const hasVieNeu = Boolean(env?.VIENEU_API_URL?.trim());
+
+  const voices: TtsVoiceOption[] = [];
+  if (hasAzure) voices.push(...AZURE_VOICES);
+  if (hasFpt) voices.push(...FPT_VOICES);
+  if (hasVieNeu) voices.push(...VIENEU_VOICES);
+
+  if (voices.length > 0) {
+    const primary = hasAzure ? 'azure' : hasFpt ? 'fpt' : 'vieneu';
+    const providerLabel =
+      hasAzure && hasFpt
+        ? 'Azure Neural + FPT.AI'
+        : hasAzure
+        ? 'Azure Neural AI'
+        : hasFpt
+        ? 'FPT.AI Neural'
+        : 'VieNeu-TTS 48kHz';
+
+    return {
+      provider: primary,
+      providerLabel,
+      isNeural: true,
+      maxChunkLen: 420,
+      defaultVoice: voices[0].id,
+      voices,
+    };
+  }
+
+  return {
+    provider: 'google' as const,
+    providerLabel: 'Google TTS (Dự phòng)',
+    isNeural: false,
+    maxChunkLen: 175,
+    defaultVoice: 'vi',
+    voices: [{ id: 'vi', label: 'Giọng mặc định', provider: 'google' as const }],
+  };
+}
+
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+async function synthesizeAzureNeural(
+  text: string,
+  voiceName: string,
+  apiKey: string,
+  region: string
+): Promise<{ bytes: Uint8Array; contentType: string } | null> {
+  const safeRegion = (region || 'southeastasia').trim().toLowerCase().replace(/[^a-z0-9-]/g, '') || 'southeastasia';
+  const safeVoice = AZURE_VOICES.some((v) => v.id === voiceName) ? voiceName : 'vi-VN-HoaiMyNeural';
+  const ssml = `<speak version="1.0" xml:lang="vi-VN"><voice xml:lang="vi-VN" name="${safeVoice}">${escapeXml(text)}</voice></speak>`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 9000);
+  try {
+    const res = await fetch(`https://${safeRegion}.tts.speech.microsoft.com/cognitiveservices/v1`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Ocp-Apim-Subscription-Key': apiKey.trim(),
+        'Content-Type': 'application/ssml+xml',
+        'X-Microsoft-OutputFormat': 'audio-24khz-96kbitrate-mono-mp3',
+        'User-Agent': 'CarHubVF5',
+      },
+      body: ssml,
+    });
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return bytes.byteLength > 256 ? { bytes, contentType: 'audio/mpeg' } : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function synthesizeFptAi(
+  text: string,
+  voiceName: string,
+  apiKey: string
+): Promise<{ bytes: Uint8Array; contentType: string } | null> {
+  const safeVoice = FPT_VOICES.some((v) => v.id === voiceName) ? voiceName : 'banmai';
+  const bodyText = text.length < 4 ? `${text}.` : text;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 11000);
+  try {
+    const res = await fetch('https://api.fpt.ai/hmi/tts/v5', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'api-key': apiKey.trim(),
+        voice: safeVoice,
+        speed: '',
+        'Content-Type': 'text/plain; charset=utf-8',
+      },
+      body: bodyText,
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { async?: string; error?: number };
+    const asyncUrl = typeof data?.async === 'string' ? data.async.trim() : '';
+    if (!asyncUrl || !asyncUrl.startsWith('https://')) return null;
+
+    // FPT.AI sinh file bất đồng bộ sau ~300–900ms -> dò tối đa 12 lần (mỗi lần 350ms)
+    for (let attempt = 0; attempt < 12; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 350));
+      }
+      const mp3Res = await fetch(asyncUrl, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal,
+      });
+      if (mp3Res.ok) {
+        const bytes = new Uint8Array(await mp3Res.arrayBuffer());
+        if (bytes.byteLength > 256) {
+          return { bytes, contentType: 'audio/mpeg' };
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function synthesizeVieNeu(
+  text: string,
+  voiceName: string,
+  baseUrl: string,
+  apiKey?: string
+): Promise<{ bytes: Uint8Array; contentType: string } | null> {
+  const endpoint = `${baseUrl.trim().replace(/\/+$/, '')}/v1/audio/speech`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (apiKey?.trim()) {
+    headers.Authorization = `Bearer ${apiKey.trim()}`;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      signal: controller.signal,
+      headers,
+      body: JSON.stringify({
+        model: 'vieneu-v3-turbo',
+        voice: voiceName || 'Hải Đăng',
+        input: text,
+        response_format: 'wav',
+      }),
+    });
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const ct = res.headers.get('Content-Type') || 'audio/wav';
+    return bytes.byteLength > 256 ? { bytes, contentType: ct } : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function synthesizeGoogleChunk(chunk: string): Promise<Uint8Array | null> {
+  const encoded = encodeURIComponent(chunk.slice(0, 195));
+  const candidates = [
+    `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=vi&q=${encoded}`,
+    `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q=${encoded}`,
+  ];
+  for (const u of candidates) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 7000);
+      try {
+        const upstream = await fetch(u, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            'User-Agent': MOBILE_UA,
+            Referer: 'https://translate.google.com/',
+          },
+        });
+        if (upstream.ok) {
+          const buf = new Uint8Array(await upstream.arrayBuffer());
+          if (buf.byteLength > 256) return buf;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      // Thử nguồn kế tiếp
+    }
+  }
+  return null;
+}
+
+async function synthesizeGoogleFallback(text: string): Promise<{ bytes: Uint8Array; contentType: string } | null> {
+  // Nếu đoạn dài > 190 ký tự (do client gửi chunk 420 ký tự cho Neural nhưng fallback về Google) -> tự cắt nhỏ & ghép khung MP3!
+  const subChunks: string[] = [];
+  let rest = text.trim();
+  while (rest.length > 185) {
+    const slice = rest.slice(0, 185);
+    let cut = slice.lastIndexOf('. ');
+    if (cut < 60) cut = slice.lastIndexOf(', ');
+    if (cut < 60) cut = slice.lastIndexOf(' ');
+    if (cut < 60) cut = 185;
+    subChunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) subChunks.push(rest);
+
+  const parts: Uint8Array[] = [];
+  let totalLen = 0;
+  for (const part of subChunks.slice(0, 4)) {
+    const b = await synthesizeGoogleChunk(part);
+    if (b) {
+      parts.push(b);
+      totalLen += b.byteLength;
+    }
+  }
+  if (totalLen === 0) return null;
+  if (parts.length === 1) return { bytes: parts[0], contentType: 'audio/mpeg' };
+
+  const merged = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const p of parts) {
+    merged.set(p, offset);
+    offset += p.byteLength;
+  }
+  return { bytes: merged, contentType: 'audio/mpeg' };
+}
+
+export const onRequest: PagesFunction<NewsEnv> = async (context) => {
+  const { request, env } = context;
 
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
@@ -485,7 +763,21 @@ export const onRequest: PagesFunction = async (context) => {
   }
 
   // =========================================================================
-  // 4. ACTION = TTS (Chuyển câu tiếng Việt -> MP3 64kbps thực, hỗ trợ HTTP Range chuẩn iOS CarPlay!)
+  // 4. ACTION = TTS-INFO (Cho Frontend biết engine Neural nào đang kích hoạt: Azure / FPT.AI / VieNeu / Dự phòng)
+  // =========================================================================
+  if (action === 'tts-info') {
+    return new Response(JSON.stringify(buildTtsProviderInfo(env || {})), {
+      status: 200,
+      headers: {
+        ...JSON_HEADERS,
+        'Cache-Control': 'public, max-age=60',
+      },
+    });
+  }
+
+  // =========================================================================
+  // 5. ACTION = TTS (Azure Neural 96kbps / FPT.AI Neural / VieNeu-TTS / Google Dự phòng
+  //    + Cloudflare Edge Cache 24h TRƯỚC khi cắt HTTP 206 Range để iOS không bị trừ 2 lần ký tự!)
   // =========================================================================
   if (action === 'tts') {
     const rawText = (reqUrl.searchParams.get('q') || '').trim().replace(/\s+/g, ' ');
@@ -495,80 +787,142 @@ export const onRequest: PagesFunction = async (context) => {
         headers: JSON_HEADERS,
       });
     }
-    const text = rawText.slice(0, 200);
-    const encoded = encodeURIComponent(text);
+    const text = rawText.slice(0, 500);
+    const requestedVoice = (reqUrl.searchParams.get('voice') || '').trim();
+    const info = buildTtsProviderInfo(env || {});
+    const chosenVoiceObj =
+      info.voices.find((v) => v.id === requestedVoice) || info.voices[0];
+    const effectiveVoiceId = chosenVoiceObj?.id || info.defaultVoice;
+    const effectiveProvider = chosenVoiceObj?.provider || info.provider;
 
-    const ttsCandidates = [
-      `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=vi&q=${encoded}`,
-      `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q=${encoded}`,
-    ];
+    // Khóa cache chuẩn hóa (không chứa Range) -> iOS gửi bytes=0-1 rồi bytes=0-full chỉ gọi Azure/FPT đúng 1 LẦN duy nhất!
+    const cacheKeyUrl = `https://tts-cache.carhub.internal/v3?p=${encodeURIComponent(
+      effectiveProvider
+    )}&v=${encodeURIComponent(effectiveVoiceId)}&q=${encodeURIComponent(text)}`;
+    const cacheKey = new Request(cacheKeyUrl, { method: 'GET' });
+    const edgeCache = (caches as unknown as { default?: Cache })?.default;
 
-    let mp3Bytes: Uint8Array | null = null;
-    for (const candidateUrl of ttsCandidates) {
+    let audioBytes: Uint8Array | null = null;
+    let contentType = 'audio/mpeg';
+    let actualProvider: string = effectiveProvider;
+    let cacheStatus = 'MISS';
+
+    if (edgeCache) {
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8000);
-        try {
-          const upstream = await fetch(candidateUrl, {
-            method: 'GET',
-            redirect: 'follow',
-            signal: controller.signal,
-            headers: {
-              'User-Agent': MOBILE_UA,
-              Referer: 'https://translate.google.com/',
-            },
-          });
-          if (upstream.ok) {
-            const buf = new Uint8Array(await upstream.arrayBuffer());
-            if (buf.byteLength > 256) {
-              mp3Bytes = buf;
-              break;
-            }
-          }
-        } finally {
-          clearTimeout(timer);
+        const cached = await edgeCache.match(cacheKey);
+        if (cached && cached.ok) {
+          audioBytes = new Uint8Array(await cached.arrayBuffer());
+          contentType = cached.headers.get('Content-Type') || 'audio/mpeg';
+          actualProvider = cached.headers.get('X-TTS-Provider') || effectiveProvider;
+          cacheStatus = 'HIT';
         }
       } catch {
-        // Thử upstream dự phòng tiếp theo
+        // Bỏ qua lỗi cache cục bộ
       }
     }
 
-    if (!mp3Bytes) {
-      return new Response(
-        JSON.stringify({ error: 'Không tạo được âm thanh giọng đọc tiếng Việt' }),
-        { status: 502, headers: JSON_HEADERS }
-      );
+    if (!audioBytes) {
+      let synth: { bytes: Uint8Array; contentType: string } | null = null;
+
+      if (effectiveProvider === 'azure' && env?.AZURE_SPEECH_KEY) {
+        synth = await synthesizeAzureNeural(
+          text,
+          effectiveVoiceId,
+          env.AZURE_SPEECH_KEY,
+          env.AZURE_SPEECH_REGION || 'southeastasia'
+        );
+        if (synth) actualProvider = 'azure';
+      } else if (effectiveProvider === 'fpt' && env?.FPT_TTS_API_KEY) {
+        synth = await synthesizeFptAi(text, effectiveVoiceId, env.FPT_TTS_API_KEY);
+        if (synth) actualProvider = 'fpt';
+      } else if (effectiveProvider === 'vieneu' && env?.VIENEU_API_URL) {
+        synth = await synthesizeVieNeu(
+          text,
+          effectiveVoiceId,
+          env.VIENEU_API_URL,
+          env.VIENEU_API_KEY
+        );
+        if (synth) actualProvider = 'vieneu';
+      }
+
+      // Nếu nhà cung cấp chính lỗi/hết quota mà có nhà cung cấp Neural thứ 2 -> tự động dự phòng chéo!
+      if (!synth && effectiveProvider !== 'azure' && env?.AZURE_SPEECH_KEY) {
+        synth = await synthesizeAzureNeural(
+          text,
+          'vi-VN-HoaiMyNeural',
+          env.AZURE_SPEECH_KEY,
+          env.AZURE_SPEECH_REGION || 'southeastasia'
+        );
+        if (synth) actualProvider = 'azure';
+      }
+      if (!synth && effectiveProvider !== 'fpt' && env?.FPT_TTS_API_KEY) {
+        synth = await synthesizeFptAi(text, 'banmai', env.FPT_TTS_API_KEY);
+        if (synth) actualProvider = 'fpt';
+      }
+
+      // Dự phòng cuối cùng: Google TTS MP3 miễn phí (không bao giờ tịt tiếng!)
+      if (!synth) {
+        synth = await synthesizeGoogleFallback(text);
+        actualProvider = 'google';
+      }
+
+      if (!synth) {
+        return new Response(
+          JSON.stringify({ error: 'Không tạo được âm thanh giọng đọc tiếng Việt' }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
+
+      audioBytes = synth.bytes;
+      contentType = synth.contentType;
+
+      if (edgeCache) {
+        const respToCache = new Response(audioBytes, {
+          status: 200,
+          headers: {
+            'Content-Type': contentType,
+            'Content-Length': String(audioBytes.byteLength),
+            'X-TTS-Provider': actualProvider,
+            'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+          },
+        });
+        context.waitUntil(edgeCache.put(cacheKey, respToCache).catch(() => {}));
+      }
     }
 
-    const total = mp3Bytes.byteLength;
+    const total = audioBytes.byteLength;
     const rangeHeader = request.headers.get('Range');
     if (rangeHeader) {
       const m = rangeHeader.match(/bytes=(\d+)-(\d*)/i);
       if (m) {
         const start = Math.min(parseInt(m[1], 10), Math.max(0, total - 1));
         const end = m[2] ? Math.min(parseInt(m[2], 10), total - 1) : total - 1;
-        const slice = mp3Bytes.subarray(start, end + 1);
+        const slice = audioBytes.subarray(start, end + 1);
         return new Response(slice, {
           status: 206,
           headers: {
-            'Content-Type': 'audio/mpeg',
+            'Content-Type': contentType,
             'Content-Length': String(slice.byteLength),
             'Content-Range': `bytes ${start}-${end}/${total}`,
             'Accept-Ranges': 'bytes',
             'Access-Control-Allow-Origin': '*',
+            'X-TTS-Provider': actualProvider,
+            'X-TTS-Cache': cacheStatus,
             'Cache-Control': 'public, max-age=86400, s-maxage=86400',
           },
         });
       }
     }
 
-    return new Response(mp3Bytes, {
+    return new Response(audioBytes, {
       status: 200,
       headers: {
-        'Content-Type': 'audio/mpeg',
+        'Content-Type': contentType,
         'Content-Length': String(total),
         'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': '*',
+        'X-TTS-Provider': actualProvider,
+        'X-TTS-Cache': cacheStatus,
         'Cache-Control': 'public, max-age=86400, s-maxage=86400',
       },
     });

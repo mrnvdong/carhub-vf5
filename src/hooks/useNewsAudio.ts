@@ -3,6 +3,7 @@ import {
   NewsArticleDetail,
   NewsCategoryId,
   NewsItem,
+  NewsTtsProviderInfo,
   NewsVoice,
 } from '../types';
 import {
@@ -10,6 +11,7 @@ import {
   buildNewsTtsUrl,
   fetchNewsArticle,
   fetchNewsFeed,
+  fetchNewsTtsInfo,
   getVoiceShortName,
   splitVietnameseTtsChunks,
 } from '../services/news';
@@ -48,6 +50,9 @@ export interface NewsAudioController {
   isTtsSpeaking: boolean;
   ttsChunkIndex: number;
   ttsTotalChunks: number;
+  ttsProviderInfo: NewsTtsProviderInfo | null;
+  ttsVoiceId: string;
+  selectTtsVoice: (voiceId: string) => void;
   audioError: string | null;
   currentTime: number;
   duration: number;
@@ -158,7 +163,38 @@ export function useNewsAudio(
   const [isSpeechFallbackSpeaking, setIsSpeechFallbackSpeaking] = useState<boolean>(false);
   const [ttsChunkIndex, setTtsChunkIndex] = useState<number>(0);
   const [ttsTotalChunks, setTtsTotalChunks] = useState<number>(0);
+  const [ttsProviderInfo, setTtsProviderInfo] = useState<NewsTtsProviderInfo | null>(null);
+  const ttsProviderInfoRef = useRef<NewsTtsProviderInfo | null>(null);
+  ttsProviderInfoRef.current = ttsProviderInfo;
+
+  const [ttsVoiceId, setTtsVoiceId] = useState<string>(() => {
+    try {
+      return localStorage.getItem('carhub_news_tts_voice') || '';
+    } catch {
+      return '';
+    }
+  });
+  const ttsVoiceIdRef = useRef<string>(ttsVoiceId);
+  ttsVoiceIdRef.current = ttsVoiceId;
+
   const [audioError, setAudioError] = useState<string | null>(null);
+
+  // Nạp thông tin động cơ TTS (Azure Neural / FPT.AI / VieNeu / Google Dự phòng) 1 lần khi mở Báo Audio
+  useEffect(() => {
+    if (!hasActivated) return;
+    let cancelled = false;
+    fetchNewsTtsInfo().then((info) => {
+      if (cancelled) return;
+      setTtsProviderInfo(info);
+      setTtsVoiceId((prev) => {
+        if (prev && info.voices.some((v) => v.id === prev)) return prev;
+        return info.defaultVoice;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasActivated]);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
 
@@ -245,7 +281,9 @@ export function useNewsAudio(
       setAudioError(null);
       setIsBuffering(true);
 
-      const url = buildNewsTtsUrl(chunks[chunkIdx]);
+      const activeTtsVoice =
+        ttsVoiceIdRef.current || ttsProviderInfoRef.current?.defaultVoice || '';
+      const url = buildNewsTtsUrl(chunks[chunkIdx], activeTtsVoice);
       onBeforePlayRef.current?.();
 
       audio.src = url;
@@ -260,10 +298,29 @@ export function useNewsAudio(
 
       // Nạp trước đoạn tiếp theo vào cache trình duyệt & Cloudflare Edge để nối câu không bị khựng!
       if (chunkIdx + 1 < chunks.length) {
-        fetch(buildNewsTtsUrl(chunks[chunkIdx + 1])).catch(() => {});
+        fetch(buildNewsTtsUrl(chunks[chunkIdx + 1], activeTtsVoice)).catch(() => {});
       }
     },
     [stopSpeechFallbackOnly]
+  );
+
+  const selectTtsVoice = useCallback(
+    (voiceId: string) => {
+      setTtsVoiceId(voiceId);
+      ttsVoiceIdRef.current = voiceId;
+      try {
+        localStorage.setItem('carhub_news_tts_voice', voiceId);
+      } catch {
+        // ignore
+      }
+      const label =
+        ttsProviderInfoRef.current?.voices.find((v) => v.id === voiceId)?.label || voiceId;
+      onNotifyToastRef.current?.(`🎙️ Giọng đọc AI: ${label}`);
+      if (isTtsModeRef.current && ttsChunksRef.current.length > 0) {
+        playServerTtsChunk(ttsChunkIdxRef.current);
+      }
+    },
+    [playServerTtsChunk]
   );
 
   // Dự phòng cuối cùng bằng Web Speech API (chia nhỏ câu <=175 ký tự + delay 80ms sau cancel để không bị Chrome/Safari nuốt!)
@@ -705,6 +762,20 @@ export function useNewsAudio(
 
   const cycleVoice = useCallback(() => {
     const voices = activeArticleRef.current?.voices;
+    // Nếu bài hiện tại dùng Neural TTS (Azure / FPT.AI / VieNeu) -> xoay vòng giọng Neural ngay!
+    if (
+      (!voices || voices.length === 0) &&
+      ttsProviderInfoRef.current &&
+      ttsProviderInfoRef.current.voices.length > 1
+    ) {
+      const ttsVoices = ttsProviderInfoRef.current.voices;
+      const curId = ttsVoiceIdRef.current || ttsProviderInfoRef.current.defaultVoice;
+      const idx = ttsVoices.findIndex((v) => v.id === curId);
+      const next = ttsVoices[(idx + 1) % ttsVoices.length];
+      selectTtsVoice(next.id);
+      return;
+    }
+
     if (!voices || voices.length <= 1) {
       // Nếu chưa mở bài nào hoặc chỉ có 1 giọng -> vẫn cho xoay vòng preferredVoiceId [2, 1, 6, 7]
       const defaults = [2, 1, 6, 7];
@@ -724,7 +795,7 @@ export function useNewsAudio(
     const curIdx = cur ? voices.findIndex((v) => v.id === cur.id) : 0;
     const nextVoice = voices[(curIdx + 1) % voices.length];
     selectVoice(nextVoice.id);
-  }, [pickVoiceFromList, selectVoice]);
+  }, [pickVoiceFromList, selectVoice, selectTtsVoice]);
 
   const cyclePlaybackRate = useCallback(() => {
     setPlaybackRate((prev) => {
@@ -791,7 +862,8 @@ export function useNewsAudio(
     const rawText =
       detail?.plainText ||
       [activeItemRef.current?.title, activeItemRef.current?.description].filter(Boolean).join('. ');
-    const chunks = splitVietnameseTtsChunks(rawText);
+    const maxLen = ttsProviderInfoRef.current?.maxChunkLen || 175;
+    const chunks = splitVietnameseTtsChunks(rawText, maxLen);
     if (!chunks.length) {
       onNotifyToastRef.current?.('Bài báo này không có nội dung văn bản để đọc');
       return;
@@ -801,7 +873,8 @@ export function useNewsAudio(
     ttsChunkIdxRef.current = 0;
     setTtsTotalChunks(chunks.length);
     setTtsChunkIndex(0);
-    onNotifyToastRef.current?.(`🔊 Đang phát giọng đọc AI tiếng Việt (${chunks.length} đoạn)`);
+    const engineName = ttsProviderInfoRef.current?.providerLabel || 'AI Việt';
+    onNotifyToastRef.current?.(`🔊 Đang phát ${engineName} (${chunks.length} đoạn)`);
     playServerTtsChunk(0);
   }, [stopSpeechFallbackOnly, playServerTtsChunk]);
 
@@ -1073,6 +1146,9 @@ export function useNewsAudio(
     isTtsSpeaking,
     ttsChunkIndex,
     ttsTotalChunks,
+    ttsProviderInfo,
+    ttsVoiceId,
+    selectTtsVoice,
     audioError,
     currentTime,
     duration,
