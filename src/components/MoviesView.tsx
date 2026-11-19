@@ -26,15 +26,17 @@ import {
   MovieEpisode,
   MovieItem,
   MovieListType,
+  MovieSource,
   MovieTaxon,
   MovieWatchHistoryItem,
 } from '../types';
 import {
-  MOVIE_TABS,
   MOVIE_YEARS,
   fetchMovieDetail,
   fetchMovieList,
   fetchMovieMeta,
+  getMovieKey,
+  getMovieTabsForSource,
   loadMovieFavorites,
   loadMovieHistory,
   removeMovieHistoryItem,
@@ -68,7 +70,16 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   const theme = getCarTheme(isLightTheme);
   const browseScrollRef = useRef<HTMLDivElement>(null);
 
-  // Danh mục & Bộ lọc KKPhim
+  // Nguồn phim đa nền tảng: KKPhim (1080p HLS) | VSMov (Chiếu rạp & Subteam)
+  const [movieSource, setMovieSourceState] = useState<MovieSource>(() => {
+    try {
+      return localStorage.getItem('carhub_movie_source') === 'vsmov' ? 'vsmov' : 'kkphim';
+    } catch {
+      return 'kkphim';
+    }
+  });
+
+  // Danh mục & Bộ lọc
   const [libraryMode, setLibraryMode] = useState<LibraryMode>('browse');
   const [activeTab, setActiveTab] = useState<MovieListType>('moi-cap-nhat');
   const [searchInput, setSearchInput] = useState<string>('');
@@ -81,7 +92,27 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   const [page, setPage] = useState<number>(1);
   const [reloadNonce, setReloadNonce] = useState<number>(0);
 
-  // Meta Thể loại & Quốc gia từ /api/movie?action=meta
+  const handleChangeMovieSource = (nextSource: MovieSource) => {
+    if (nextSource === movieSource) return;
+    setMovieSourceState(nextSource);
+    try {
+      localStorage.setItem('carhub_movie_source', nextSource);
+    } catch {}
+    setLibraryMode('browse');
+    setActiveTab('moi-cap-nhat');
+    setSelectedGenre('');
+    setSelectedCountry('');
+    setSelectedYear('');
+    setSelectedSortLang('');
+    setPage(1);
+    onNotifyToast(
+      nextSource === 'vsmov'
+        ? '🍿 Đã chuyển kho phim sang VSMov (Chiếu rạp & Subteam)'
+        : '🎬 Đã chuyển kho phim sang KKPhim (1080p HLS Sạch QC)'
+    );
+  };
+
+  // Meta Thể loại & Quốc gia từ /api/movie?action=meta&source=...
   const [genres, setGenres] = useState<MovieTaxon[]>([]);
   const [countries, setCountries] = useState<MovieTaxon[]>([]);
 
@@ -93,13 +124,18 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   const [isLoadingList, setIsLoadingList] = useState<boolean>(false);
   const [listError, setListError] = useState<string | null>(null);
 
-  // Lịch sử xem & Phim yêu thích (localStorage)
+  // Lịch sử xem & Phim yêu thích đa nguồn (localStorage)
   const [history, setHistory] = useState<MovieWatchHistoryItem[]>(() => loadMovieHistory());
   const [favorites, setFavorites] = useState<MovieItem[]>(() => loadMovieFavorites());
-  const favoriteSet = useMemo(() => new Set(favorites.map((x) => x.slug)), [favorites]);
+  const favoriteSet = useMemo(
+    () => new Set(favorites.map((x) => getMovieKey(x.source, x.slug))),
+    [favorites]
+  );
 
   // Trạng thái Phòng Chiếu Phim (Detail + Watch)
-  const [activeSlug, setActiveSlug] = useState<string | null>(null);
+  const [activeTarget, setActiveTarget] = useState<{ slug: string; source: MovieSource } | null>(
+    null
+  );
   const [movieDetail, setMovieDetail] = useState<MovieDetail | null>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -112,10 +148,10 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   const detailLoadTokenRef = useRef<number>(0);
   const latestPlayPosRef = useRef<number>(0);
 
-  // Tải Meta Thể loại (26) + Quốc gia (36) 1 lần duy nhất
+  // Tải Meta Thể loại + Quốc gia theo nguồn đang chọn (KKPhim hoặc VSMov)
   useEffect(() => {
     let cancelled = false;
-    fetchMovieMeta()
+    fetchMovieMeta(movieSource)
       .then((m) => {
         if (!cancelled) {
           setGenres(m.genres || []);
@@ -126,9 +162,9 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [movieSource]);
 
-  // Tải danh sách phim theo tab / từ khóa / bộ lọc / trang
+  // Tải danh sách phim theo nguồn / tab / từ khóa / bộ lọc / trang
   useEffect(() => {
     if (libraryMode !== 'browse') return;
     let cancelled = false;
@@ -138,13 +174,14 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
       setListError(null);
       try {
         const res = await fetchMovieList({
+          source: movieSource,
           type: activeTab,
           page,
           limit: 24,
           category: selectedGenre,
           country: selectedCountry,
           year: selectedYear,
-          sortLang: selectedSortLang,
+          sortLang: movieSource === 'kkphim' ? selectedSortLang : '',
           keyword: searchKeyword,
         });
         if (cancelled) return;
@@ -157,7 +194,10 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
         }
       } catch (err: any) {
         if (!cancelled) {
-          setListError(err?.message || 'Không tải được danh sách phim từ KKPhim');
+          setListError(
+            err?.message ||
+              `Không tải được danh sách phim từ ${movieSource === 'vsmov' ? 'VSMov' : 'KKPhim'}`
+          );
         }
       } finally {
         if (!cancelled) {
@@ -171,6 +211,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
       cancelled = true;
     };
   }, [
+    movieSource,
     libraryMode,
     activeTab,
     page,
@@ -186,7 +227,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     (selectedGenre ? 1 : 0) +
     (selectedCountry ? 1 : 0) +
     (selectedYear ? 1 : 0) +
-    (selectedSortLang ? 1 : 0);
+    (movieSource === 'kkphim' && selectedSortLang ? 1 : 0);
 
   const clearAllFilters = () => {
     setSelectedGenre('');
@@ -198,55 +239,57 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     setPage(1);
   };
 
-  // Mở 1 bộ phim (tự khôi phục đúng Server + Tập + Giây đang xem dở nếu có trong lịch sử!)
+  // Mở 1 bộ phim từ KKPhim hoặc VSMov (tự khôi phục đúng Server + Tập + Giây đang xem dở nếu có!)
   const openMovie = useCallback(
-    async (slug: string, historyHint?: MovieWatchHistoryItem) => {
+    async (slug: string, sourceArg?: MovieSource, historyHint?: MovieWatchHistoryItem) => {
       if (!slug) return;
+      const src: MovieSource = sourceArg || historyHint?.source || movieSource;
       const token = ++detailLoadTokenRef.current;
-      setActiveSlug(slug);
+      setActiveTarget({ slug, source: src });
       setMovieDetail(null);
       setDetailError(null);
       setIsLoadingDetail(true);
       setRelatedMovies([]);
       latestPlayPosRef.current = 0;
 
-      const savedHist = historyHint || history.find((h) => h.slug === slug);
+      const targetKey = getMovieKey(src, slug);
+      const savedHist =
+        historyHint || history.find((h) => getMovieKey(h.source, h.slug) === targetKey);
 
       try {
-        const det = await fetchMovieDetail(slug);
+        const det = await fetchMovieDetail(slug, src);
         if (detailLoadTokenRef.current !== token) return;
-        setMovieDetail(det);
+        const normalizedDet: MovieDetail = { ...det, source: src };
+        setMovieDetail(normalizedDet);
         setIsLoadingDetail(false);
 
-        // Chọn server & tập phim từ lịch sử nếu khớp, không thì ưu tiên Thuyết minh / Lồng tiếng nếu đang ở tab đó
         let targetSrv = 0;
         let targetEp = 0;
         let targetResume = 0;
 
-        if (savedHist && det.servers.length > 0) {
+        if (savedHist && normalizedDet.servers.length > 0) {
           const foundSrvIdx =
-            det.servers[savedHist.serverIndex] !== undefined
+            normalizedDet.servers[savedHist.serverIndex] !== undefined
               ? savedHist.serverIndex
               : Math.max(
                   0,
-                  det.servers.findIndex((s) => s.serverName === savedHist.serverName)
+                  normalizedDet.servers.findIndex((s) => s.serverName === savedHist.serverName)
                 );
           targetSrv = foundSrvIdx;
-          const eps = det.servers[targetSrv]?.episodes || [];
+          const eps = normalizedDet.servers[targetSrv]?.episodes || [];
           const foundEpIdx = eps.findIndex((e) => e.slug === savedHist.episodeSlug);
           if (foundEpIdx >= 0) {
             targetEp = foundEpIdx;
             targetResume = savedHist.currentTime || 0;
           }
-        } else if (det.servers.length > 1) {
-          // Ưu tiên nhẹ Thuyết minh / Lồng tiếng khi người dùng chọn từ tab tương ứng
+        } else if (normalizedDet.servers.length > 1) {
           if (activeTab === 'phim-thuyet-minh') {
-            const idx = det.servers.findIndex((s) =>
+            const idx = normalizedDet.servers.findIndex((s) =>
               s.serverName.toLowerCase().includes('thuyết minh')
             );
             if (idx >= 0) targetSrv = idx;
           } else if (activeTab === 'phim-long-tieng') {
-            const idx = det.servers.findIndex((s) =>
+            const idx = normalizedDet.servers.findIndex((s) =>
               s.serverName.toLowerCase().includes('lồng tiếng')
             );
             if (idx >= 0) targetSrv = idx;
@@ -258,10 +301,36 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
         setResumeTimeSec(targetResume);
         setEpisodeChunkPage(Math.floor(targetEp / 30));
 
-        // Nạp thêm phim gợi ý cùng thể loại đầu tiên
-        const primaryCat = det.categories?.[0]?.slug;
+        // Với nguồn chỉ có Embed (như VSMov), lưu luôn tập đang mở vào "Tiếp tục xem"
+        const chosenSrv = normalizedDet.servers[targetSrv];
+        const chosenEp = chosenSrv?.episodes?.[targetEp];
+        if (chosenSrv && chosenEp && !chosenEp.linkM3u8 && chosenEp.linkEmbed) {
+          const updated = saveMovieHistoryItem({
+            source: src,
+            slug: normalizedDet.slug,
+            name: normalizedDet.name,
+            originName: normalizedDet.originName,
+            posterUrl: normalizedDet.posterUrl,
+            thumbUrl: normalizedDet.thumbUrl,
+            quality: normalizedDet.quality,
+            lang: normalizedDet.lang,
+            year: normalizedDet.year,
+            serverIndex: targetSrv,
+            serverName: chosenSrv.serverName,
+            episodeSlug: chosenEp.slug,
+            episodeName: chosenEp.name,
+            currentTime: targetResume,
+            duration: 0,
+            updatedAt: Date.now(),
+          });
+          setHistory(updated);
+        }
+
+        // Nạp thêm phim gợi ý cùng thể loại đầu tiên trên cùng nguồn
+        const primaryCat = normalizedDet.categories?.[0]?.slug;
         if (primaryCat) {
           fetchMovieList({
+            source: src,
             type: 'moi-cap-nhat',
             category: primaryCat,
             page: 1,
@@ -269,7 +338,9 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           })
             .then((rel) => {
               if (detailLoadTokenRef.current === token) {
-                setRelatedMovies((rel.items || []).filter((x) => x.slug !== det.slug).slice(0, 8));
+                setRelatedMovies(
+                  (rel.items || []).filter((x) => x.slug !== normalizedDet.slug).slice(0, 8)
+                );
               }
             })
             .catch(() => {});
@@ -280,14 +351,14 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
         setDetailError(err?.message || 'Không tải được chi tiết bộ phim');
       }
     },
-    [history, activeTab]
+    [movieSource, history, activeTab]
   );
 
   const activeServer = movieDetail?.servers?.[serverIdx] || null;
   const activeEpisodes: MovieEpisode[] = activeServer?.episodes || [];
   const activeEpisode: MovieEpisode | null = activeEpisodes[episodeIdx] || null;
 
-  // Đổi Server âm thanh (Vietsub <-> Thuyết Minh <-> Lồng Tiếng) giữ nguyên tập & thời điểm đang xem!
+  // Đổi Server âm thanh giữ nguyên tập & thời điểm đang xem!
   const handleSwitchServer = (nextSrvIdx: number) => {
     if (!movieDetail || nextSrvIdx === serverIdx) return;
     const nextSrv = movieDetail.servers[nextSrvIdx];
@@ -305,6 +376,29 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     setResumeTimeSec(0);
     latestPlayPosRef.current = 0;
     setEpisodeChunkPage(Math.floor(idx / 30));
+    // Lưu lịch sử ngay khi chuyển tập trên nguồn Embed (VSMov)
+    const nextEp = activeEpisodes[idx];
+    if (movieDetail && activeServer && nextEp && !nextEp.linkM3u8 && nextEp.linkEmbed) {
+      const updated = saveMovieHistoryItem({
+        source: movieDetail.source || activeTarget?.source || movieSource,
+        slug: movieDetail.slug,
+        name: movieDetail.name,
+        originName: movieDetail.originName,
+        posterUrl: movieDetail.posterUrl,
+        thumbUrl: movieDetail.thumbUrl,
+        quality: movieDetail.quality,
+        lang: movieDetail.lang,
+        year: movieDetail.year,
+        serverIndex: serverIdx,
+        serverName: activeServer.serverName,
+        episodeSlug: nextEp.slug,
+        episodeName: nextEp.name,
+        currentTime: 0,
+        duration: 0,
+        updatedAt: Date.now(),
+      });
+      setHistory(updated);
+    }
   };
 
   const handleProgressSave = useCallback(
@@ -312,6 +406,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
       latestPlayPosRef.current = curSec;
       if (!movieDetail || !activeServer || !activeEpisode) return;
       const entry: MovieWatchHistoryItem = {
+        source: movieDetail.source || activeTarget?.source || movieSource,
         slug: movieDetail.slug,
         name: movieDetail.name,
         originName: movieDetail.originName,
@@ -331,18 +426,23 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
       const updated = saveMovieHistoryItem(entry);
       setHistory(updated);
     },
-    [movieDetail, activeServer, activeEpisode, serverIdx]
+    [movieDetail, activeServer, activeEpisode, serverIdx, activeTarget, movieSource]
   );
 
   const handleToggleFavorite = (movie: MovieItem) => {
-    const { list, isFav } = toggleMovieFavoriteStorage(movie);
+    const withSource: MovieItem = { ...movie, source: movie.source || movieSource };
+    const { list, isFav } = toggleMovieFavoriteStorage(withSource);
     setFavorites(list);
     onNotifyToast(isFav ? `❤️ Đã lưu phim "${movie.name}"` : `💔 Đã bỏ lưu "${movie.name}"`);
   };
 
-  const handleRemoveHistory = (slug: string, e: React.MouseEvent) => {
+  const handleRemoveHistory = (
+    slug: string,
+    src: MovieSource | undefined,
+    e: React.MouseEvent
+  ) => {
     e.stopPropagation();
-    const updated = removeMovieHistoryItem(slug);
+    const updated = removeMovieHistoryItem(slug, src || 'kkphim');
     setHistory(updated);
   };
 
@@ -353,14 +453,38 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     setPage(1);
   };
 
+  const handleFindOnOtherSource = () => {
+    if (!movieDetail) return;
+    const curSrc = movieDetail.source || activeTarget?.source || movieSource;
+    const otherSrc: MovieSource = curSrc === 'kkphim' ? 'vsmov' : 'kkphim';
+    const kw = movieDetail.name || movieDetail.originName;
+    setActiveTarget(null);
+    setMovieDetail(null);
+    setMovieSourceState(otherSrc);
+    try {
+      localStorage.setItem('carhub_movie_source', otherSrc);
+    } catch {}
+    setLibraryMode('browse');
+    setActiveTab('moi-cap-nhat');
+    setSearchInput(kw);
+    setSearchKeyword(kw);
+    setPage(1);
+    onNotifyToast(
+      `🔍 Đang tìm "${kw}" trên ${otherSrc === 'vsmov' ? 'VSMov' : 'KKPhim'}...`
+    );
+  };
+
   // =========================================================================
-  // CHẾ ĐỘ 2: PHÒNG CHIẾU PHIM CHI TIẾT (PLAYER 1080P SẠCH QC + TẬP PHIM + ĐỀ XUẤT)
+  // CHẾ ĐỘ 2: PHÒNG CHIẾU PHIM CHI TIẾT (PLAYER 1080P SẠCH QC / VSMOV EMBED + TẬP PHIM + ĐỀ XUẤT)
   // =========================================================================
-  if (activeSlug) {
+  if (activeTarget) {
     const epChunkCount = Math.ceil(activeEpisodes.length / 30);
     const epStart = episodeChunkPage * 30;
     const epSlice = activeEpisodes.slice(epStart, epStart + 30);
-    const isFavCurrent = movieDetail ? favoriteSet.has(movieDetail.slug) : false;
+    const activeSrc = movieDetail?.source || activeTarget.source;
+    const isFavCurrent = movieDetail
+      ? favoriteSet.has(getMovieKey(activeSrc, movieDetail.slug))
+      : false;
 
     return (
       <div className="flex-1 min-h-0 flex flex-col gap-2 max-w-[1920px] mx-auto w-full animate-ios-browse-in">
@@ -370,7 +494,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             <button
               type="button"
               onClick={() => {
-                setActiveSlug(null);
+                setActiveTarget(null);
                 setMovieDetail(null);
               }}
               className={`min-h-[2.5rem] px-3 rounded-xl border text-xs font-black flex items-center gap-1.5 shrink-0 active:scale-95 transition ${theme.iconBtn}`}
@@ -379,9 +503,20 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
               <span>Kho phim</span>
             </button>
             <div className="min-w-0">
-              <h2 className={`text-sm sm:text-base font-black truncate ${theme.text}`}>
-                {movieDetail?.name || 'Đang tải phim...'}
-              </h2>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[0.62rem] font-black uppercase shrink-0 ${
+                    activeSrc === 'vsmov'
+                      ? 'bg-rose-600 text-white'
+                      : 'bg-violet-600 text-white'
+                  }`}
+                >
+                  {activeSrc === 'vsmov' ? 'VSMov' : 'KKPhim'}
+                </span>
+                <h2 className={`text-sm sm:text-base font-black truncate ${theme.text}`}>
+                  {movieDetail?.name || 'Đang tải phim...'}
+                </h2>
+              </div>
               {movieDetail?.originName && (
                 <p className={`text-xs font-semibold truncate ${theme.textSub}`}>
                   {movieDetail.originName}
@@ -394,18 +529,32 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           </div>
 
           {movieDetail && (
-            <button
-              type="button"
-              onClick={() => handleToggleFavorite(movieDetail)}
-              className={`min-h-[2.45rem] px-3.5 rounded-xl border text-xs font-black flex items-center gap-1.5 shrink-0 active:scale-95 transition ${
-                isFavCurrent
-                  ? 'bg-rose-600 border-rose-500 text-white shadow'
-                  : theme.iconBtn
-              }`}
-            >
-              <Heart className={`w-4 h-4 ${isFavCurrent ? 'fill-white' : ''}`} />
-              <span>{isFavCurrent ? 'Đã lưu' : 'Yêu thích'}</span>
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleFindOnOtherSource}
+                title={`Tìm bộ phim này trên nguồn ${activeSrc === 'vsmov' ? 'KKPhim' : 'VSMov'}`}
+                className={`min-h-[2.45rem] px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition ${theme.iconBtn}`}
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">
+                  Tìm trên {activeSrc === 'vsmov' ? 'KKPhim' : 'VSMov'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleToggleFavorite(movieDetail)}
+                className={`min-h-[2.45rem] px-3.5 rounded-xl border text-xs font-black flex items-center gap-1.5 active:scale-95 transition ${
+                  isFavCurrent
+                    ? 'bg-rose-600 border-rose-500 text-white shadow'
+                    : theme.iconBtn
+                }`}
+              >
+                <Heart className={`w-4 h-4 ${isFavCurrent ? 'fill-white' : ''}`} />
+                <span>{isFavCurrent ? 'Đã lưu' : 'Yêu thích'}</span>
+              </button>
+            </div>
           )}
         </div>
 
@@ -413,7 +562,8 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           <div className="flex-1 flex flex-col items-center justify-center gap-3">
             <Loader2 className="w-9 h-9 text-violet-500 animate-spin" />
             <p className={`text-sm font-bold ${theme.textSub}`}>
-              Đang nạp thông tin &amp; nguồn phát Full HD từ KKPhim...
+              Đang nạp thông tin &amp; nguồn phát từ{' '}
+              {activeTarget.source === 'vsmov' ? 'VSMov' : 'KKPhim'}...
             </p>
           </div>
         ) : detailError || !movieDetail ? (
@@ -422,7 +572,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             <p className={`text-sm font-bold ${theme.text}`}>{detailError || 'Không tìm thấy phim'}</p>
             <button
               type="button"
-              onClick={() => openMovie(activeSlug)}
+              onClick={() => openMovie(activeTarget.slug, activeTarget.source)}
               className="min-h-[2.6rem] px-5 rounded-xl bg-violet-600 text-white text-xs font-black"
             >
               Thử tải lại
@@ -448,19 +598,41 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                 onNotifyToast={onNotifyToast}
               />
 
-              {/* THANH CHUYỂN SERVER ÂM THANH (Vietsub / Thuyết Minh / Lồng Tiếng) */}
+              {/* THANH CHUYỂN SERVER ÂM THANH + NÚT TẬP TRƯỚC/SAU NHANH */}
               {movieDetail.servers.length > 0 && (
                 <div className={`rounded-2xl border p-3 space-y-2 ${theme.card}`}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className={`text-xs font-black uppercase tracking-wider ${theme.textSub}`}>
-                      🎙️ Nguồn phát &amp; Âm thanh
+                      🎙️ Nguồn phát ({activeSrc === 'vsmov' ? 'VSMov' : 'KKPhim'})
                     </span>
-                    {movieDetail.episodeCurrent && (
-                      <span className="px-2 py-0.5 rounded-full bg-violet-600/20 border border-violet-400/40 text-violet-400 text-[0.7rem] font-black">
-                        {movieDetail.episodeCurrent}
-                        {movieDetail.episodeTotal ? ` / ${movieDetail.episodeTotal}` : ''}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1.5">
+                      {activeEpisodes.length > 1 && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={episodeIdx <= 0}
+                            onClick={() => handleSelectEpisode(episodeIdx - 1)}
+                            className={`min-h-[2rem] px-2.5 rounded-lg border text-xs font-extrabold disabled:opacity-35 active:scale-95 ${theme.iconBtn}`}
+                          >
+                            ◀ Tập trước
+                          </button>
+                          <button
+                            type="button"
+                            disabled={episodeIdx >= activeEpisodes.length - 1}
+                            onClick={() => handleSelectEpisode(episodeIdx + 1)}
+                            className="min-h-[2rem] px-2.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-extrabold disabled:opacity-35 active:scale-95"
+                          >
+                            Tập tiếp ▶
+                          </button>
+                        </>
+                      )}
+                      {movieDetail.episodeCurrent && (
+                        <span className="px-2 py-0.5 rounded-full bg-violet-600/20 border border-violet-400/40 text-violet-400 text-[0.7rem] font-black">
+                          {movieDetail.episodeCurrent}
+                          {movieDetail.episodeTotal ? ` / ${movieDetail.episodeTotal}` : ''}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
                     {movieDetail.servers.map((srv, idx) => {
@@ -524,7 +696,8 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                       key={cat.slug}
                       type="button"
                       onClick={() => {
-                        setActiveSlug(null);
+                        setMovieSourceState(activeSrc);
+                        setActiveTarget(null);
                         setLibraryMode('browse');
                         setActiveTab('moi-cap-nhat');
                         setSelectedGenre(cat.slug);
@@ -540,7 +713,8 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                       key={c.slug}
                       type="button"
                       onClick={() => {
-                        setActiveSlug(null);
+                        setMovieSourceState(activeSrc);
+                        setActiveTarget(null);
                         setLibraryMode('browse');
                         setActiveTab('moi-cap-nhat');
                         setSelectedCountry(c.slug);
@@ -646,9 +820,9 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                   <div className="space-y-1.5">
                     {relatedMovies.map((rel) => (
                       <button
-                        key={rel.slug}
+                        key={getMovieKey(rel.source || activeSrc, rel.slug)}
                         type="button"
-                        onClick={() => openMovie(rel.slug)}
+                        onClick={() => openMovie(rel.slug, rel.source || activeSrc)}
                         className={`w-full text-left flex items-center gap-2.5 p-2 rounded-xl border active:scale-[0.99] transition ${theme.itemIdle}`}
                       >
                         <img
@@ -701,35 +875,75 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
       ? items
       : [];
 
+  const activeSourceTabs = useMemo(() => getMovieTabsForSource(movieSource), [movieSource]);
+
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-2 max-w-[1920px] mx-auto w-full animate-ios-browse-in">
-      {/* 1. THANH ĐẦU TRANG: LOGO + TÌM KIẾM + BỘ LỌC + YÊU THÍCH + ĐANG XEM */}
+      {/* 1. THANH ĐẦU TRANG: LOGO + ĐỔI NGUỒN KKPHIM/VSMOV + TÌM KIẾM + BỘ LỌC + YÊU THÍCH + ĐANG XEM */}
       <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <div
-            className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
-              isLightTheme
-                ? 'bg-violet-100 border-violet-300 text-violet-700'
-                : 'bg-violet-500/20 border-violet-400/45 text-violet-300'
-            }`}
-          >
-            <Clapperboard className="w-5 h-5" />
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <div
+              className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
+                movieSource === 'vsmov'
+                  ? isLightTheme
+                    ? 'bg-rose-100 border-rose-300 text-rose-700'
+                    : 'bg-rose-500/20 border-rose-400/45 text-rose-300'
+                  : isLightTheme
+                  ? 'bg-violet-100 border-violet-300 text-violet-700'
+                  : 'bg-violet-500/20 border-violet-400/45 text-violet-300'
+              }`}
+            >
+              <Clapperboard className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h2 className={`text-base sm:text-lg font-black tracking-tight truncate ${theme.text}`}>
+                Rạp Phim • {movieSource === 'vsmov' ? 'VSMov' : 'KKPhim'}
+              </h2>
+              <p className={`text-xs font-semibold truncate ${theme.textSub}`}>
+                {libraryMode === 'favorites'
+                  ? `Phim yêu thích đã lưu (${favorites.length})`
+                  : libraryMode === 'history'
+                  ? `Lịch sử phim đang xem (${history.length})`
+                  : searchKeyword
+                  ? `Kết quả "${searchKeyword}" (${totalItems} phim)`
+                  : `${
+                      totalItems > 0
+                        ? `${totalItems.toLocaleString('vi-VN')} phim HD/FHD`
+                        : movieSource === 'vsmov'
+                        ? '38.000+ phim Chiếu rạp & Subteam'
+                        : '30.000+ phim HD/FHD'
+                    }${updateToday > 0 ? ` • Hôm nay +${updateToday}` : ''}`}
+              </p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <h2 className={`text-base sm:text-lg font-black tracking-tight truncate ${theme.text}`}>
-              Rạp Phim • KKPhim
-            </h2>
-            <p className={`text-xs font-semibold truncate ${theme.textSub}`}>
-              {libraryMode === 'favorites'
-                ? `Phim yêu thích đã lưu (${favorites.length})`
-                : libraryMode === 'history'
-                ? `Lịch sử phim đang xem (${history.length})`
-                : searchKeyword
-                ? `Kết quả "${searchKeyword}" (${totalItems} phim)`
-                : `${totalItems > 0 ? `${totalItems.toLocaleString('vi-VN')} phim HD/FHD` : '30.000+ phim HD/FHD'}${
-                    updateToday > 0 ? ` • Hôm nay +${updateToday}` : ''
-                  }`}
-            </p>
+
+          {/* Công tắc chuyển nhanh 2 nguồn phim: KKPhim <-> VSMov */}
+          <div className={`inline-flex items-center p-0.5 rounded-full border shrink-0 ${theme.segTrack}`}>
+            <button
+              type="button"
+              onClick={() => handleChangeMovieSource('kkphim')}
+              className={`min-h-[2.2rem] px-3 rounded-full text-xs font-black flex items-center gap-1 transition ${
+                movieSource === 'kkphim'
+                  ? 'bg-violet-600 text-white shadow'
+                  : theme.segIdle
+              }`}
+            >
+              <span>🎬</span>
+              <span>KKPhim</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleChangeMovieSource('vsmov')}
+              className={`min-h-[2.2rem] px-3 rounded-full text-xs font-black flex items-center gap-1 transition ${
+                movieSource === 'vsmov'
+                  ? 'bg-rose-600 text-white shadow'
+                  : theme.segIdle
+              }`}
+            >
+              <span>🍿</span>
+              <span>VSMov</span>
+            </button>
           </div>
         </div>
 
@@ -829,9 +1043,9 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
         </div>
       </div>
 
-      {/* 2. THANH DANH MỤC PHIM NHANH */}
+      {/* 2. THANH DANH MỤC PHIM NHANH (Tự đổi theo nguồn KKPhim hoặc VSMov) */}
       <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 shrink-0">
-        {MOVIE_TABS.map((tab) => {
+        {activeSourceTabs.map((tab) => {
           const active = libraryMode === 'browse' && !searchKeyword && activeTab === tab.id;
           return (
             <button
@@ -848,8 +1062,12 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                 active
                   ? tab.id === 'phim-thuyet-minh'
                     ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow'
-                    : tab.id === 'phim-long-tieng'
+                    : tab.id === 'phim-long-tieng' || tab.id === 'subteam'
                     ? 'bg-amber-400 text-slate-950 border-amber-300 shadow'
+                    : tab.id === 'phim-chieu-rap'
+                    ? 'bg-rose-600 text-white border-rose-500 shadow'
+                    : movieSource === 'vsmov'
+                    ? 'bg-rose-600 text-white border-rose-500 shadow'
                     : 'bg-violet-600 text-white border-violet-500 shadow'
                   : theme.chipIdle
               }`}
@@ -864,7 +1082,11 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
       {/* 3. BẢNG BỘ LỌC NÂNG CAO (Thể loại • Quốc gia • Năm • Âm thanh) */}
       {showFilters && libraryMode === 'browse' && (
         <div
-          className={`shrink-0 rounded-2xl border p-3 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-2 animate-ios-sheet-in ${theme.cardElevated}`}
+          className={`shrink-0 rounded-2xl border p-3 grid gap-2 animate-ios-sheet-in ${
+            movieSource === 'kkphim'
+              ? 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-5'
+              : 'grid-cols-2 sm:grid-cols-4'
+          } ${theme.cardElevated}`}
         >
           <label className="flex flex-col gap-1">
             <span className={`text-[0.68rem] font-extrabold flex items-center gap-1 ${theme.textSub}`}>
@@ -929,26 +1151,32 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             </select>
           </label>
 
-          <label className="flex flex-col gap-1">
-            <span className={`text-[0.68rem] font-extrabold flex items-center gap-1 ${theme.textSub}`}>
-              <Layers className="w-3.5 h-3.5" /> Âm thanh
-            </span>
-            <select
-              value={selectedSortLang}
-              onChange={(e) => {
-                setSelectedSortLang(e.target.value);
-                setPage(1);
-              }}
-              className={`min-h-[2.35rem] px-2.5 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
-            >
-              <option value="">Tất cả ngôn ngữ</option>
-              <option value="thuyet-minh">🎙️ Thuyết minh</option>
-              <option value="long-tieng">🗣️ Lồng tiếng</option>
-              <option value="vietsub">📝 Vietsub</option>
-            </select>
-          </label>
+          {movieSource === 'kkphim' && (
+            <label className="flex flex-col gap-1">
+              <span className={`text-[0.68rem] font-extrabold flex items-center gap-1 ${theme.textSub}`}>
+                <Layers className="w-3.5 h-3.5" /> Âm thanh
+              </span>
+              <select
+                value={selectedSortLang}
+                onChange={(e) => {
+                  setSelectedSortLang(e.target.value);
+                  setPage(1);
+                }}
+                className={`min-h-[2.35rem] px-2.5 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
+              >
+                <option value="">Tất cả ngôn ngữ</option>
+                <option value="thuyet-minh">🎙️ Thuyết minh</option>
+                <option value="long-tieng">🗣️ Lồng tiếng</option>
+                <option value="vietsub">📝 Vietsub</option>
+              </select>
+            </label>
+          )}
 
-          <div className="flex items-end col-span-2 sm:col-span-4 lg:col-span-1">
+          <div
+            className={`flex items-end ${
+              movieSource === 'kkphim' ? 'col-span-2 sm:col-span-4 lg:col-span-1' : 'col-span-1'
+            }`}
+          >
             <button
               type="button"
               onClick={clearAllFilters}
@@ -977,12 +1205,13 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {history.map((h) => {
+                const hSrc = h.source || 'kkphim';
                 const pct =
                   h.duration > 0 ? Math.min(100, Math.round((h.currentTime / h.duration) * 100)) : 0;
                 return (
                   <div
-                    key={h.slug}
-                    onClick={() => openMovie(h.slug, h)}
+                    key={getMovieKey(hSrc, h.slug)}
+                    onClick={() => openMovie(h.slug, hSrc, h)}
                     className={`group relative rounded-2xl border overflow-hidden cursor-pointer active:scale-[0.99] transition ${theme.itemIdle}`}
                   >
                     <div className="relative aspect-video bg-slate-900 overflow-hidden">
@@ -993,9 +1222,16 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
+                      <span
+                        className={`absolute top-2 left-2 px-1.5 py-0.5 rounded text-[0.6rem] font-black uppercase ${
+                          hSrc === 'vsmov' ? 'bg-rose-600 text-white' : 'bg-violet-600 text-white'
+                        }`}
+                      >
+                        {hSrc === 'vsmov' ? 'VSMov' : 'KKPhim'}
+                      </span>
                       <button
                         type="button"
-                        onClick={(e) => handleRemoveHistory(h.slug, e)}
+                        onClick={(e) => handleRemoveHistory(h.slug, hSrc, e)}
                         aria-label="Xóa khỏi lịch sử xem"
                         className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/70 hover:bg-rose-600 text-white flex items-center justify-center transition"
                       >
@@ -1005,13 +1241,15 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                         <span className="px-2 py-0.5 rounded-md bg-violet-600 text-[0.68rem] font-black">
                           {h.episodeName}
                         </span>
-                        <span className="text-[0.68rem] font-mono font-bold bg-black/65 px-1.5 py-0.5 rounded">
-                          {formatSeconds(h.currentTime)} / {formatSeconds(h.duration)}
-                        </span>
+                        {h.duration > 0 && (
+                          <span className="text-[0.68rem] font-mono font-bold bg-black/65 px-1.5 py-0.5 rounded">
+                            {formatSeconds(h.currentTime)} / {formatSeconds(h.duration)}
+                          </span>
+                        )}
                       </div>
                       {/* Thanh tiến trình kiểu Netflix */}
                       <div className="absolute bottom-0 inset-x-0 h-1 bg-white/25">
-                        <div className="h-full bg-rose-500" style={{ width: `${pct}%` }} />
+                        <div className="h-full bg-rose-500" style={{ width: `${pct || 15}%` }} />
                       </div>
                     </div>
                     <div className="p-2.5">
@@ -1019,7 +1257,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                         {h.name}
                       </h4>
                       <p className={`text-[0.7rem] font-semibold truncate mt-0.5 ${theme.textSub}`}>
-                        {h.serverName} • Tiếp tục xem ({pct}%)
+                        {h.serverName} • {h.duration > 0 ? `Tiếp tục xem (${pct}%)` : `Đang ở ${h.episodeName}`}
                       </p>
                     </div>
                   </div>
@@ -1032,7 +1270,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             {/* HERO SPOTLIGHT BANNER (TRANG 1 DUYỆT PHIM) */}
             {heroMovie && (
               <div
-                onClick={() => openMovie(heroMovie.slug)}
+                onClick={() => openMovie(heroMovie.slug, heroMovie.source || movieSource)}
                 className="relative rounded-2xl sm:rounded-3xl overflow-hidden border border-white/15 bg-slate-950 min-h-[14.5rem] sm:min-h-[17.5rem] flex items-end cursor-pointer group shadow-2xl"
               >
                 <img
@@ -1045,8 +1283,12 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
 
                 <div className="relative z-10 p-4 sm:p-6 max-w-2xl space-y-2.5 text-white">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="px-2.5 py-0.5 rounded-full bg-violet-600 text-white text-[0.7rem] font-black uppercase">
-                      🔥 Tiêu điểm hôm nay
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-white text-[0.7rem] font-black uppercase ${
+                        movieSource === 'vsmov' ? 'bg-rose-600' : 'bg-violet-600'
+                      }`}
+                    >
+                      🔥 Tiêu điểm {movieSource === 'vsmov' ? 'VSMov' : 'KKPhim'}
                     </span>
                     <span className="px-2 py-0.5 rounded-full bg-white/20 backdrop-blur-md text-[0.7rem] font-black">
                       {heroMovie.quality}
@@ -1086,7 +1328,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        openMovie(heroMovie.slug);
+                        openMovie(heroMovie.slug, heroMovie.source || movieSource);
                       }}
                       className="min-h-[2.75rem] px-5 rounded-xl bg-white hover:bg-white/90 text-slate-950 text-xs sm:text-sm font-black flex items-center gap-2 shadow-xl active:scale-95 transition"
                     >
@@ -1101,17 +1343,23 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                         handleToggleFavorite(heroMovie);
                       }}
                       className={`min-h-[2.75rem] px-4 rounded-xl border text-xs sm:text-sm font-extrabold flex items-center gap-1.5 backdrop-blur-md active:scale-95 transition ${
-                        favoriteSet.has(heroMovie.slug)
+                        favoriteSet.has(getMovieKey(heroMovie.source || movieSource, heroMovie.slug))
                           ? 'bg-rose-600 border-rose-400 text-white'
                           : 'bg-white/15 hover:bg-white/25 border-white/25 text-white'
                       }`}
                     >
                       <Heart
                         className={`w-4 h-4 ${
-                          favoriteSet.has(heroMovie.slug) ? 'fill-white' : ''
+                          favoriteSet.has(getMovieKey(heroMovie.source || movieSource, heroMovie.slug))
+                            ? 'fill-white'
+                            : ''
                         }`}
                       />
-                      <span>{favoriteSet.has(heroMovie.slug) ? 'Đã lưu' : 'Lưu phim'}</span>
+                      <span>
+                        {favoriteSet.has(getMovieKey(heroMovie.source || movieSource, heroMovie.slug))
+                          ? 'Đã lưu'
+                          : 'Lưu phim'}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -1138,15 +1386,16 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                   </div>
                   <div className="flex items-stretch gap-2.5 overflow-x-auto no-scrollbar pb-1">
                     {history.slice(0, 8).map((h) => {
+                      const hSrc = h.source || 'kkphim';
                       const pct =
                         h.duration > 0
                           ? Math.min(100, Math.round((h.currentTime / h.duration) * 100))
                           : 0;
                       return (
                         <button
-                          key={h.slug}
+                          key={getMovieKey(hSrc, h.slug)}
                           type="button"
-                          onClick={() => openMovie(h.slug, h)}
+                          onClick={() => openMovie(h.slug, hSrc, h)}
                           className={`w-[13.5rem] shrink-0 text-left rounded-2xl border overflow-hidden active:scale-[0.98] transition ${theme.itemIdle}`}
                         >
                           <div className="relative aspect-video bg-slate-900">
@@ -1157,14 +1406,25 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                               className="w-full h-full object-cover"
                             />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-transparent" />
+                            <span
+                              className={`absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[0.58rem] font-black uppercase ${
+                                hSrc === 'vsmov'
+                                  ? 'bg-rose-600 text-white'
+                                  : 'bg-violet-600 text-white'
+                              }`}
+                            >
+                              {hSrc === 'vsmov' ? 'VSMov' : 'KKPhim'}
+                            </span>
                             <span className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-violet-600 text-white text-[0.65rem] font-black">
                               {h.episodeName}
                             </span>
-                            <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/75 text-white text-[0.62rem] font-mono font-bold">
-                              {formatSeconds(h.currentTime)}
-                            </span>
+                            {h.duration > 0 && (
+                              <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/75 text-white text-[0.62rem] font-mono font-bold">
+                                {formatSeconds(h.currentTime)}
+                              </span>
+                            )}
                             <div className="absolute bottom-0 inset-x-0 h-1 bg-white/25">
-                              <div className="h-full bg-rose-500" style={{ width: `${pct}%` }} />
+                              <div className="h-full bg-rose-500" style={{ width: `${pct || 15}%` }} />
                             </div>
                           </div>
                           <div className="p-2">
@@ -1184,7 +1444,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
               <div className="py-16 flex flex-col items-center justify-center gap-2.5">
                 <Loader2 className="w-8 h-8 text-violet-500 animate-spin" />
                 <p className={`text-sm font-bold ${theme.textSub}`}>
-                  Đang tải kho phim từ KKPhim...
+                  Đang tải kho phim từ {movieSource === 'vsmov' ? 'VSMov' : 'KKPhim'}...
                 </p>
               </div>
             ) : listError && libraryMode === 'browse' ? (
@@ -1221,11 +1481,13 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
               <>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-2.5 sm:gap-3">
                   {displayedList.map((movie) => {
-                    const isFav = favoriteSet.has(movie.slug);
+                    const mSrc = movie.source || movieSource;
+                    const mKey = getMovieKey(mSrc, movie.slug);
+                    const isFav = favoriteSet.has(mKey);
                     return (
                       <div
-                        key={movie.slug}
-                        onClick={() => openMovie(movie.slug)}
+                        key={mKey}
+                        onClick={() => openMovie(movie.slug, mSrc)}
                         className={`group rounded-2xl border overflow-hidden cursor-pointer flex flex-col active:scale-[0.98] transition ${theme.itemIdle}`}
                       >
                         <div className="relative aspect-[2/3] bg-slate-900 overflow-hidden">
@@ -1237,8 +1499,17 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                           />
                           <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-black/45" />
 
-                          {/* Top badges: Quality + Lang */}
+                          {/* Top badges: Source (ở tab Yêu thích) + Quality + Lang */}
                           <div className="absolute top-2 left-2 right-10 flex flex-wrap items-center gap-1">
+                            {libraryMode === 'favorites' && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded-md text-white text-[0.58rem] font-black leading-none uppercase shadow ${
+                                  mSrc === 'vsmov' ? 'bg-rose-600' : 'bg-violet-600'
+                                }`}
+                              >
+                                {mSrc === 'vsmov' ? 'VSMov' : 'KKPhim'}
+                              </span>
+                            )}
                             <span className="px-1.5 py-0.5 rounded-md bg-violet-600 text-white text-[0.6rem] font-black leading-none shadow">
                               {movie.quality}
                             </span>

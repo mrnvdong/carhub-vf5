@@ -233,12 +233,16 @@ export interface NewsTtsProviderInfo {
   voices: NewsTtsVoiceOption[];
 }
 
+export type MovieSource = 'kkphim' | 'vsmov';
+
 export type MovieListType =
   | 'moi-cap-nhat'
   | 'phim-thuyet-minh'
   | 'phim-long-tieng'
   | 'phim-le'
   | 'phim-bo'
+  | 'phim-chieu-rap'
+  | 'subteam'
   | 'hoat-hinh'
   | 'tv-shows'
   | 'phim-vietsub';
@@ -250,6 +254,7 @@ export interface MovieTaxon {
 
 export interface MovieItem {
   id: string;
+  source?: MovieSource;
   name: string;
   originName: string;
   slug: string;
@@ -295,6 +300,7 @@ export interface MovieDetail extends MovieItem {
 }
 
 export interface MovieListResponse {
+  source?: MovieSource;
   title: string;
   keyword?: string;
   page: number;
@@ -306,11 +312,13 @@ export interface MovieListResponse {
 }
 
 export interface MovieMetaResponse {
+  source?: MovieSource;
   genres: MovieTaxon[];
   countries: MovieTaxon[];
 }
 
 export interface MovieWatchHistoryItem {
+  source?: MovieSource;
   slug: string;
   name: string;
   originName: string;

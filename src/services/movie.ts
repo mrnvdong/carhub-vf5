@@ -4,6 +4,7 @@ import {
   MovieListResponse,
   MovieListType,
   MovieMetaResponse,
+  MovieSource,
   MovieWatchHistoryItem,
 } from '../types';
 
@@ -13,7 +14,7 @@ export interface MovieTabOption {
   icon: string;
 }
 
-export const MOVIE_TABS: MovieTabOption[] = [
+export const KKPHIM_TABS: MovieTabOption[] = [
   { id: 'moi-cap-nhat', label: 'Mới cập nhật', icon: '🔥' },
   { id: 'phim-thuyet-minh', label: 'Thuyết minh', icon: '🎙️' },
   { id: 'phim-long-tieng', label: 'Lồng tiếng', icon: '🗣️' },
@@ -24,24 +25,43 @@ export const MOVIE_TABS: MovieTabOption[] = [
   { id: 'phim-vietsub', label: 'Vietsub', icon: '📝' },
 ];
 
+export const VSMOV_TABS: MovieTabOption[] = [
+  { id: 'moi-cap-nhat', label: 'Mới cập nhật', icon: '🔥' },
+  { id: 'phim-chieu-rap', label: 'Chiếu rạp', icon: '🎟️' },
+  { id: 'subteam', label: 'Subteam', icon: '⭐' },
+  { id: 'phim-le', label: 'Phim lẻ', icon: '🎬' },
+  { id: 'phim-bo', label: 'Phim bộ', icon: '📺' },
+  { id: 'hoat-hinh', label: 'Hoạt hình', icon: '🎨' },
+];
+
+export function getMovieTabsForSource(source: MovieSource): MovieTabOption[] {
+  return source === 'vsmov' ? VSMOV_TABS : KKPHIM_TABS;
+}
+
+export function getMovieKey(source: MovieSource | undefined, slug: string): string {
+  return `${source || 'kkphim'}:${slug}`;
+}
+
 export const MOVIE_YEARS: number[] = Array.from({ length: 18 }, (_, i) => 2026 - i);
 
 const detailCache = new Map<string, { data: MovieDetail; ts: number }>();
 const DETAIL_CACHE_TTL_MS = 10 * 60 * 1000;
-let metaCache: MovieMetaResponse | null = null;
+const metaCache = new Map<MovieSource, MovieMetaResponse>();
 
-export async function fetchMovieMeta(): Promise<MovieMetaResponse> {
-  if (metaCache) return metaCache;
-  const res = await fetch('/api/movie?action=meta');
+export async function fetchMovieMeta(source: MovieSource = 'kkphim'): Promise<MovieMetaResponse> {
+  const hit = metaCache.get(source);
+  if (hit) return hit;
+  const res = await fetch(`/api/movie?action=meta&source=${source}`);
   const data = (await res.json()) as MovieMetaResponse;
   if (!res.ok) {
     throw new Error('Không tải được danh mục thể loại & quốc gia');
   }
-  metaCache = data;
+  metaCache.set(source, data);
   return data;
 }
 
 export interface MovieListQuery {
+  source?: MovieSource;
   type: MovieListType;
   page?: number;
   limit?: number;
@@ -54,7 +74,9 @@ export interface MovieListQuery {
 }
 
 export async function fetchMovieList(q: MovieListQuery): Promise<MovieListResponse> {
+  const src: MovieSource = q.source || 'kkphim';
   const params = new URLSearchParams();
+  params.set('source', src);
   if (q.keyword && q.keyword.trim()) {
     params.set('action', 'search');
     params.set('keyword', q.keyword.trim());
@@ -79,14 +101,20 @@ export async function fetchMovieList(q: MovieListQuery): Promise<MovieListRespon
   return data;
 }
 
-export async function fetchMovieDetail(slug: string, forceRefresh = false): Promise<MovieDetail> {
-  const cached = detailCache.get(slug);
+export async function fetchMovieDetail(
+  slug: string,
+  source: MovieSource = 'kkphim',
+  forceRefresh = false
+): Promise<MovieDetail> {
+  const cacheKey = getMovieKey(source, slug);
+  const cached = detailCache.get(cacheKey);
   if (!forceRefresh && cached && Date.now() - cached.ts < DETAIL_CACHE_TTL_MS) {
     return cached.data;
   }
 
   const params = new URLSearchParams({
     action: 'detail',
+    source,
     slug,
   });
   const res = await fetch(`/api/movie?${params.toString()}`);
@@ -95,11 +123,11 @@ export async function fetchMovieDetail(slug: string, forceRefresh = false): Prom
     throw new Error(data.error || `Không tải được chi tiết phim (HTTP ${res.status})`);
   }
 
-  if (detailCache.size >= 30) {
+  if (detailCache.size >= 36) {
     const firstKey = detailCache.keys().next().value;
     if (firstKey) detailCache.delete(firstKey);
   }
-  detailCache.set(slug, { data, ts: Date.now() });
+  detailCache.set(cacheKey, { data, ts: Date.now() });
   return data;
 }
 
@@ -250,8 +278,9 @@ export function loadMovieHistory(): MovieWatchHistoryItem[] {
 }
 
 export function saveMovieHistoryItem(entry: MovieWatchHistoryItem): MovieWatchHistoryItem[] {
-  const prev = loadMovieHistory().filter((x) => x.slug !== entry.slug);
-  const next = [entry, ...prev].slice(0, 40);
+  const targetKey = getMovieKey(entry.source, entry.slug);
+  const prev = loadMovieHistory().filter((x) => getMovieKey(x.source, x.slug) !== targetKey);
+  const next = [{ ...entry, source: entry.source || 'kkphim' }, ...prev].slice(0, 40);
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
   } catch {
@@ -260,8 +289,12 @@ export function saveMovieHistoryItem(entry: MovieWatchHistoryItem): MovieWatchHi
   return next;
 }
 
-export function removeMovieHistoryItem(slug: string): MovieWatchHistoryItem[] {
-  const next = loadMovieHistory().filter((x) => x.slug !== slug);
+export function removeMovieHistoryItem(
+  slug: string,
+  source: MovieSource = 'kkphim'
+): MovieWatchHistoryItem[] {
+  const targetKey = getMovieKey(source, slug);
+  const next = loadMovieHistory().filter((x) => getMovieKey(x.source, x.slug) !== targetKey);
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
   } catch {
@@ -285,10 +318,11 @@ export function toggleMovieFavoriteStorage(movie: MovieItem): {
   isFav: boolean;
 } {
   const prev = loadMovieFavorites();
-  const exists = prev.some((x) => x.slug === movie.slug);
+  const targetKey = getMovieKey(movie.source, movie.slug);
+  const exists = prev.some((x) => getMovieKey(x.source, x.slug) === targetKey);
   const list = exists
-    ? prev.filter((x) => x.slug !== movie.slug)
-    : [movie, ...prev].slice(0, 80);
+    ? prev.filter((x) => getMovieKey(x.source, x.slug) !== targetKey)
+    : [{ ...movie, source: movie.source || 'kkphim' }, ...prev].slice(0, 80);
   try {
     localStorage.setItem(FAVORITES_KEY, JSON.stringify(list));
   } catch {

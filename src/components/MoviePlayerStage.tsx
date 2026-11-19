@@ -134,6 +134,10 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
         } catch {}
         hlsRef.current = null;
       }
+      // Khi phát bằng Embed (như nguồn VSMov) -> vẫn tự tạm dừng Nhạc / TV / Báo Audio!
+      if (episode && playerMode === 'embed' && episode.linkEmbed) {
+        onBeforePlayRef.current?.();
+      }
       return;
     }
 

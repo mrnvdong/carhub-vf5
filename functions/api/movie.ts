@@ -1,13 +1,20 @@
 // Cloudflare Pages Function: /api/movie
-// Engine Phim Rạp KKPhim (https://phimapi.com — tài liệu chính thức https://kkphim.com/api-document):
-// - GET action=meta       : Lấy toàn bộ Thể loại (26) + Quốc gia (36), cache 24h
-// - GET action=list       : Lấy danh sách phim (moi-cap-nhat, phim-le, phim-bo, phim-thuyet-minh, phim-long-tieng, hoat-hinh, tv-shows, phim-vietsub, lọc thể loại/quốc gia/năm)
-// - GET action=search     : Tìm kiếm 30.000+ phim theo từ khóa tiếng Việt / tên gốc
-// - GET action=detail     : Lấy chi tiết phim + tất cả server (Vietsub / Thuyết Minh / Lồng Tiếng) + tập phim + link_m3u8 & link_embed
-// - GET action=clean-m3u8 : Lọc sạch quảng cáo chèn giữa phim (#EXT-X-DISCONTINUITY + convertv*/) nhưng giữ nguyên segment .ts chạy thẳng từ CDN gốc!
+// Engine Phim Rạp ĐA NGUỒN:
+// 1) KKPhim (https://phimapi.com — tài liệu https://kkphim.com/api-document) — 30.600+ phim, 1080p HLS
+// 2) VSMov  (https://vsmov.com/api — tài liệu https://vsmov.com/api-document) — 38.500+ phim, Chiếu rạp & Subteam
+// - GET action=meta&source=kkphim|vsmov   : Thể loại + Quốc gia, cache 24h
+// - GET action=list&source=...            : Danh sách & bộ lọc Thể loại / Quốc gia / Năm / Âm thanh
+// - GET action=search&source=...          : Tìm kiếm phim
+// - GET action=detail&source=...&slug=... : Chi tiết phim + Server + Tập phim + link_m3u8 & link_embed
+// - GET action=clean-m3u8                 : Lọc quảng cáo chèn trong HLS manifest
+
+type MovieSource = 'kkphim' | 'vsmov';
 
 const PHIMAPI_BASE = 'https://phimapi.com';
 const CDN_IMAGE_BASE = 'https://phimimg.com';
+
+const VSMOV_API_BASE = 'https://vsmov.com/api';
+const VSMOV_IMAGE_BASE = 'https://vsmov.com/storage/images';
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
@@ -19,7 +26,7 @@ const JSON_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-const VALID_LIST_SLUGS = new Set([
+const VALID_KKPHIM_LIST_SLUGS = new Set([
   'phim-le',
   'phim-bo',
   'hoat-hinh',
@@ -28,6 +35,23 @@ const VALID_LIST_SLUGS = new Set([
   'phim-thuyet-minh',
   'phim-long-tieng',
 ]);
+
+const VALID_VSMOV_LIST_SLUGS = new Set([
+  'phim-moi-cap-nhat',
+  'phim-le',
+  'phim-bo',
+  'phim-chieu-rap',
+  'subteam',
+]);
+
+function normalizeEpisodeLabel(rawName: unknown): string {
+  const cleaned = decodeEntities(rawName);
+  if (!cleaned) return 'Full';
+  if (/^\d+[a-z]?$/i.test(cleaned)) {
+    return `Tập ${cleaned}`;
+  }
+  return cleaned;
+}
 
 function decodeEntities(raw: unknown): string {
   if (typeof raw !== 'string') return '';
@@ -60,17 +84,35 @@ function normalizeImageUrl(raw: unknown, domain = CDN_IMAGE_BASE): string {
   return `${cleanDomain}/${cleanPath}`;
 }
 
-function normalizeMovieItem(raw: any, imgDomain = CDN_IMAGE_BASE) {
+function normalizeMovieItem(
+  raw: any,
+  imgDomain = CDN_IMAGE_BASE,
+  source: MovieSource = 'kkphim'
+) {
   const tmdbScore = Number(raw?.tmdb?.vote_average) || 0;
   const imdbScore = Number(raw?.imdb?.vote_average) || 0;
+
+  // VSMov dùng quy ước ngược ảnh so với KKPhim:
+  // - VSMov thumb_url là ảnh đứng 2:3 (poster), poster_url là ảnh ngang 16:9 (backdrop)!
+  // - KKPhim poster_url là ảnh đứng 2:3, thumb_url là ảnh ngang 16:9!
+  const posterUrl =
+    source === 'vsmov'
+      ? normalizeImageUrl(raw?.thumb_url || raw?.poster_url, imgDomain)
+      : normalizeImageUrl(raw?.poster_url || raw?.thumb_url, imgDomain);
+  const thumbUrl =
+    source === 'vsmov'
+      ? normalizeImageUrl(raw?.poster_url || raw?.thumb_url, imgDomain)
+      : normalizeImageUrl(raw?.thumb_url || raw?.poster_url, imgDomain);
+
   return {
     id: String(raw?._id || raw?.slug || ''),
+    source,
     name: decodeEntities(raw?.name),
     originName: decodeEntities(raw?.origin_name),
     slug: String(raw?.slug || '').trim(),
-    type: String(raw?.type || ''),
-    posterUrl: normalizeImageUrl(raw?.poster_url, imgDomain),
-    thumbUrl: normalizeImageUrl(raw?.thumb_url, imgDomain),
+    type: String(raw?.type || raw?.tmdb?.type || ''),
+    posterUrl,
+    thumbUrl,
     year: Number(raw?.year) || 0,
     quality: decodeEntities(raw?.quality) || 'HD',
     lang: decodeEntities(raw?.lang) || 'Vietsub',
@@ -79,7 +121,12 @@ function normalizeMovieItem(raw: any, imgDomain = CDN_IMAGE_BASE) {
     episodeTotal: raw?.episode_total ? String(raw.episode_total) : '',
     chieurap: Boolean(raw?.chieurap),
     subDocQuyen: Boolean(raw?.sub_docquyen),
-    rating: tmdbScore > 0 ? Math.round(tmdbScore * 10) / 10 : imdbScore > 0 ? Math.round(imdbScore * 10) / 10 : 0,
+    rating:
+      tmdbScore > 0
+        ? Math.round(tmdbScore * 10) / 10
+        : imdbScore > 0
+        ? Math.round(imdbScore * 10) / 10
+        : 0,
     categories: Array.isArray(raw?.category)
       ? raw.category
           .map((c: any) => ({ name: decodeEntities(c?.name), slug: String(c?.slug || '') }))
@@ -247,15 +294,20 @@ export const onRequest: PagesFunction = async (context) => {
 
   const reqUrl = new URL(request.url);
   const action = (reqUrl.searchParams.get('action') || 'list').toLowerCase();
+  const source: MovieSource =
+    (reqUrl.searchParams.get('source') || 'kkphim').toLowerCase() === 'vsmov'
+      ? 'vsmov'
+      : 'kkphim';
 
   // =========================================================================
-  // 1. ACTION = META (Danh sách Thể loại & Quốc gia)
+  // 1. ACTION = META (Danh sách Thể loại & Quốc gia theo nguồn KKPhim hoặc VSMov)
   // =========================================================================
   if (action === 'meta') {
+    const base = source === 'vsmov' ? VSMOV_API_BASE : PHIMAPI_BASE;
     try {
       const [tlRes, qgRes] = await Promise.all([
-        fetchJson(`${PHIMAPI_BASE}/the-loai`),
-        fetchJson(`${PHIMAPI_BASE}/quoc-gia`),
+        fetchJson(`${base}/the-loai`),
+        fetchJson(`${base}/quoc-gia`),
       ]);
       const rawGenres = Array.isArray(tlRes) ? tlRes : tlRes?.data?.items || [];
       const rawCountries = Array.isArray(qgRes) ? qgRes : qgRes?.data?.items || [];
@@ -267,7 +319,7 @@ export const onRequest: PagesFunction = async (context) => {
         .map((c: any) => ({ name: decodeEntities(c?.name), slug: String(c?.slug || '') }))
         .filter((c: any) => c.name && c.slug);
 
-      return new Response(JSON.stringify({ genres, countries }), {
+      return new Response(JSON.stringify({ source, genres, countries }), {
         status: 200,
         headers: {
           ...JSON_HEADERS,
@@ -276,14 +328,19 @@ export const onRequest: PagesFunction = async (context) => {
       });
     } catch (err: any) {
       return new Response(
-        JSON.stringify({ error: err?.message || 'Không tải được danh mục phim', genres: [], countries: [] }),
+        JSON.stringify({
+          source,
+          error: err?.message || 'Không tải được danh mục phim',
+          genres: [],
+          countries: [],
+        }),
         { status: 502, headers: JSON_HEADERS }
       );
     }
   }
 
   // =========================================================================
-  // 2. ACTION = LIST (Phim mới cập nhật v3 / Phim lẻ / Phim bộ / Thuyết minh / Lọc Thể loại, Quốc gia, Năm)
+  // 2. ACTION = LIST (Hỗ trợ cả KKPhim và VSMov: Mới cập nhật, Chiếu rạp, Subteam, Phim lẻ, Phim bộ, Bộ lọc...)
   // =========================================================================
   if (action === 'list') {
     const type = (reqUrl.searchParams.get('type') || 'moi-cap-nhat').toLowerCase();
@@ -292,24 +349,103 @@ export const onRequest: PagesFunction = async (context) => {
     const year = (reqUrl.searchParams.get('year') || '').trim();
     const sortLang = (reqUrl.searchParams.get('sort_lang') || '').trim().toLowerCase();
     const sortField = (reqUrl.searchParams.get('sort_field') || 'modified.time').trim();
-    const sortType = (reqUrl.searchParams.get('sort_type') || 'desc').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+    const sortType =
+      (reqUrl.searchParams.get('sort_type') || 'desc').trim().toLowerCase() === 'asc'
+        ? 'asc'
+        : 'desc';
     const pageRaw = parseInt(reqUrl.searchParams.get('page') || '1', 10);
     const page = Number.isFinite(pageRaw) && pageRaw >= 1 && pageRaw <= 500 ? pageRaw : 1;
     const limitRaw = parseInt(reqUrl.searchParams.get('limit') || '24', 10);
     const limit = Number.isFinite(limitRaw) && limitRaw >= 6 && limitRaw <= 48 ? limitRaw : 24;
 
+    // --- NHÁNH VSMOV (https://vsmov.com/api) ---
+    if (source === 'vsmov') {
+      try {
+        const params = new URLSearchParams();
+        params.set('page', String(page));
+        params.set('limit', String(limit));
+
+        let endpoint = '';
+        if (category && isSafeSlug(category)) {
+          endpoint = `${VSMOV_API_BASE}/the-loai/${category}`;
+          if (country && isSafeSlug(country)) params.set('country', country);
+          if (year && /^\d{4}$/.test(year)) params.set('year', year);
+        } else if (country && isSafeSlug(country)) {
+          endpoint = `${VSMOV_API_BASE}/quoc-gia/${country}`;
+          if (year && /^\d{4}$/.test(year)) params.set('year', year);
+        } else if (year && /^\d{4}$/.test(year)) {
+          endpoint = `${VSMOV_API_BASE}/nam/${year}`;
+        } else if (type === 'hoat-hinh') {
+          endpoint = `${VSMOV_API_BASE}/the-loai/hoat-hinh`;
+        } else {
+          const vsSlug =
+            type === 'moi-cap-nhat'
+              ? 'phim-moi-cap-nhat'
+              : VALID_VSMOV_LIST_SLUGS.has(type)
+              ? type
+              : 'phim-moi-cap-nhat';
+          endpoint = `${VSMOV_API_BASE}/danh-sach/${vsSlug}`;
+        }
+
+        const res = await fetchJson(`${endpoint}?${params.toString()}`);
+        const imgDomain = res?.pathImage || VSMOV_IMAGE_BASE;
+        const rawItems = Array.isArray(res?.items)
+          ? res.items
+          : Array.isArray(res?.data?.items)
+          ? res.data.items
+          : [];
+        const items = rawItems
+          .map((it: any) => normalizeMovieItem(it, imgDomain, 'vsmov'))
+          .filter((x: any) => x.slug);
+        const pag = res?.pagination || res?.data?.params?.pagination || {};
+
+        return new Response(
+          JSON.stringify({
+            source: 'vsmov',
+            title: 'Kho Phim VSMov',
+            page: Number(pag.currentPage) || page,
+            totalPages: Number(pag.totalPages) || 1,
+            totalItems: Number(pag.totalItems) || items.length,
+            items,
+          }),
+          {
+            status: 200,
+            headers: {
+              ...JSON_HEADERS,
+              'Cache-Control': 'public, max-age=180, s-maxage=180',
+            },
+          }
+        );
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({
+            source: 'vsmov',
+            error: err?.message || 'Không tải được danh sách phim từ VSMov',
+            items: [],
+            page: 1,
+            totalPages: 1,
+            totalItems: 0,
+          }),
+          { status: 502, headers: JSON_HEADERS }
+        );
+      }
+    }
+
+    // --- NHÁNH KKPHIM (https://phimapi.com) ---
     const hasFilters = Boolean(category || country || year || sortLang);
 
     try {
-      // Nếu không lọc nâng cao & chọn "Mới cập nhật" -> gọi v3 siêu nhanh (có updateToday & full thumb)
       if (type === 'moi-cap-nhat' && !hasFilters) {
         const res = await fetchJson(`${PHIMAPI_BASE}/danh-sach/phim-moi-cap-nhat-v3?page=${page}`);
         const items = Array.isArray(res?.items)
-          ? res.items.map((it: any) => normalizeMovieItem(it, CDN_IMAGE_BASE)).filter((x: any) => x.slug)
+          ? res.items
+              .map((it: any) => normalizeMovieItem(it, CDN_IMAGE_BASE, 'kkphim'))
+              .filter((x: any) => x.slug)
           : [];
         const pag = res?.pagination || {};
         return new Response(
           JSON.stringify({
+            source: 'kkphim',
             title: 'Phim Mới Cập Nhật',
             page: Number(pag.currentPage) || page,
             totalPages: Number(pag.totalPages) || 1,
@@ -327,7 +463,6 @@ export const onRequest: PagesFunction = async (context) => {
         );
       }
 
-      // Xây dựng URL V1 API theo bộ lọc chuẩn tài liệu KKPhim
       const params = new URLSearchParams();
       params.set('page', String(page));
       params.set('limit', String(limit));
@@ -346,7 +481,7 @@ export const onRequest: PagesFunction = async (context) => {
       } else if (type === 'moi-cap-nhat' && year && /^\d{4}$/.test(year)) {
         endpoint = `${PHIMAPI_BASE}/v1/api/nam/${year}`;
       } else {
-        const listSlug = VALID_LIST_SLUGS.has(type) ? type : 'phim-le';
+        const listSlug = VALID_KKPHIM_LIST_SLUGS.has(type) ? type : 'phim-le';
         endpoint = `${PHIMAPI_BASE}/v1/api/danh-sach/${listSlug}`;
         if (category && isSafeSlug(category)) params.set('category', category);
         if (country && isSafeSlug(country)) params.set('country', country);
@@ -357,12 +492,15 @@ export const onRequest: PagesFunction = async (context) => {
       const data = res?.data || {};
       const imgDomain = data.APP_DOMAIN_CDN_IMAGE || CDN_IMAGE_BASE;
       const items = Array.isArray(data.items)
-        ? data.items.map((it: any) => normalizeMovieItem(it, imgDomain)).filter((x: any) => x.slug)
+        ? data.items
+            .map((it: any) => normalizeMovieItem(it, imgDomain, 'kkphim'))
+            .filter((x: any) => x.slug)
         : [];
       const pag = data?.params?.pagination || {};
 
       return new Response(
         JSON.stringify({
+          source: 'kkphim',
           title: decodeEntities(data.titlePage) || 'Kho Phim KKPhim',
           page: Number(pag.currentPage) || page,
           totalPages: Number(pag.totalPages) || 1,
@@ -380,6 +518,7 @@ export const onRequest: PagesFunction = async (context) => {
     } catch (err: any) {
       return new Response(
         JSON.stringify({
+          source: 'kkphim',
           error: err?.message || 'Không tải được danh sách phim từ KKPhim',
           items: [],
           page: 1,
@@ -392,13 +531,13 @@ export const onRequest: PagesFunction = async (context) => {
   }
 
   // =========================================================================
-  // 3. ACTION = SEARCH (Tìm kiếm phim theo từ khóa)
+  // 3. ACTION = SEARCH (Tìm kiếm phim theo từ khóa trên KKPhim hoặc VSMov)
   // =========================================================================
   if (action === 'search') {
     const keyword = (reqUrl.searchParams.get('keyword') || reqUrl.searchParams.get('q') || '').trim();
     if (!keyword) {
       return new Response(
-        JSON.stringify({ items: [], page: 1, totalPages: 1, totalItems: 0 }),
+        JSON.stringify({ source, items: [], page: 1, totalPages: 1, totalItems: 0 }),
         { status: 200, headers: JSON_HEADERS }
       );
     }
@@ -423,16 +562,52 @@ export const onRequest: PagesFunction = async (context) => {
     if (sortLang) params.set('sort_lang', sortLang);
 
     try {
+      if (source === 'vsmov') {
+        const res = await fetchJson(`${VSMOV_API_BASE}/tim-kiem?${params.toString()}`);
+        const imgDomain = res?.pathImage || VSMOV_IMAGE_BASE;
+        const rawItems = Array.isArray(res?.items)
+          ? res.items
+          : Array.isArray(res?.data?.items)
+          ? res.data.items
+          : [];
+        const items = rawItems
+          .map((it: any) => normalizeMovieItem(it, imgDomain, 'vsmov'))
+          .filter((x: any) => x.slug);
+        const pag = res?.pagination || res?.data?.params?.pagination || {};
+
+        return new Response(
+          JSON.stringify({
+            source: 'vsmov',
+            title: `Tìm kiếm VSMov: "${keyword}"`,
+            keyword,
+            page: Number(pag.currentPage) || page,
+            totalPages: Number(pag.totalPages) || 1,
+            totalItems: Number(pag.totalItems) || items.length,
+            items,
+          }),
+          {
+            status: 200,
+            headers: {
+              ...JSON_HEADERS,
+              'Cache-Control': 'public, max-age=180, s-maxage=180',
+            },
+          }
+        );
+      }
+
       const res = await fetchJson(`${PHIMAPI_BASE}/v1/api/tim-kiem?${params.toString()}`);
       const data = res?.data || {};
       const imgDomain = data.APP_DOMAIN_CDN_IMAGE || CDN_IMAGE_BASE;
       const items = Array.isArray(data.items)
-        ? data.items.map((it: any) => normalizeMovieItem(it, imgDomain)).filter((x: any) => x.slug)
+        ? data.items
+            .map((it: any) => normalizeMovieItem(it, imgDomain, 'kkphim'))
+            .filter((x: any) => x.slug)
         : [];
       const pag = data?.params?.pagination || {};
 
       return new Response(
         JSON.stringify({
+          source: 'kkphim',
           title: `Tìm kiếm: "${keyword}"`,
           keyword,
           page: Number(pag.currentPage) || page,
@@ -451,7 +626,8 @@ export const onRequest: PagesFunction = async (context) => {
     } catch (err: any) {
       return new Response(
         JSON.stringify({
-          error: err?.message || 'Lỗi tìm kiếm phim trên KKPhim',
+          source,
+          error: err?.message || `Lỗi tìm kiếm phim trên ${source === 'vsmov' ? 'VSMov' : 'KKPhim'}`,
           items: [],
           page: 1,
           totalPages: 1,
@@ -463,7 +639,7 @@ export const onRequest: PagesFunction = async (context) => {
   }
 
   // =========================================================================
-  // 4. ACTION = DETAIL (Chi tiết phim + danh sách Server & Tập phim + link_m3u8)
+  // 4. ACTION = DETAIL (Chi tiết phim + Server & Tập phim từ KKPhim hoặc VSMov)
   // =========================================================================
   if (action === 'detail') {
     const slug = (reqUrl.searchParams.get('slug') || '').trim().toLowerCase();
@@ -474,14 +650,18 @@ export const onRequest: PagesFunction = async (context) => {
       });
     }
 
+    const detailUrl =
+      source === 'vsmov' ? `${VSMOV_API_BASE}/phim/${slug}` : `${PHIMAPI_BASE}/phim/${slug}`;
+
     try {
-      const res = await fetchJson(`${PHIMAPI_BASE}/phim/${slug}`);
+      const res = await fetchJson(detailUrl);
       const m = res?.movie;
       if (!m || typeof m !== 'object') {
         throw new Error('Không tìm thấy thông tin phim');
       }
 
-      const baseItem = normalizeMovieItem(m, CDN_IMAGE_BASE);
+      const imgDomain = source === 'vsmov' ? VSMOV_IMAGE_BASE : CDN_IMAGE_BASE;
+      const baseItem = normalizeMovieItem(m, imgDomain, source);
       const servers = Array.isArray(res?.episodes)
         ? res.episodes
             .map((srv: any) => ({
@@ -489,7 +669,7 @@ export const onRequest: PagesFunction = async (context) => {
               episodes: Array.isArray(srv?.server_data)
                 ? srv.server_data
                     .map((ep: any) => ({
-                      name: decodeEntities(ep?.name) || 'Full',
+                      name: normalizeEpisodeLabel(ep?.name),
                       slug: String(ep?.slug || '').trim(),
                       filename: decodeEntities(ep?.filename),
                       linkEmbed: typeof ep?.link_embed === 'string' ? ep.link_embed.trim() : '',
