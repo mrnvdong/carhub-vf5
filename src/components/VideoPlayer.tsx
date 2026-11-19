@@ -1,4 +1,12 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  Suspense,
+} from 'react';
 import {
   Play,
   Pause,
@@ -62,6 +70,8 @@ import { fetchSponsorSegments, getSponsorCategoryLabel } from '../services/spons
 import { useCarHardwareControls } from '../hooks/useCarHardwareControls';
 import { useCockpitTelemetry } from '../hooks/useCockpitTelemetry';
 import { CockpitView, VideoSlotRect } from './CockpitView';
+
+const LazyTvLiveView = React.lazy(() => import('./TvLiveView'));
 
 interface VideoPlayerProps {
   streamData: StreamData;
@@ -265,6 +275,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const effectiveVideoMode = isVideoMode && !isSoundCloudTrack;
   const isNowPlayingView = railSection === 'nowPlaying';
   const isCockpitView = railSection === 'cockpit';
+  const isTvView = railSection === 'tv';
   const showVideoInViewport = effectiveVideoMode && isNowPlayingView;
   const showVideoInCockpit =
     effectiveVideoMode && isCockpitView && !isFullscreen && hasCockpitVideoSlot;
@@ -899,6 +910,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setIsPlaying(false);
   }, [postEmbedCommand]);
 
+  const pauseAllMusicForTv = useCallback(() => {
+    try {
+      audioRef.current?.pause();
+    } catch {}
+    postEmbedCommand('pauseVideo');
+    setIsPlaying(false);
+  }, [postEmbedCommand]);
+
   const togglePlay = useCallback(() => {
     if (isPlaying) {
       handlePauseExplicit();
@@ -1232,13 +1251,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('cockpit')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'cockpit'
                   ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/45 shadow-inner'
                   : 'text-white/65 hover:text-white hover:bg-white/10'
               }`}
             >
-              <Gauge className="w-4 h-4" />
+              <Gauge className="w-4 h-4 short:w-3.5 short:h-3.5" />
               <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
                 Cockpit
               </span>
@@ -1246,14 +1265,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             <button
               type="button"
+              onClick={() => onChangeRailSection('tv')}
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+                railSection === 'tv'
+                  ? 'bg-sky-500/25 text-sky-200 border border-sky-400/50 shadow-inner'
+                  : 'text-white/65 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              <Tv className="w-4 h-4 short:w-3.5 short:h-3.5" />
+              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
+                TV Live
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => onChangeRailSection('nowPlaying')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'nowPlaying'
                   ? 'bg-white/20 text-white border border-white/25 shadow-inner'
                   : 'text-white/65 hover:text-white hover:bg-white/10'
               }`}
             >
-              {effectiveVideoMode ? <Tv className="w-4 h-4" /> : <Headphones className="w-4 h-4" />}
+              {effectiveVideoMode ? (
+                <Tv className="w-4 h-4 short:w-3.5 short:h-3.5" />
+              ) : (
+                <Headphones className="w-4 h-4 short:w-3.5 short:h-3.5" />
+              )}
               <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
                 Đang phát
               </span>
@@ -1262,13 +1300,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('browse')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'browse'
                   ? 'bg-white/20 text-white border border-white/25 shadow-inner'
                   : 'text-white/65 hover:text-white hover:bg-white/10'
               }`}
             >
-              <Compass className="w-4 h-4" />
+              <Compass className="w-4 h-4 short:w-3.5 short:h-3.5" />
               <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
                 Khám phá
               </span>
@@ -1277,9 +1315,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onOpenSearchModal(false)}
-              className="flex flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] w-14 car:w-full py-1 rounded-xl text-white/65 hover:text-white hover:bg-white/10 ios-spring-fast active:scale-95"
+              className="flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl text-white/65 hover:text-white hover:bg-white/10 ios-spring-fast active:scale-95"
             >
-              <Search className="w-4 h-4" />
+              <Search className="w-4 h-4 short:w-3.5 short:h-3.5" />
               <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
                 Tìm kiếm
               </span>
@@ -1288,13 +1326,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('favorites')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'favorites'
                   ? 'bg-white/20 text-white border border-white/25 shadow-inner'
                   : 'text-white/65 hover:text-white hover:bg-white/10'
               }`}
             >
-              <Bookmark className="w-4 h-4" />
+              <Bookmark className="w-4 h-4 short:w-3.5 short:h-3.5" />
               <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
                 Playlist{favoritesCount > 0 ? ` (${favoritesCount})` : ''}
               </span>
@@ -1303,13 +1341,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('history')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'history'
                   ? 'bg-white/20 text-white border border-white/25 shadow-inner'
                   : 'text-white/65 hover:text-white hover:bg-white/10'
               }`}
             >
-              <History className="w-4 h-4" />
+              <History className="w-4 h-4 short:w-3.5 short:h-3.5" />
               <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
                 Lịch sử
               </span>
@@ -2198,9 +2236,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
 
         {/* -------------------------------------------------------------------
+            B2. MÀN HÌNH TRUYỀN HÌNH & RADIO TRỰC TIẾP M3U8 (VTV, VOV Giao thông, HTV, Thể thao...)
+           ------------------------------------------------------------------- */}
+        {isTvView && (
+          <Suspense
+            fallback={
+              <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center">
+                <Loader2 className="w-9 h-9 text-sky-400 animate-spin" />
+                <p className="text-sm font-extrabold text-white/80">
+                  Đang mở Truyền hình & Radio trực tiếp...
+                </p>
+              </div>
+            }
+          >
+            <LazyTvLiveView onPauseMusic={pauseAllMusicForTv} onNotifyToast={showToast} />
+          </Suspense>
+        )}
+
+        {/* -------------------------------------------------------------------
             C. MÀN HÌNH KHÁM PHÁ / PLAYLIST ĐỒNG BỘ / LỊCH SỬ + MINI PLAYER
            ------------------------------------------------------------------- */}
-        {!isNowPlayingView && !isCockpitView && (
+        {!isNowPlayingView && !isCockpitView && !isTvView && (
           <div
             key={`browse-${railSection}-${viewMode}-${selectedPlaylistId}`}
             className="flex-1 flex flex-col min-h-0 max-w-6xl mx-auto w-full animate-ios-browse-in"
@@ -2285,6 +2341,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <span className="text-xs font-mono font-bold text-white/60 bg-white/10 px-2.5 py-1 rounded-full border border-white/10">
                   {browseVideos.length} bài
                 </span>
+
+                {railSection === 'browse' && hasMoreExplore && (
+                  <button
+                    type="button"
+                    onClick={onLoadMoreExplore}
+                    disabled={isLoadingMoreExplore}
+                    className={`min-h-[32px] px-2.5 rounded-full text-xs font-extrabold border flex items-center gap-1 active:scale-95 transition disabled:opacity-50 ${
+                      musicSource === 'soundcloud'
+                        ? 'bg-[#ff5500]/25 hover:bg-[#ff5500]/40 border-orange-400/50 text-orange-200'
+                        : 'bg-white/12 hover:bg-white/22 border-white/20 text-white'
+                    }`}
+                  >
+                    {isLoadingMoreExplore ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="w-3.5 h-3.5" />
+                    )}
+                    <span className="hidden xs:inline">Xem thêm</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -2477,7 +2553,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     type="button"
                     onClick={onLoadMoreExplore}
                     disabled={isLoadingMoreExplore}
-                    className="w-full sm:max-w-md min-h-[46px] rounded-2xl bg-white/12 hover:bg-white/20 border border-white/20 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg ios-spring-fast active:scale-95 disabled:opacity-50"
+                    className={`w-full sm:max-w-md min-h-[46px] rounded-2xl border font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg ios-spring-fast active:scale-95 disabled:opacity-50 ${
+                      musicSource === 'soundcloud'
+                        ? 'bg-[#ff5500]/25 hover:bg-[#ff5500]/40 border-orange-400/55 text-white'
+                        : 'bg-white/12 hover:bg-white/20 border-white/20 text-white'
+                    }`}
                   >
                     {isLoadingMoreExplore ? (
                       <>
@@ -2487,7 +2567,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     ) : (
                       <>
                         <ChevronDown className="w-4 h-4" />
-                        <span>Xem thêm {isVideoMode ? 'video' : 'bài hát'}</span>
+                        <span>
+                          {musicSource === 'soundcloud'
+                            ? '☁️ Xem thêm bài hát SoundCloud'
+                            : `Xem thêm ${isVideoMode ? 'video' : 'bài hát'}`}
+                        </span>
                       </>
                     )}
                   </button>

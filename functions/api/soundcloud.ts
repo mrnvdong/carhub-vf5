@@ -292,14 +292,14 @@ export async function onRequestGet(context: any) {
   }
 
   // =========================================================================
-  // 3. SEARCH FULL-LENGTH TRACKS ON SOUNDCLOUD
+  // 3. SEARCH FULL-LENGTH TRACKS ON SOUNDCLOUD (có phân trang & bỏ qua trang toàn SNIP)
   // =========================================================================
   const query = (url.searchParams.get('q') || 'vinahouse nonstop remix').trim();
-  const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
+  const initialOffset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
 
   const cache = (caches as any).default;
   const cacheKey = new Request(
-    `https://carhub-sc-search.internal/v1?q=${encodeURIComponent(query.toLowerCase())}&o=${offset}`
+    `https://carhub-sc-search.internal/v2?q=${encodeURIComponent(query.toLowerCase())}&o=${initialOffset}`
   );
   if (cache) {
     try {
@@ -309,42 +309,85 @@ export async function onRequestGet(context: any) {
   }
 
   const limit = 25;
-  const searchResp = await fetchSoundCloudJson(
-    `/search/tracks?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`,
-    context
-  );
+  const seen = new Set<string>();
+  const items: NonNullable<ReturnType<typeof mapSoundCloudTrack>>[] = [];
+  let cursorOffset = initialOffset;
+  let nextOffset: number | null = null;
+  let anySuccess = false;
 
-  if (!searchResp?.ok || !searchResp.data) {
-    return new Response(
-      JSON.stringify({
-        success: false,
-        items: [],
-        nextContinuation: null,
-        error: 'Không kết nối được tới máy chủ SoundCloud.',
-      }),
-      { status: 502, headers: CORS_HEADERS }
+  // Tối đa gom 2 trang liên tiếp nếu trang đầu có nhiều bản nghe thử 30s (Go+ SNIP) bị lọc bỏ
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const searchResp = await fetchSoundCloudJson(
+      `/search/tracks?q=${encodeURIComponent(query)}&limit=${limit}&offset=${cursorOffset}&linked_partitioning=1`,
+      context
     );
+
+    if (!searchResp?.ok || !searchResp.data) {
+      if (attempt === 0) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            items: [],
+            nextContinuation: null,
+            error: 'Không kết nối được tới máy chủ SoundCloud.',
+          }),
+          { status: 502, headers: CORS_HEADERS }
+        );
+      }
+      break;
+    }
+
+    anySuccess = true;
+    const rawCollection: any[] = Array.isArray(searchResp.data.collection)
+      ? searchResp.data.collection
+      : [];
+
+    for (const rawTrack of rawCollection) {
+      const mapped = mapSoundCloudTrack(rawTrack);
+      if (mapped && !seen.has(mapped.id)) {
+        seen.add(mapped.id);
+        items.push(mapped);
+      }
+    }
+
+    // Xác định offset tiếp theo từ next_href của SoundCloud (hoặc total_results)
+    let computedNextOffset: number | null = null;
+    if (typeof searchResp.data.next_href === 'string' && searchResp.data.next_href.length > 0) {
+      try {
+        const nextUrl = new URL(searchResp.data.next_href);
+        const parsedOff = parseInt(nextUrl.searchParams.get('offset') || '', 10);
+        if (!isNaN(parsedOff) && parsedOff > cursorOffset) {
+          computedNextOffset = parsedOff;
+        } else {
+          computedNextOffset = cursorOffset + Math.max(rawCollection.length, limit);
+        }
+      } catch {
+        computedNextOffset = cursorOffset + Math.max(rawCollection.length, limit);
+      }
+    } else if (
+      rawCollection.length > 0 &&
+      Number(searchResp.data.total_results || 0) > cursorOffset + rawCollection.length
+    ) {
+      computedNextOffset = cursorOffset + rawCollection.length;
+    }
+
+    if (computedNextOffset !== null && computedNextOffset < 500 && rawCollection.length > 0) {
+      nextOffset = computedNextOffset;
+      cursorOffset = computedNextOffset;
+    } else {
+      nextOffset = null;
+      break;
+    }
+
+    // Đủ số bài phát được -> dừng sớm, không tốn thêm request
+    if (items.length >= 12) break;
   }
 
-  const rawCollection: any[] = Array.isArray(searchResp.data.collection)
-    ? searchResp.data.collection
-    : [];
-
-  const seen = new Set<string>();
-  const items = rawCollection
-    .map(mapSoundCloudTrack)
-    .filter((it: any): it is NonNullable<typeof it> => {
-      if (!it || seen.has(it.id)) return false;
-      seen.add(it.id);
-      return true;
-    });
-
-  const hasMore = Boolean(searchResp.data.next_href) && rawCollection.length >= 10;
-  const nextContinuation = hasMore ? `sc_offset:${offset + limit}` : null;
+  const nextContinuation = nextOffset !== null ? `sc_offset:${nextOffset}` : null;
 
   const resp = new Response(
     JSON.stringify({
-      success: items.length > 0,
+      success: anySuccess && (items.length > 0 || nextContinuation !== null),
       source: 'soundcloud-v2',
       items,
       nextContinuation,

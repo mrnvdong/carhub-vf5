@@ -74,5 +74,42 @@ export type UiScale = 'normal' | 'large' | 'xlarge';
 export type ViewMode = 'classic' | 'ytmusic';
 export type RepeatMode = 'off' | 'all' | 'one';
 export type NightMode = 'auto' | 'on' | 'off';
-export type RailSection = 'nowPlaying' | 'cockpit' | 'browse' | 'favorites' | 'history';
+export type RailSection = 'nowPlaying' | 'cockpit' | 'tv' | 'browse' | 'favorites' | 'history';
 export type QueueSource = 'explore' | 'mix' | 'favorites' | 'playlist' | 'history';
+
+export interface TvChannel {
+  id: string;
+  name: string;
+  group: string;
+  logo: string;
+  tvgId: string;
+  url: string;
+  ua?: string;
+  referer?: string;
+  isRadio: boolean;
+  isVod: boolean;
+}
+
+export interface TvGroupInfo {
+  name: string;
+  count: number;
+}
+
+export interface TvPlaylistData {
+  sourceUrl: string;
+  resolvedSourceUrl?: string;
+  epgUrl: string | null;
+  totalRaw: number;
+  totalPlayable: number;
+  totalDrmFiltered: number;
+  groups: TvGroupInfo[];
+  channels: TvChannel[];
+}
+
+export interface TvResolvedStream {
+  mode: 'direct' | 'proxy';
+  streamType: 'hls' | 'audio';
+  playUrl: string;
+  directUrl: string | null;
+  proxyUrl: string;
+}

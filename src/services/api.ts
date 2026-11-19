@@ -75,7 +75,7 @@ export async function searchSoundCloud(
     const contentType = res.headers.get('content-type') || '';
     if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
-      if (Array.isArray(data.items) && data.items.length > 0) {
+      if (Array.isArray(data.items) && (data.items.length > 0 || data.nextContinuation)) {
         return {
           items: dedupeVideos(data.items),
           nextContinuation: data.nextContinuation || null,

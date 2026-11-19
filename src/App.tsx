@@ -277,6 +277,8 @@ export const App: React.FC = () => {
       return [];
     }
   });
+  const videosRef = useRef<VideoItem[]>(videos);
+  videosRef.current = videos;
 
   // Upgrade #5: Auto-Mix Queue state
   const [mixVideos, setMixVideos] = useState<VideoItem[]>([]);
@@ -695,9 +697,8 @@ export const App: React.FC = () => {
       setIsLoadingVideos(true);
       setNextContinuation(null);
 
-      setRailSection((prev) =>
-        prev === 'favorites' || prev === 'history' ? 'cockpit' : prev
-      );
+      // Mở ngay màn hình Kết quả tìm kiếm (browse) để thấy toàn bộ danh sách + nút "Xem thêm"
+      setRailSection('browse');
 
       setRecentSearches((prev) => {
         const filtered = prev.filter((item) => item.toLowerCase() !== cleanQuery.toLowerCase());
@@ -711,8 +712,6 @@ export const App: React.FC = () => {
         setNextContinuation(result.nextContinuation);
         if (result.items.length > 0) {
           playVideo(result.items[0], 'explore');
-        } else {
-          setRailSection('browse');
         }
       } catch (err) {
         if (!controller.signal.aborted) {
@@ -775,19 +774,38 @@ export const App: React.FC = () => {
       : searchQuery || 'nhạc hay trên ô tô';
 
     try {
-      const result = await searchVideos(
-        activeQuery,
-        nextContinuation,
-        undefined,
-        musicSourceRef.current
-      );
+      const existingIds = new Set(videosRef.current.map((v) => v.id));
+      let cursor: string | null = nextContinuation;
       let appended: VideoItem[] = [];
-      setVideos((prev) => {
-        const existingIds = new Set(prev.map((v) => v.id));
-        appended = result.items.filter((item) => !existingIds.has(item.id));
-        return [...prev, ...appended];
-      });
-      setNextContinuation(result.nextContinuation);
+
+      // Thử tối đa 2 trang nếu trang kế tiếp trên SoundCloud chứa trùng lặp / Go+ SNIP
+      for (let step = 0; step < 2 && cursor; step++) {
+        const result = await searchVideos(
+          activeQuery,
+          cursor,
+          undefined,
+          musicSourceRef.current
+        );
+        const fresh = result.items.filter((item) => {
+          if (existingIds.has(item.id)) return false;
+          existingIds.add(item.id);
+          return true;
+        });
+        if (fresh.length > 0) {
+          appended = [...appended, ...fresh];
+        }
+        cursor = result.nextContinuation && result.nextContinuation !== cursor ? result.nextContinuation : null;
+        if (appended.length > 0) break;
+      }
+
+      if (appended.length > 0) {
+        setVideos((prev) => {
+          const prevIds = new Set(prev.map((v) => v.id));
+          const unique = appended.filter((item) => !prevIds.has(item.id));
+          return [...prev, ...unique];
+        });
+      }
+      setNextContinuation(cursor);
       return appended;
     } catch (err) {
       console.error('Load more failed', err);
