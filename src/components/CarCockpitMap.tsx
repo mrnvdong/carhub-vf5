@@ -3,6 +3,7 @@ import {
   Map as MapLibreMap,
   Marker as MapLibreMarker,
   GeoJSONSource,
+  RasterTileSource,
   LngLatBounds,
   StyleSpecification,
   setWorkerUrl,
@@ -34,6 +35,7 @@ import {
   Home,
   Briefcase,
   Trash2,
+  RefreshCw,
 } from 'lucide-react';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
 import { ActiveNavSummary, PendingNavTarget, SavedPlace } from '../types';
@@ -251,6 +253,31 @@ const THEME_LABELS: Record<MapTheme, string> = {
   satellite: 'Vệ tinh',
 };
 
+const TRAFFIC_SOURCE_ID = 'carhub-traffic';
+const TRAFFIC_LAYER_ID = 'carhub-traffic-layer';
+
+function buildTrafficTileUrls(tick: number): string[] {
+  // Lớp tile giao thông trong suốt (Retina 2x, chỉ giữ vệt màu xanh/vàng/đỏ, ẩn hoàn toàn đường/chữ nền trùng lặp)
+  const query = `lyrs=h,traffic&apistyle=s.e:g%7Cp.v:off,s.e:l%7Cp.v:off&scale=2&x={x}&y={y}&z={z}&_t=${tick}`;
+  return [
+    `https://mt0.google.com/vt?${query}`,
+    `https://mt1.google.com/vt?${query}`,
+    `https://mt2.google.com/vt?${query}`,
+    `https://mt3.google.com/vt?${query}`,
+  ];
+}
+
+function findTrafficBeforeLayerId(map: MapLibreMap): string | undefined {
+  // Đặt lớp giao thông ngay dưới tòa nhà 3D để nhà 3D, tên đường và vệt dẫn đường luôn sắc nét bên trên
+  if (map.getLayer('building-3d')) return 'building-3d';
+  if (map.getLayer('highway-name-path')) return 'highway-name-path';
+  const layers = map.getStyle()?.layers || [];
+  const firstSymbol = layers.find((l) => l.type === 'symbol');
+  if (firstSymbol?.id) return firstSymbol.id;
+  if (map.getLayer('carhub-route-casing')) return 'carhub-route-casing';
+  return undefined;
+}
+
 interface PlaceItem {
   name: string;
   subtitle: string;
@@ -410,6 +437,25 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
     }
   });
 
+  // Lớp tình trạng giao thông trực tiếp (xanh/vàng/đỏ), mặc định BẬT và tự cập nhật mỗi 2 phút
+  const [showTraffic, setShowTraffic] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_cockpit_traffic');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [trafficTick, setTrafficTick] = useState<number>(0);
+  const [trafficUpdatedAt, setTrafficUpdatedAt] = useState<string>(() =>
+    new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+  );
+  const showTrafficRef = useRef<boolean>(showTraffic);
+  showTrafficRef.current = showTraffic;
+  const trafficTickRef = useRef<number>(trafficTick);
+  trafficTickRef.current = trafficTick;
+  const appliedTrafficTickRef = useRef<number>(-1);
+
   const [is3DHeadingUp, setIs3DHeadingUp] = useState<boolean>(true);
   const [isFollowing, setIsFollowing] = useState<boolean>(true);
   const [isRouteOverview, setIsRouteOverview] = useState<boolean>(false);
@@ -450,6 +496,141 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       localStorage.setItem('carhub_voice_nav', String(voiceNavEnabled));
     } catch {}
   }, [voiceNavEnabled]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_cockpit_traffic', String(showTraffic));
+    } catch {}
+  }, [showTraffic]);
+
+  // Tự động làm mới lớp giao thông mỗi 2 phút khi đang bật & hiển thị bản đồ
+  useEffect(() => {
+    if (!showTraffic || !isVisible) return;
+    const timer = window.setInterval(() => {
+      setTrafficTick((t) => t + 1);
+      setTrafficUpdatedAt(
+        new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+      );
+    }, 120_000);
+    return () => window.clearInterval(timer);
+  }, [showTraffic, isVisible]);
+
+  const handleToggleTraffic = useCallback(() => {
+    setShowTraffic((prev) => {
+      const next = !prev;
+      if (next) {
+        setTrafficUpdatedAt(
+          new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+        );
+      }
+      onNotifyToast?.(
+        next
+          ? '🚦 Đã bật lớp Giao thông trực tiếp (tự cập nhật 2 phút/lần)'
+          : 'Đã tắt lớp Giao thông'
+      );
+      return next;
+    });
+  }, [onNotifyToast]);
+
+  const handleRefreshTrafficNow = useCallback(() => {
+    setShowTraffic(true);
+    setTrafficTick((t) => t + 1);
+    setTrafficUpdatedAt(
+      new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+    );
+    onNotifyToast?.('🔄 Đã làm mới tình trạng giao thông trực tiếp');
+  }, [onNotifyToast]);
+
+  // Đồng bộ lớp tình trạng giao thông trực tiếp (xanh/vàng/đỏ) lên MapLibre
+  const syncTrafficLayerToMap = useCallback((map: MapLibreMap) => {
+    const apply = () => {
+      try {
+        const enabled = showTrafficRef.current;
+        const tick = trafficTickRef.current;
+        const light = isLightMapRef.current;
+        const opacity = light ? 0.88 : 0.96;
+
+        if (!enabled) {
+          if (map.getLayer(TRAFFIC_LAYER_ID)) {
+            map.removeLayer(TRAFFIC_LAYER_ID);
+          }
+          if (map.getSource(TRAFFIC_SOURCE_ID)) {
+            map.removeSource(TRAFFIC_SOURCE_ID);
+          }
+          appliedTrafficTickRef.current = -1;
+          return;
+        }
+
+        const tiles = buildTrafficTileUrls(tick);
+        const existingSource = map.getSource(TRAFFIC_SOURCE_ID) as RasterTileSource | undefined;
+        const existingLayer = map.getLayer(TRAFFIC_LAYER_ID);
+
+        if (existingSource && existingLayer) {
+          map.setPaintProperty(TRAFFIC_LAYER_ID, 'raster-opacity', opacity);
+          if (appliedTrafficTickRef.current !== tick) {
+            if (typeof existingSource.setTiles === 'function') {
+              existingSource.setTiles(tiles);
+            } else {
+              map.removeLayer(TRAFFIC_LAYER_ID);
+              map.removeSource(TRAFFIC_SOURCE_ID);
+              map.addSource(TRAFFIC_SOURCE_ID, {
+                type: 'raster',
+                tiles,
+                tileSize: 256,
+                minzoom: 5,
+                maxzoom: 19,
+              });
+              map.addLayer(
+                {
+                  id: TRAFFIC_LAYER_ID,
+                  type: 'raster',
+                  source: TRAFFIC_SOURCE_ID,
+                  paint: {
+                    'raster-opacity': opacity,
+                    'raster-fade-duration': 200,
+                  },
+                },
+                findTrafficBeforeLayerId(map)
+              );
+            }
+            appliedTrafficTickRef.current = tick;
+          }
+          return;
+        }
+
+        if (existingLayer) map.removeLayer(TRAFFIC_LAYER_ID);
+        if (existingSource) map.removeSource(TRAFFIC_SOURCE_ID);
+
+        map.addSource(TRAFFIC_SOURCE_ID, {
+          type: 'raster',
+          tiles,
+          tileSize: 256,
+          minzoom: 5,
+          maxzoom: 19,
+        });
+
+        map.addLayer(
+          {
+            id: TRAFFIC_LAYER_ID,
+            type: 'raster',
+            source: TRAFFIC_SOURCE_ID,
+            paint: {
+              'raster-opacity': opacity,
+              'raster-fade-duration': 200,
+            },
+          },
+          findTrafficBeforeLayerId(map)
+        );
+        appliedTrafficTickRef.current = tick;
+      } catch {}
+    };
+
+    if (map.isStyleLoaded()) {
+      apply();
+    } else {
+      map.once('idle', apply);
+    }
+  }, []);
 
   // Đồng bộ vệt dẫn đường lên MapLibre (Xanh Hoàng Gia trên nền Sáng & Xanh Neon trên nền Đêm)
   const syncRouteDataToMap = useCallback((map: MapLibreMap) => {
@@ -547,10 +728,12 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       map.on('load', () => {
         map.resize();
         syncRouteDataToMap(map);
+        syncTrafficLayerToMap(map);
       });
 
       map.on('style.load', () => {
         syncRouteDataToMap(map);
+        syncTrafficLayerToMap(map);
       });
 
       map.on('dragstart', () => {
@@ -664,16 +847,27 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
     let cancelled = false;
     resolveStyleForTheme(mapTheme).then((style) => {
       if (cancelled || !mapRef.current) return;
+      appliedTrafficTickRef.current = -1;
       mapRef.current.setStyle(style, { diff: false });
       mapRef.current.once('idle', () => {
-        if (mapRef.current) syncRouteDataToMap(mapRef.current);
+        if (mapRef.current) {
+          syncRouteDataToMap(mapRef.current);
+          syncTrafficLayerToMap(mapRef.current);
+        }
       });
     });
 
     return () => {
       cancelled = true;
     };
-  }, [mapTheme, syncRouteDataToMap]);
+  }, [mapTheme, syncRouteDataToMap, syncTrafficLayerToMap]);
+
+  // Đồng bộ bật/tắt & làm mới lớp Giao thông trực tiếp trên bản đồ
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    syncTrafficLayerToMap(map);
+  }, [showTraffic, trafficTick, mapTheme, syncTrafficLayerToMap]);
 
   // Nếu xe bắt đầu lăn bánh (>= 5 km/h) khi đang xem toàn cảnh lộ trình -> tự chuyển sang Bám mũi xe 3D
   useEffect(() => {
@@ -1424,7 +1618,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
          ===================================================================== */}
       {layoutMenuOpen && (
         <div
-          className={`absolute right-2 top-13 short:top-11 z-30 w-[280px] max-w-[calc(100%-16px)] backdrop-blur-2xl border rounded-2xl p-3 space-y-2.5 shadow-2xl animate-ios-sheet-in ${
+          className={`absolute right-2 top-13 short:top-11 z-30 w-[288px] max-w-[calc(100%-16px)] max-h-[calc(100%-64px)] overflow-y-auto no-scrollbar backdrop-blur-2xl border rounded-2xl p-3 space-y-2.5 shadow-2xl animate-ios-sheet-in ${
             isLightMap
               ? 'bg-white/98 border-slate-300 text-slate-900'
               : 'bg-[#0b1220]/98 border-slate-600 text-white'
@@ -1576,6 +1770,82 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
               <ArrowLeftRight className="w-3 h-3 shrink-0" />
               <span>Kéo nút cầm ở giữa 2 khung để chỉnh mượt!</span>
             </p>
+          </div>
+
+          <div
+            className={`pt-2 border-t space-y-2 ${
+              isLightMap ? 'border-slate-200' : 'border-slate-700/80'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <span
+                  className={`text-[11px] font-extrabold block ${
+                    isLightMap ? 'text-slate-800' : 'text-slate-100'
+                  }`}
+                >
+                  Tình trạng giao thông
+                </span>
+                <span
+                  className={`text-[10px] font-semibold ${
+                    isLightMap ? 'text-slate-500' : 'text-slate-400'
+                  }`}
+                >
+                  {showTraffic ? `Cập nhật ${trafficUpdatedAt} • Tự động 2p` : 'Đang ẩn trên bản đồ'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleRefreshTrafficNow}
+                  title="Làm mới dữ liệu giao thông ngay"
+                  aria-label="Làm mới dữ liệu giao thông ngay"
+                  className={`w-7 h-7 rounded-lg border flex items-center justify-center active:scale-95 transition ${
+                    isLightMap
+                      ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700'
+                      : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-200'
+                  }`}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleToggleTraffic}
+                  className={`h-7 px-2.5 rounded-lg border text-[11px] font-extrabold active:scale-95 transition ${
+                    showTraffic
+                      ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
+                      : isLightMap
+                      ? 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                      : 'bg-slate-800 text-slate-300 border-slate-600 hover:bg-slate-700'
+                  }`}
+                >
+                  {showTraffic ? 'Đang bật' : 'Đang tắt'}
+                </button>
+              </div>
+            </div>
+
+            <div
+              className={`grid grid-cols-4 gap-1 rounded-xl p-1.5 text-[9.5px] font-extrabold ${
+                isLightMap ? 'bg-slate-100 text-slate-700' : 'bg-slate-900/90 text-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-[#16c964] shrink-0" />
+                <span>Thông</span>
+              </div>
+              <div className="flex items-center justify-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-[#f59e0b] shrink-0" />
+                <span>Đông</span>
+              </div>
+              <div className="flex items-center justify-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-[#ef4444] shrink-0" />
+                <span>Ùn tắc</span>
+              </div>
+              <div className="flex items-center justify-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-[#991b1b] shrink-0" />
+                <span>Tắc nặng</span>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -2043,19 +2313,96 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
             ))}
           </div>
 
-          {(!isFollowing || isRouteOverview) && (
-            <button
-              type="button"
-              onClick={() => {
-                setIsRouteOverview(false);
-                setIsFollowing(true);
-              }}
-              className="pointer-events-auto min-h-[34px] px-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-xl active:scale-95 transition"
-            >
-              <LocateFixed className="w-3.5 h-3.5" />
-              <span>Bám mũi xe</span>
-            </button>
-          )}
+          <div className="flex items-center gap-1.5 ml-auto">
+            {!webglError && (
+              <button
+                type="button"
+                onClick={handleToggleTraffic}
+                aria-label={showTraffic ? 'Tắt lớp tình trạng giao thông' : 'Bật lớp tình trạng giao thông'}
+                title={
+                  showTraffic
+                    ? `Giao thông trực tiếp đang BẬT (cập nhật ${trafficUpdatedAt}) — Chạm để tắt`
+                    : 'Chạm để bật hiển thị tình trạng giao thông trực tiếp'
+                }
+                className={`pointer-events-auto min-h-[32px] short:min-h-[28px] px-2.5 rounded-full backdrop-blur-xl border text-[11px] font-extrabold flex items-center gap-1.5 shadow-xl active:scale-95 transition ${
+                  showTraffic
+                    ? isLightMap
+                      ? 'bg-white/96 hover:bg-white border-emerald-400 text-slate-900'
+                      : 'bg-[#0b1220]/94 hover:bg-slate-900 border-emerald-500/70 text-white'
+                    : isLightMap
+                    ? 'bg-white/90 hover:bg-white border-slate-300 text-slate-500'
+                    : 'bg-[#0b1220]/88 hover:bg-slate-900 border-slate-700 text-slate-400'
+                }`}
+              >
+                <span className="flex items-center gap-[2px] shrink-0" aria-hidden="true">
+                  <span
+                    className={`w-1.5 h-3 rounded-full ${
+                      showTraffic ? 'bg-[#16c964]' : 'bg-slate-400/70'
+                    }`}
+                  />
+                  <span
+                    className={`w-1.5 h-3 rounded-full ${
+                      showTraffic ? 'bg-[#f59e0b]' : 'bg-slate-400/50'
+                    }`}
+                  />
+                  <span
+                    className={`w-1.5 h-3 rounded-full ${
+                      showTraffic ? 'bg-[#ef4444]' : 'bg-slate-400/35'
+                    }`}
+                  />
+                </span>
+                <span className="whitespace-nowrap">
+                  {showTraffic ? (
+                    <>
+                      <span className="cq-hide-sm">Giao thông</span>
+                      <span className="cq-show-sm">GT</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="cq-hide-sm">GT: Tắt</span>
+                      <span className="cq-show-sm">GT</span>
+                    </>
+                  )}
+                </span>
+                {showTraffic && (
+                  <span
+                    className={`cq-hide-md flex items-center gap-1.5 pl-1.5 ml-0.5 border-l text-[10px] font-bold ${
+                      isLightMap
+                        ? 'border-slate-300 text-slate-700'
+                        : 'border-slate-700 text-slate-200'
+                    }`}
+                  >
+                    <span className="flex items-center gap-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#16c964]" />
+                      Thông
+                    </span>
+                    <span className="flex items-center gap-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#f59e0b]" />
+                      Đông
+                    </span>
+                    <span className="flex items-center gap-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#ef4444]" />
+                      Tắc
+                    </span>
+                  </span>
+                )}
+              </button>
+            )}
+
+            {(!isFollowing || isRouteOverview) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsRouteOverview(false);
+                  setIsFollowing(true);
+                }}
+                className="pointer-events-auto min-h-[34px] short:min-h-[30px] px-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-xl active:scale-95 transition"
+              >
+                <LocateFixed className="w-3.5 h-3.5" />
+                <span>Bám mũi xe</span>
+              </button>
+            )}
+          </div>
         </div>
 
         <div

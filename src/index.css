@@ -52,9 +52,16 @@
   }
 }
 
+.cq-show-sm {
+  display: none;
+}
+
 @container (max-width: 315px) {
   .cq-hide-sm {
     display: none !important;
+  }
+  .cq-show-sm {
+    display: inline !important;
   }
 }
 
