@@ -108,11 +108,13 @@ export const App: React.FC = () => {
     setSyncModalOpen(true);
   }, []);
 
-  // UI Scale
+  // UI Scale (4 mức: compact 92% | normal 106% | large 122% VF5 | xlarge 138% Siêu to)
   const [uiScale, setUiScale] = useState<UiScale>(() => {
     try {
       const saved = localStorage.getItem('carhub_ui_scale');
-      if (saved === 'normal' || saved === 'large' || saved === 'xlarge') return saved;
+      if (saved === 'compact' || saved === 'normal' || saved === 'large' || saved === 'xlarge') {
+        return saved;
+      }
       return 'large';
     } catch {
       return 'large';
@@ -319,30 +321,64 @@ export const App: React.FC = () => {
     currentVideoRef.current = currentVideo;
   }, [currentVideo]);
 
-  // Responsive root font-size scaling for APTV & asCar
+  // Adaptive root font-size scaling cho MỌI màn hình: VF5 8" bé (640x360 / 800x480 / 1280x720), màn TO (10–15"), màn DÀI (Ultrawide 21:9) & điện thoại dọc!
   useEffect(() => {
     const applyResponsiveRootScale = () => {
       const h = window.innerHeight || 480;
       const w = window.innerWidth || 800;
+      const aspect = w / Math.max(h, 1);
 
-      let basePx = 15.5;
-      if (h <= 400 || w <= 660) {
-        basePx = uiScale === 'normal' ? 13.5 : uiScale === 'large' ? 14.5 : 15.5;
+      // Phân loại hình dáng màn hình
+      const screenClass =
+        w < 560
+          ? 'portrait'
+          : w >= 980 && aspect >= 2.05
+          ? 'ultrawide'
+          : h <= 520
+          ? 'compact-car'
+          : 'standard';
+      document.documentElement.dataset.screen = screenClass;
+
+      // Nền root thích ứng theo chiều cao/rộng thực (KHÔNG bóp nhỏ dưới 14.5px trên VF5!)
+      let basePx = 16.5;
+      if (h <= 390) {
+        // CarPlay @2x siêu thấp (VD: 640x360)
+        basePx = 14.5;
       } else if (h <= 520) {
-        basePx = uiScale === 'normal' ? 14.5 : uiScale === 'large' ? 16 : 17.25;
-      } else if (w >= 960) {
-        basePx = uiScale === 'normal' ? 16 : uiScale === 'large' ? 17.75 : 19.5;
-      } else {
-        basePx = uiScale === 'normal' ? 15.5 : uiScale === 'large' ? 16.5 : 18;
+        // CarPlay 800x480 hoặc màn dài 1280x480
+        basePx = 15.6;
+      } else if (w >= 1180 && h >= 660) {
+        // VF5 8" 1280x720 @1x, Android Box 1280x720/1920x720, Tablet/Desktop lớn
+        basePx = 17.5;
+      } else if (w < 560) {
+        // Điện thoại cầm tay màn dọc
+        basePx = 15.5;
       }
 
-      document.documentElement.style.fontSize = `${basePx}px`;
+      const multiplier =
+        uiScale === 'compact'
+          ? 0.92
+          : uiScale === 'normal'
+          ? 1.06
+          : uiScale === 'large'
+          ? 1.22
+          : 1.38;
+
+      // Trần an toàn theo chiều cao thực tế để nút to rõ nhưng không tràn khung
+      const maxSafe = h <= 390 ? 17.5 : h <= 500 ? 19.6 : h <= 640 ? 21.5 : 24.5;
+      const finalPx = Math.min(maxSafe, Math.max(13.5, Math.round(basePx * multiplier * 10) / 10));
+      document.documentElement.style.fontSize = `${finalPx}px`;
     };
 
     applyResponsiveRootScale();
+    // Thông báo bản đồ 3D & khung Video/TV căn lại tọa độ tức thì sau khi đổi cỡ chữ
+    const rafSync = window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
     window.addEventListener('resize', applyResponsiveRootScale);
     window.visualViewport?.addEventListener('resize', applyResponsiveRootScale);
     return () => {
+      window.cancelAnimationFrame(rafSync);
       window.removeEventListener('resize', applyResponsiveRootScale);
       window.visualViewport?.removeEventListener('resize', applyResponsiveRootScale);
     };

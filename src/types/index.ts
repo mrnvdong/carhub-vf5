@@ -79,7 +79,7 @@ export interface CockpitNavControls {
   toggleVoiceNav: () => void;
 }
 
-export type UiScale = 'normal' | 'large' | 'xlarge';
+export type UiScale = 'compact' | 'normal' | 'large' | 'xlarge';
 export type ViewMode = 'classic' | 'ytmusic';
 export type RepeatMode = 'off' | 'all' | 'one';
 export type NightMode = 'auto' | 'on' | 'off';

@@ -279,6 +279,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [showCinemaBar, setShowCinemaBar] = useState<boolean>(true);
   const [hardwareNotice, setHardwareNotice] = useState<string | null>(null);
   const [confirmClearHistory, setConfirmClearHistory] = useState<boolean>(false);
+  const [showScalePopover, setShowScalePopover] = useState<boolean>(false);
 
   const [musicRightTab, setMusicRightTab] = useState<'lyrics' | 'queue' | 'categories'>('lyrics');
   const [videoRightTab, setVideoRightTab] = useState<'queue' | 'categories'>('queue');
@@ -1168,13 +1169,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     } catch {}
   };
 
-  const cycleScale = () => {
-    if (uiScale === 'normal') onChangeUiScale('large');
-    else if (uiScale === 'large') onChangeUiScale('xlarge');
-    else onChangeUiScale('normal');
-  };
-
-  const scaleLabel = uiScale === 'normal' ? '100%' : uiScale === 'large' ? '112%' : '124%';
+  const scaleLabel =
+    uiScale === 'compact'
+      ? '92%'
+      : uiScale === 'normal'
+      ? '106%'
+      : uiScale === 'large'
+      ? '122%'
+      : '138%';
   const safeDuration = duration > 0 ? duration : 0;
   const displayedTime = dragTime !== null ? dragTime : currentTime;
   const progressPercent =
@@ -1365,72 +1367,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
 
       {/* =====================================================================
-          1. THANH ĐIỀU HƯỚNG BÊN TRÁI (Gần tay phải người lái VF5 nhất)
+          1. THANH ĐIỀU HƯỚNG (Bên trái gần tay lái trên xe VF5 / Đáy màn hình trên điện thoại dọc!)
          ===================================================================== */}
       {!isFullscreen && (
         <aside
-          className={`relative z-20 flex car:flex-col items-center justify-between gap-1 px-2 py-1.5 car:py-1.5 short:py-1 car:px-1.5 car:w-[4.65rem] lg:w-[5rem] border-b car:border-b-0 car:border-r shrink-0 overflow-x-auto car:overflow-x-hidden car:overflow-y-auto no-scrollbar transition-colors ${theme.rail}`}
+          className={`relative z-30 order-last car:order-first flex car:flex-col items-center justify-between gap-1.5 px-2 py-1.5 car:py-2 car:px-1.5 car:w-[5.2rem] lg:w-[5.5rem] border-t car:border-t-0 car:border-r shrink-0 overflow-x-auto car:overflow-x-hidden car:overflow-y-auto no-scrollbar transition-colors ${theme.rail}`}
         >
-          {/* Nút 1-chạm chuyển đổi Music <-> Video */}
-          <button
-            type="button"
-            onClick={() => {
-              if (isCockpitView && cockpitTvMode) {
-                setCockpitTvMode(false);
-                setIsTvSessionActive(false);
-              }
-              onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
-            }}
-            aria-label={isVideoMode ? 'Chuyển sang chế độ Nghe Nhạc' : 'Chuyển sang chế độ Xem Video'}
-            className={`flex car:flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] px-2.5 car:px-1 car:w-full py-1 rounded-xl border shadow-sm ios-spring-fast active:scale-95 shrink-0 ${
-              isVideoMode
-                ? isLightTheme
-                  ? 'bg-blue-50 border-blue-300 text-blue-800 hover:bg-blue-100'
-                  : 'bg-gradient-to-br from-sky-500/30 to-blue-600/30 border-sky-400/50 text-sky-100'
-                : isLightTheme
-                ? 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100'
-                : 'bg-gradient-to-br from-rose-500/30 to-pink-600/30 border-rose-400/50 text-rose-100'
-            }`}
-          >
-            {isVideoMode ? (
-              <>
-                <Tv
-                  className={`w-4 h-4 shrink-0 ${
-                    isLightTheme ? 'text-blue-600' : 'text-sky-300'
-                  }`}
-                />
-                <span className="text-[10px] vshort:text-[9px] font-extrabold leading-none">
-                  Video
-                </span>
-              </>
-            ) : (
-              <>
-                <Music
-                  className={`w-4 h-4 shrink-0 ${
-                    isLightTheme ? 'text-rose-600' : 'text-rose-300'
-                  }`}
-                />
-                <span className="text-[10px] vshort:text-[9px] font-extrabold leading-none">
-                  Music
-                </span>
-              </>
-            )}
-          </button>
-
-          {/* Cụm điều hướng chính (Cockpit nằm vị trí #1 mặc định khi mở xe!) */}
+          {/* Cụm điều hướng chính (Nút lớn >= 44px chuẩn cảm ứng ô tô!) */}
           <nav
             aria-label="Điều hướng chính"
-            className="flex car:flex-col items-center gap-1 car:gap-0.5 car:w-full shrink-0"
+            className="flex car:flex-col items-center gap-1 car:gap-1 car:w-full shrink-0"
           >
             <button
               type="button"
               onClick={() => onChangeRailSection('cockpit')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'cockpit' ? theme.railCockpitActive : theme.railNavIdle
               }`}
             >
-              <Gauge className="w-4 h-4 short:w-3.5 short:h-3.5" />
-              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
+              <Gauge className="w-5 h-5 shrink-0" />
+              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
                 Cockpit
               </span>
             </button>
@@ -1438,12 +1394,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('tv')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'tv' ? theme.railTvActive : theme.railNavIdle
               }`}
             >
-              <Tv className="w-4 h-4 short:w-3.5 short:h-3.5" />
-              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
+              <Tv className="w-5 h-5 shrink-0" />
+              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
                 TV Live
               </span>
             </button>
@@ -1451,16 +1407,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('nowPlaying')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'nowPlaying' ? theme.railNavActive : theme.railNavIdle
               }`}
             >
               {effectiveVideoMode ? (
-                <Tv className="w-4 h-4 short:w-3.5 short:h-3.5" />
+                <Tv className="w-5 h-5 shrink-0" />
               ) : (
-                <Headphones className="w-4 h-4 short:w-3.5 short:h-3.5" />
+                <Headphones className="w-5 h-5 shrink-0" />
               )}
-              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
+              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
                 Đang phát
               </span>
             </button>
@@ -1468,12 +1424,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('browse')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'browse' ? theme.railNavActive : theme.railNavIdle
               }`}
             >
-              <Compass className="w-4 h-4 short:w-3.5 short:h-3.5" />
-              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
+              <Compass className="w-5 h-5 shrink-0" />
+              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
                 Khám phá
               </span>
             </button>
@@ -1481,10 +1437,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onOpenSearchModal(false)}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${theme.railNavIdle}`}
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${theme.railNavIdle}`}
             >
-              <Search className="w-4 h-4 short:w-3.5 short:h-3.5" />
-              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
+              <Search className="w-5 h-5 shrink-0" />
+              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
                 Tìm kiếm
               </span>
             </button>
@@ -1492,12 +1448,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('favorites')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'favorites' ? theme.railNavActive : theme.railNavIdle
               }`}
             >
-              <Bookmark className="w-4 h-4 short:w-3.5 short:h-3.5" />
-              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
+              <Bookmark className="w-5 h-5 shrink-0" />
+              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
                 Playlist{favoritesCount > 0 ? ` (${favoritesCount})` : ''}
               </span>
             </button>
@@ -1505,79 +1461,178 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('history')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
                 railSection === 'history' ? theme.railNavActive : theme.railNavIdle
               }`}
             >
-              <History className="w-4 h-4 short:w-3.5 short:h-3.5" />
-              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
+              <History className="w-5 h-5 shrink-0" />
+              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
                 Lịch sử
               </span>
             </button>
           </nav>
 
-          {/* Cụm công cụ nhanh phía dưới: [Micro + Sáng/Tối đồng bộ Map] + Tỉ lệ chữ */}
-          <div className="flex car:flex-col items-center gap-1 car:w-full shrink-0">
-            <div className="flex car:grid car:grid-cols-2 gap-1 car:w-full">
-              <button
-                type="button"
-                onClick={() => onOpenSearchModal(true)}
-                aria-label="Tìm kiếm bằng giọng nói"
-                title="Tìm giọng nói tiếng Việt"
-                className={`min-h-[34px] w-9 car:w-full rounded-lg border flex items-center justify-center active:scale-95 transition ${
-                  isLightTheme
-                    ? 'bg-rose-50 hover:bg-rose-100 border-rose-300 text-rose-600'
-                    : 'bg-rose-500/25 hover:bg-rose-500/40 border-rose-400/45 text-rose-200'
-                }`}
-              >
-                <Mic className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const willBeDark = isLightTheme;
-                  onCycleNightMode();
-                  showToast(
-                    willBeDark
-                      ? '🌙 Giao diện & Bản đồ 3D: Chế độ Tối'
-                      : '☀️ Giao diện & Bản đồ 3D: Chế độ Sáng'
-                  );
-                }}
-                aria-label={
-                  isLightTheme
-                    ? 'Chuyển sang giao diện & bản đồ Tối'
-                    : 'Chuyển sang giao diện & bản đồ Sáng'
-                }
-                title={
-                  isLightTheme
-                    ? 'Đang ở chế độ Sáng • Bấm để chuyển sang Tối'
-                    : 'Đang ở chế độ Tối • Bấm để chuyển sang Sáng'
-                }
-                className={`min-h-[34px] w-9 car:w-full rounded-lg border flex items-center justify-center active:scale-95 transition ${
-                  isLightTheme
-                    ? 'bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-700'
-                    : 'bg-indigo-500/25 hover:bg-indigo-500/40 border-indigo-400/50 text-amber-200'
-                }`}
-              >
-                {isLightTheme ? (
-                  <Sun className="w-3.5 h-3.5" />
-                ) : (
-                  <Moon className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </div>
+          {/* Cụm công cụ 2x2 gọn đẹp: [Mic | Sáng-Tối] + [Nhạc/Video | Cỡ chữ %] */}
+          <div className="flex car:grid car:grid-cols-2 items-center gap-1 car:w-full shrink-0">
+            <button
+              type="button"
+              onClick={() => onOpenSearchModal(true)}
+              aria-label="Tìm kiếm bằng giọng nói"
+              title="Tìm giọng nói tiếng Việt"
+              className={`min-h-[2.45rem] w-10 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${
+                isLightTheme
+                  ? 'bg-rose-50 hover:bg-rose-100 border-rose-300 text-rose-600'
+                  : 'bg-rose-500/25 hover:bg-rose-500/40 border-rose-400/45 text-rose-200'
+              }`}
+            >
+              <Mic className="w-4 h-4" />
+            </button>
 
             <button
               type="button"
-              onClick={cycleScale}
-              aria-label={`Đổi cỡ giao diện, hiện tại ${scaleLabel}`}
-              className={`min-h-[28px] px-2 car:px-0 car:w-full rounded-lg text-[10px] font-extrabold border flex items-center justify-center active:scale-95 transition ${theme.railToolBtn}`}
+              onClick={() => {
+                const willBeDark = isLightTheme;
+                onCycleNightMode();
+                showToast(
+                  willBeDark
+                    ? '🌙 Giao diện & Bản đồ 3D: Chế độ Tối'
+                    : '☀️ Giao diện & Bản đồ 3D: Chế độ Sáng'
+                );
+              }}
+              aria-label={
+                isLightTheme
+                  ? 'Chuyển sang giao diện & bản đồ Tối'
+                  : 'Chuyển sang giao diện & bản đồ Sáng'
+              }
+              title={
+                isLightTheme
+                  ? 'Đang ở chế độ Sáng • Bấm để chuyển sang Tối'
+                  : 'Đang ở chế độ Tối • Bấm để chuyển sang Sáng'
+              }
+              className={`min-h-[2.45rem] w-10 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${
+                isLightTheme
+                  ? 'bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-700'
+                  : 'bg-indigo-500/25 hover:bg-indigo-500/40 border-indigo-400/50 text-amber-200'
+              }`}
+            >
+              {isLightTheme ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (isCockpitView && cockpitTvMode) {
+                  setCockpitTvMode(false);
+                  setIsTvSessionActive(false);
+                }
+                onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
+              }}
+              aria-label={isVideoMode ? 'Chuyển sang chế độ Nghe Nhạc' : 'Chuyển sang chế độ Xem Video'}
+              title={isVideoMode ? 'Đang chế độ Video • Chạm để sang Nhạc' : 'Đang chế độ Nhạc • Chạm để sang Video'}
+              className={`min-h-[2.45rem] w-10 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${
+                isVideoMode
+                  ? isLightTheme
+                    ? 'bg-blue-50 border-blue-300 text-blue-700 hover:bg-blue-100'
+                    : 'bg-sky-500/25 border-sky-400/50 text-sky-200'
+                  : isLightTheme
+                  ? 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100'
+                  : 'bg-rose-500/25 border-rose-400/50 text-rose-200'
+              }`}
+            >
+              {isVideoMode ? <Tv className="w-4 h-4" /> : <Music className="w-4 h-4" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowScalePopover((v) => !v)}
+              aria-label={`Chọn cỡ hiển thị giao diện, hiện tại ${scaleLabel}`}
+              title="Chỉnh cỡ chữ & nút cảm ứng (92% - 138%)"
+              className={`min-h-[2.45rem] px-1.5 car:px-0 car:w-full rounded-xl text-[0.65rem] font-black border flex items-center justify-center active:scale-95 transition ${
+                showScalePopover
+                  ? isLightTheme
+                    ? 'bg-blue-600 text-white border-blue-600 shadow'
+                    : 'bg-sky-400 text-slate-950 border-sky-300 shadow'
+                  : theme.railToolBtn
+              }`}
             >
               {scaleLabel}
             </button>
           </div>
         </aside>
+      )}
+
+      {/* BẢNG CHỌN CỠ HIỂN THỊ 4 MỨC TRỰC QUAN (Tối ưu cho màn VF5 bé, màn to, màn dài & điện thoại!) */}
+      {showScalePopover && !isFullscreen && (
+        <div
+          onClick={() => setShowScalePopover(false)}
+          className="fixed inset-0 z-50 bg-black/30 backdrop-blur-xs flex items-end car:items-end justify-center car:justify-start p-3 car:pl-[5.75rem]"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-[22rem] rounded-2xl border p-3.5 space-y-2.5 shadow-2xl animate-ios-sheet-in ${theme.cardElevated}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h4 className={`text-sm font-black ${theme.text}`}>Cỡ chữ &amp; Nút cảm ứng</h4>
+                <p className={`text-xs font-semibold ${theme.textSub}`}>
+                  Màn hình hiện tại:{' '}
+                  <span className="font-mono font-bold">
+                    {typeof window !== 'undefined'
+                      ? `${window.innerWidth}×${window.innerHeight}`
+                      : ''}
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowScalePopover(false)}
+                className={`w-9 h-9 rounded-full border flex items-center justify-center active:scale-90 ${theme.iconBtn}`}
+              >
+                <span className="text-sm font-black">✕</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  { id: 'compact', title: 'Gọn • 92%', desc: 'Máy tính ngồi gần' },
+                  { id: 'normal', title: 'Vừa • 106%', desc: 'iPad / Màn 10–12"' },
+                  { id: 'large', title: 'To VF5 • 122%', desc: 'Khuyên dùng trên xe' },
+                  { id: 'xlarge', title: 'Siêu to • 138%', desc: 'Dễ bấm & nhìn xa' },
+                ] as const
+              ).map((opt) => {
+                const active = uiScale === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      onChangeUiScale(opt.id);
+                      setShowScalePopover(false);
+                      showToast(`🔍 Đã đặt cỡ giao diện: ${opt.title}`);
+                    }}
+                    className={`min-h-[3.5rem] px-3 py-2 rounded-xl border text-left active:scale-95 transition ${
+                      active
+                        ? isLightTheme
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-md'
+                          : 'bg-sky-400 text-slate-950 border-sky-300 shadow-md'
+                        : theme.itemIdle
+                    }`}
+                  >
+                    <div className="text-xs font-black">{opt.title}</div>
+                    <div
+                      className={`text-[0.7rem] font-semibold mt-0.5 ${
+                        active ? 'opacity-90' : theme.textSub
+                      }`}
+                    >
+                      {opt.desc}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* =====================================================================
@@ -2482,6 +2537,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onTvSlotRectChange={handleCockpitTvSlotRectChange}
             onPauseMusic={pauseAllMusicForTv}
             onOpenFullTv={handleOpenFullTv}
+            uiScale={uiScale}
+            onChangeUiScale={onChangeUiScale}
           />
         )}
 
@@ -2504,13 +2561,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {!isNowPlayingView && !isCockpitView && !isTvView && (
           <div
             key={`browse-${railSection}-${viewMode}-${selectedPlaylistId}`}
-            className="flex-1 flex flex-col min-h-0 max-w-6xl mx-auto w-full animate-ios-browse-in"
+            className="flex-1 flex flex-col min-h-0 max-w-[1920px] mx-auto w-full animate-ios-browse-in"
           >
             {/* Header trang */}
-            <div className="flex items-center justify-between gap-2 mb-2 short:mb-1.5 shrink-0">
+            <div className="flex items-center justify-between gap-2 mb-2 shrink-0">
               <div className="min-w-0">
                 <h2
-                  className={`text-lg sm:text-xl short:text-base font-black tracking-tight truncate ${theme.text}`}
+                  className={`text-lg sm:text-xl font-black tracking-tight truncate ${theme.text}`}
                 >
                   {railSection === 'favorites'
                     ? 'Playlist & Đồng bộ VF5'
@@ -2530,7 +2587,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     <button
                       type="button"
                       onClick={() => onChangeMusicSource('youtube')}
-                      className={`min-h-[32px] px-3 rounded-full text-xs font-extrabold transition ${
+                      className={`min-h-[2.35rem] px-3 rounded-full text-xs font-extrabold transition ${
                         musicSource === 'youtube' ? 'bg-rose-600 text-white shadow' : theme.segIdle
                       }`}
                     >
@@ -2539,7 +2596,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     <button
                       type="button"
                       onClick={() => onChangeMusicSource('soundcloud')}
-                      className={`min-h-[32px] px-3 rounded-full text-xs font-extrabold transition ${
+                      className={`min-h-[2.35rem] px-3 rounded-full text-xs font-extrabold transition ${
                         musicSource === 'soundcloud'
                           ? 'bg-[#ff5500] text-white shadow'
                           : theme.segIdle
@@ -2554,9 +2611,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   <button
                     type="button"
                     onClick={() => onOpenSyncModal('sync')}
-                    className="min-h-[36px] px-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition"
+                    className="min-h-[2.45rem] px-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition"
                   >
-                    <Cloud className="w-3.5 h-3.5" />
+                    <Cloud className="w-4 h-4" />
                     <span>{syncCode ? `Mã VF5-${syncCode}` : 'Đồng bộ Mã Xe'}</span>
                   </button>
                 )}
@@ -2572,11 +2629,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         setConfirmClearHistory(true);
                       }
                     }}
-                    className={`min-h-[36px] px-3 rounded-full text-xs font-bold flex items-center gap-1.5 border transition active:scale-95 ${
+                    className={`min-h-[2.45rem] px-3.5 rounded-full text-xs font-bold flex items-center gap-1.5 border transition active:scale-95 ${
                       confirmClearHistory ? 'bg-rose-600 text-white border-rose-500' : theme.iconBtn
                     }`}
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Trash2 className="w-4 h-4" />
                     <span>{confirmClearHistory ? 'Bấm lần nữa để xóa' : 'Xóa lịch sử'}</span>
                   </button>
                 )}
@@ -2596,7 +2653,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     type="button"
                     onClick={onLoadMoreExplore}
                     disabled={isLoadingMoreExplore}
-                    className={`min-h-[32px] px-2.5 rounded-full text-xs font-extrabold border flex items-center gap-1 active:scale-95 transition disabled:opacity-50 ${
+                    className={`min-h-[2.35rem] px-3 rounded-full text-xs font-extrabold border flex items-center gap-1 active:scale-95 transition disabled:opacity-50 ${
                       musicSource === 'soundcloud'
                         ? isLightTheme
                           ? 'bg-[#ff5500] border-orange-500 text-white shadow-sm'
@@ -2605,9 +2662,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     }`}
                   >
                     {isLoadingMoreExplore ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
-                      <Plus className="w-3.5 h-3.5" />
+                      <Plus className="w-4 h-4" />
                     )}
                     <span className="hidden xs:inline">Xem thêm</span>
                   </button>
@@ -2617,11 +2674,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             {/* Thanh chọn các Playlist riêng (hiển thị trong mục Playlist) */}
             {railSection === 'favorites' && (
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2.5 short:pb-2 shrink-0">
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => onSelectPlaylistId('favorites')}
-                  className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap border flex items-center gap-1.5 active:scale-95 transition ${
+                  className={`min-h-[2.5rem] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap border flex items-center gap-1.5 active:scale-95 transition ${
                     selectedPlaylistId === 'favorites' ? theme.chipActive : theme.chipIdle
                   }`}
                 >
@@ -2635,7 +2692,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       key={pl.id}
                       type="button"
                       onClick={() => onSelectPlaylistId(pl.id)}
-                      className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap border flex items-center gap-1.5 active:scale-95 transition ${
+                      className={`min-h-[2.5rem] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap border flex items-center gap-1.5 active:scale-95 transition ${
                         active ? theme.chipActive : theme.chipIdle
                       }`}
                     >
@@ -2649,9 +2706,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <button
                   type="button"
                   onClick={() => onOpenSyncModal('addTrack')}
-                  className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap border border-dashed flex items-center gap-1 active:scale-95 transition ${theme.chipIdle}`}
+                  className={`min-h-[2.5rem] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap border border-dashed flex items-center gap-1 active:scale-95 transition ${theme.chipIdle}`}
                 >
-                  <Plus className="w-3.5 h-3.5" />
+                  <Plus className="w-4 h-4" />
                   <span>Quản lý / Tạo mới</span>
                 </button>
               </div>
@@ -2659,7 +2716,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             {/* Thanh Chủ đề ngang (chỉ hiện ở Khám phá) */}
             {railSection === 'browse' && (
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2.5 short:pb-2 shrink-0">
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2.5 shrink-0">
                 {MEDIA_CATEGORIES.map((cat) => {
                   const isSelected = selectedCategory === cat.id;
                   return (
@@ -2667,7 +2724,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       key={cat.id}
                       type="button"
                       onClick={() => onSelectCategory(cat.id, cat.query)}
-                      className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap ios-spring-fast active:scale-95 border ${
+                      className={`min-h-[2.5rem] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap ios-spring-fast active:scale-95 border ${
                         isSelected ? theme.chipActive : theme.chipIdle
                       }`}
                     >
@@ -2678,8 +2735,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
             )}
 
-            {/* Lưới bài hát */}
-            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar grid grid-cols-1 car:grid-cols-2 gap-2.5 sm:gap-3 content-start pb-2">
+            {/* Lưới bài hát tự thích ứng mọi độ rộng: 1 cột (dọc), 2 cột (VF5), 3–4 cột (màn to/dài!) */}
+            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-2.5 sm:gap-3 content-start pb-2">
               {isLoadingBrowse && browseVideos.length === 0 ? (
                 <div className="col-span-full py-12 text-center flex flex-col items-center gap-3">
                   <Loader2 className={`w-9 h-9 animate-spin ${theme.text}`} />

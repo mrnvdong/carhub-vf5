@@ -10,6 +10,8 @@ export default {
         xs: '420px',
         // Matches all CarPlay landscape viewports (including 640x360 @2x & 710x480 minus CarPlay dock)
         car: { raw: '(min-width: 560px)' },
+        // Targets ultrawide/long automotive screens (e.g. 1280x480, 1920x720, 21:9 displays)
+        ultrawide: { raw: '(min-width: 980px) and (min-aspect-ratio: 21/10)' },
         // Targets VinFast VF5 8-inch CarPlay landscape heights (360px - 500px)
         short: { raw: '(max-height: 500px)' },
         // Targets ultra-compact @2x CarPlay viewports (<= 400px height)

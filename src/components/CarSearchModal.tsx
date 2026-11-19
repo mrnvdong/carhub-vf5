@@ -383,7 +383,7 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
             <button
               type="button"
               onClick={() => setModalSource('youtube')}
-              className={`min-h-[34px] px-3.5 rounded-full text-xs font-extrabold flex items-center gap-1.5 transition ${
+              className={`min-h-[2.4rem] px-3.5 rounded-full text-xs sm:text-sm font-extrabold flex items-center gap-1.5 transition ${
                 modalSource === 'youtube' ? 'bg-rose-600 text-white shadow' : theme.segIdle
               }`}
             >
@@ -392,14 +392,14 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
             <button
               type="button"
               onClick={() => setModalSource('soundcloud')}
-              className={`min-h-[34px] px-3.5 rounded-full text-xs font-extrabold flex items-center gap-1.5 transition ${
+              className={`min-h-[2.4rem] px-3.5 rounded-full text-xs sm:text-sm font-extrabold flex items-center gap-1.5 transition ${
                 modalSource === 'soundcloud' ? 'bg-[#ff5500] text-white shadow' : theme.segIdle
               }`}
             >
               <span>☁️ SoundCloud</span>
             </button>
           </div>
-          <span className={`text-[11px] font-bold truncate hidden xs:inline ${theme.textMuted}`}>
+          <span className={`text-xs font-bold truncate hidden xs:inline ${theme.textMuted}`}>
             {modalSource === 'soundcloud'
               ? 'Âm thanh Hi-Fi không quảng cáo • Vinahouse / Remix / Set DJ'
               : 'Kho Video & Nhạc YouTube đầy đủ nhất'}

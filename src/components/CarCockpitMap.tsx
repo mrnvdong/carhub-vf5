@@ -38,7 +38,14 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
-import { ActiveNavSummary, CockpitNavControls, MapTheme, PendingNavTarget, SavedPlace } from '../types';
+import {
+  ActiveNavSummary,
+  CockpitNavControls,
+  MapTheme,
+  PendingNavTarget,
+  SavedPlace,
+  UiScale,
+} from '../types';
 import { sendNavToCar } from '../services/sync';
 import { playTurnChime, speakVietnamese, unlockCarAudio } from '../services/voiceAudio';
 
@@ -324,6 +331,8 @@ export interface CarCockpitMapProps {
   onActiveNavChange?: (summary: ActiveNavSummary | null) => void;
   navControlsRef?: React.MutableRefObject<CockpitNavControls | null>;
   onNotifyToast?: (msg: string) => void;
+  uiScale?: UiScale;
+  onChangeUiScale?: (scale: UiScale) => void;
 }
 
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -397,6 +406,8 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
   onActiveNavChange,
   navControlsRef,
   onNotifyToast,
+  uiScale,
+  onChangeUiScale,
 }) => {
   const {
     speedKmh,
@@ -1545,9 +1556,9 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       )}
 
       {/* =====================================================================
-          2. CỤM NÚT ĐIỀU KHIỂN & TÙY BIẾN BỐ CỤC GÓC TRÊN BÊN PHẢI
+          2. CỤM NÚT ĐIỀU KHIỂN & TÙY BIẾN BỐ CỤC GÓC TRÊN BÊN PHẢI (Cỡ nút chuẩn cảm ứng ô tô >= 44px)
          ===================================================================== */}
-      <div className="absolute top-2 right-2 z-20 flex items-center gap-1">
+      <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5">
         <button
           type="button"
           onClick={() => {
@@ -1561,7 +1572,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
             }
           }}
           title="Tìm đường, Địa điểm quen & Trạm sạc VinFast"
-          className={`min-h-[36px] short:min-h-[32px] px-2.5 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition ${
+          className={`min-h-[2.5rem] px-3 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition ${
             navDrawerOpen
               ? isLightMap
                 ? 'bg-blue-600 text-white border-blue-600'
@@ -1571,7 +1582,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
               : 'bg-[#0b1220]/94 hover:bg-slate-900 text-sky-300 border-slate-600'
           }`}
         >
-          <Navigation className="w-3.5 h-3.5 shrink-0" />
+          <Navigation className="w-4 h-4 shrink-0" />
           <span className="cq-hide-md">Dẫn đường</span>
         </button>
 
@@ -1583,14 +1594,14 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
             setIsFollowing(true);
           }}
           title="Đổi góc nhìn 3D Mũi xe / 2D Hướng Bắc"
-          className={`min-h-[36px] short:min-h-[32px] px-2 rounded-xl backdrop-blur-xl border text-xs font-black flex items-center gap-1 shadow-lg active:scale-95 transition ${
+          className={`min-h-[2.5rem] px-2.5 rounded-xl backdrop-blur-xl border text-xs font-black flex items-center gap-1 shadow-lg active:scale-95 transition ${
             isLightMap
               ? 'bg-white/96 hover:bg-white border-slate-300 text-slate-900'
               : 'bg-[#0b1220]/94 hover:bg-slate-900 border-slate-600 text-white'
           }`}
         >
           <Compass
-            className={`w-3.5 h-3.5 shrink-0 ${
+            className={`w-4 h-4 shrink-0 ${
               isLightMap ? 'text-emerald-600' : 'text-emerald-300'
             }`}
           />
@@ -1601,14 +1612,14 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
           type="button"
           onClick={cycleMapTheme}
           title="Đổi lớp bản đồ: 3D Sáng / 3D Đêm / OSM / Vệ tinh"
-          className={`min-h-[36px] short:min-h-[32px] px-2 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1 shadow-lg active:scale-95 transition ${
+          className={`min-h-[2.5rem] px-2.5 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition ${
             isLightMap
               ? 'bg-white/96 hover:bg-white border-slate-300 text-slate-900'
               : 'bg-[#0b1220]/94 hover:bg-slate-900 border-slate-600 text-white'
           }`}
         >
           <Layers
-            className={`w-3.5 h-3.5 shrink-0 ${isLightMap ? 'text-amber-600' : 'text-amber-300'}`}
+            className={`w-4 h-4 shrink-0 ${isLightMap ? 'text-amber-600' : 'text-amber-300'}`}
           />
           <span className="cq-hide-md">{THEME_LABELS[mapTheme]}</span>
         </button>
@@ -1619,9 +1630,9 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
             setLayoutMenuOpen((v) => !v);
             setNavDrawerOpen(false);
           }}
-          aria-label="Tùy chỉnh vị trí và kích thước bản đồ"
-          title="Đổi vị trí Trái/Phải & Chỉnh độ rộng Bản đồ"
-          className={`min-h-[36px] short:min-h-[32px] px-2 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1 shadow-lg active:scale-95 transition ${
+          aria-label="Tùy chỉnh vị trí, cỡ chữ và kích thước bản đồ"
+          title="Cỡ chữ, Trái/Phải & Độ rộng Bản đồ"
+          className={`min-h-[2.5rem] px-2.5 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition ${
             layoutMenuOpen
               ? isLightMap
                 ? 'bg-emerald-600 text-white border-emerald-600'
@@ -1631,7 +1642,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
               : 'bg-[#0b1220]/94 hover:bg-slate-900 text-emerald-300 border-slate-600'
           }`}
         >
-          <Columns2 className="w-3.5 h-3.5 shrink-0" />
+          <Columns2 className="w-4 h-4 shrink-0" />
           <span className="cq-hide-md">Bố cục</span>
         </button>
 
@@ -1639,7 +1650,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
           type="button"
           onClick={onToggleExpandMap}
           aria-label={isMapExpanded ? 'Thu gọn bản đồ về chia đôi' : 'Mở rộng bản đồ toàn màn hình'}
-          className={`w-9 h-9 short:w-8 short:h-8 rounded-xl backdrop-blur-xl border flex items-center justify-center shadow-lg active:scale-95 transition ${
+          className={`min-w-[2.5rem] min-h-[2.5rem] rounded-xl backdrop-blur-xl border flex items-center justify-center shadow-lg active:scale-95 transition ${
             isLightMap
               ? 'bg-white/96 hover:bg-white border-slate-300 text-blue-700'
               : 'bg-[#0b1220]/94 hover:bg-slate-900 border-slate-600 text-sky-300'
@@ -1650,11 +1661,11 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       </div>
 
       {/* =====================================================================
-          2B. BẢNG TÙY BIẾN VỊ TRÍ (TRÁI / PHẢI) & KÍCH THƯỚC BỀ NGANG COCKPIT
+          2B. BẢNG TÙY BIẾN VỊ TRÍ (TRÁI / PHẢI), CỠ HIỂN THỊ & KÍCH THƯỚC COCKPIT
          ===================================================================== */}
       {layoutMenuOpen && (
         <div
-          className={`absolute right-2 top-13 short:top-11 z-30 w-[288px] max-w-[calc(100%-16px)] max-h-[calc(100%-64px)] overflow-y-auto no-scrollbar backdrop-blur-2xl border rounded-2xl p-3 space-y-2.5 shadow-2xl animate-ios-sheet-in ${
+          className={`absolute right-2 top-[3.25rem] z-30 w-[20rem] max-w-[calc(100%-16px)] max-h-[calc(100%-4rem)] overflow-y-auto no-scrollbar backdrop-blur-2xl border rounded-2xl p-3 space-y-3 shadow-2xl animate-ios-sheet-in ${
             isLightMap
               ? 'bg-white/98 border-slate-300 text-slate-900'
               : 'bg-[#0b1220]/98 border-slate-600 text-white'
@@ -1666,24 +1677,73 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                 isLightMap ? 'text-slate-800' : 'text-slate-200'
               }`}
             >
-              Tùy chỉnh bố cục Cockpit
+              Bố cục &amp; Cỡ hiển thị
             </span>
             <button
               type="button"
               onClick={() => setLayoutMenuOpen(false)}
-              className={`w-6 h-6 rounded-full flex items-center justify-center ${
+              className={`w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
                 isLightMap
                   ? 'bg-slate-200 hover:bg-slate-300 text-slate-800'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
               }`}
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="space-y-1">
+          {uiScale && onChangeUiScale && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs font-bold">
+                <span className={isLightMap ? 'text-slate-600' : 'text-slate-300'}>
+                  Cỡ chữ &amp; Nút chạm
+                </span>
+                <span className="font-mono text-[0.7rem] opacity-75">
+                  {typeof window !== 'undefined'
+                    ? `${window.innerWidth}×${window.innerHeight}`
+                    : ''}
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-1.5">
+                {(
+                  [
+                    { id: 'compact', label: 'Gọn', pct: '92%' },
+                    { id: 'normal', label: 'Vừa', pct: '106%' },
+                    { id: 'large', label: 'VF5', pct: '122%' },
+                    { id: 'xlarge', label: 'Rất to', pct: '138%' },
+                  ] as const
+                ).map((opt) => {
+                  const active = uiScale === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        onChangeUiScale(opt.id);
+                        onNotifyToast?.(`🔍 Đã chỉnh cỡ giao diện: ${opt.label} (${opt.pct})`);
+                      }}
+                      className={`min-h-[2.6rem] px-1 rounded-xl border flex flex-col items-center justify-center leading-tight active:scale-95 transition ${
+                        active
+                          ? isLightMap
+                            ? 'bg-blue-600 text-white border-blue-600 shadow'
+                            : 'bg-sky-400 text-slate-950 border-sky-300 shadow'
+                          : isLightMap
+                          ? 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
+                          : 'bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700'
+                      }`}
+                    >
+                      <span className="text-xs font-black">{opt.label}</span>
+                      <span className="text-[0.65rem] font-bold opacity-80">{opt.pct}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
             <span
-              className={`text-[11px] font-bold ${
+              className={`text-xs font-bold ${
                 isLightMap ? 'text-slate-600' : 'text-slate-300'
               }`}
             >
@@ -1695,7 +1755,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                 onClick={() => {
                   if (mapSide !== 'left') onToggleMapSide();
                 }}
-                className={`min-h-[38px] px-2 rounded-xl border text-[11px] font-extrabold flex items-center justify-center gap-1 active:scale-95 transition ${
+                className={`min-h-[2.5rem] px-2 rounded-xl border text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition ${
                   mapSide === 'left' && !isMapExpanded
                     ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow'
                     : isLightMap
@@ -1710,7 +1770,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                 onClick={() => {
                   if (mapSide !== 'right') onToggleMapSide();
                 }}
-                className={`min-h-[38px] px-2 rounded-xl border text-[11px] font-extrabold flex items-center justify-center gap-1 active:scale-95 transition ${
+                className={`min-h-[2.5rem] px-2 rounded-xl border text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition ${
                   mapSide === 'right' && !isMapExpanded
                     ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow'
                     : isLightMap
@@ -1724,7 +1784,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
           </div>
 
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between text-[11px] font-bold">
+            <div className="flex items-center justify-between text-xs font-bold">
               <span className={isLightMap ? 'text-slate-600' : 'text-slate-300'}>
                 Độ rộng Bản đồ
               </span>
@@ -1735,12 +1795,12 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
               >
                 {isMapExpanded
                   ? '100% (Toàn màn)'
-                  : `Map ${mapWidthPct}% • Nhạc ${100 - mapWidthPct}%`}
+                  : `Map ${mapWidthPct}% • Khung ${100 - mapWidthPct}%`}
               </span>
             </div>
 
             <div className="grid grid-cols-5 gap-1">
-              {[40, 50, 58, 68].map((pct) => (
+              {[38, 48, 56, 68].map((pct) => (
                 <button
                   key={pct}
                   type="button"
@@ -1748,7 +1808,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                     if (isMapExpanded) onToggleExpandMap();
                     onChangeMapWidthPct(pct);
                   }}
-                  className={`min-h-[32px] rounded-lg border text-[11px] font-extrabold active:scale-95 transition ${
+                  className={`min-h-[2.35rem] rounded-xl border text-xs font-extrabold active:scale-95 transition ${
                     !isMapExpanded && Math.abs(mapWidthPct - pct) <= 2
                       ? isLightMap
                         ? 'bg-blue-600 text-white border-blue-600'
@@ -1766,7 +1826,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                 onClick={() => {
                   if (!isMapExpanded) onToggleExpandMap();
                 }}
-                className={`min-h-[32px] rounded-lg border text-[11px] font-extrabold active:scale-95 transition ${
+                className={`min-h-[2.35rem] rounded-xl border text-xs font-extrabold active:scale-95 transition ${
                   isMapExpanded
                     ? isLightMap
                       ? 'bg-blue-600 text-white border-blue-600'
@@ -1784,13 +1844,13 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
               <input
                 type="range"
                 aria-label="Thanh chỉnh tỉ lệ bề ngang bản đồ"
-                min={34}
-                max={70}
+                min={30}
+                max={75}
                 step={1}
                 value={mapWidthPct}
                 style={
                   {
-                    '--progress': `${((mapWidthPct - 34) / (70 - 34)) * 100}%`,
+                    '--progress': `${((mapWidthPct - 30) / (75 - 30)) * 100}%`,
                   } as React.CSSProperties
                 }
                 onChange={(e) => onChangeMapWidthPct(parseInt(e.target.value, 10))}
@@ -1799,12 +1859,12 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
             )}
 
             <p
-              className={`text-[10px] font-semibold flex items-center gap-1 ${
+              className={`text-[0.7rem] font-semibold flex items-center gap-1 ${
                 isLightMap ? 'text-slate-600' : 'text-slate-400'
               }`}
             >
-              <ArrowLeftRight className="w-3 h-3 shrink-0" />
-              <span>Kéo nút cầm ở giữa 2 khung để chỉnh mượt!</span>
+              <ArrowLeftRight className="w-3.5 h-3.5 shrink-0" />
+              <span>Kéo tay nắm ở giữa 2 khung để chỉnh mượt!</span>
             </p>
           </div>
 
@@ -1816,38 +1876,38 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <span
-                  className={`text-[11px] font-extrabold block ${
+                  className={`text-xs font-extrabold block ${
                     isLightMap ? 'text-slate-800' : 'text-slate-100'
                   }`}
                 >
                   Tình trạng giao thông
                 </span>
                 <span
-                  className={`text-[10px] font-semibold ${
+                  className={`text-[0.7rem] font-semibold ${
                     isLightMap ? 'text-slate-500' : 'text-slate-400'
                   }`}
                 >
                   {showTraffic ? `Cập nhật ${trafficUpdatedAt} • Tự động 2p` : 'Đang ẩn trên bản đồ'}
                 </span>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
                   onClick={handleRefreshTrafficNow}
                   title="Làm mới dữ liệu giao thông ngay"
                   aria-label="Làm mới dữ liệu giao thông ngay"
-                  className={`w-7 h-7 rounded-lg border flex items-center justify-center active:scale-95 transition ${
+                  className={`w-9 h-9 rounded-xl border flex items-center justify-center active:scale-95 transition ${
                     isLightMap
                       ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700'
                       : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-200'
                   }`}
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
+                  <RefreshCw className="w-4 h-4" />
                 </button>
                 <button
                   type="button"
                   onClick={handleToggleTraffic}
-                  className={`h-7 px-2.5 rounded-lg border text-[11px] font-extrabold active:scale-95 transition ${
+                  className={`min-h-[2.25rem] px-3 rounded-xl border text-xs font-extrabold active:scale-95 transition ${
                     showTraffic
                       ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
                       : isLightMap
@@ -1861,7 +1921,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
             </div>
 
             <div
-              className={`grid grid-cols-4 gap-1 rounded-xl p-1.5 text-[9.5px] font-extrabold ${
+              className={`grid grid-cols-4 gap-1 rounded-xl p-1.5 text-[0.68rem] font-extrabold ${
                 isLightMap ? 'bg-slate-100 text-slate-700' : 'bg-slate-900/90 text-slate-200'
               }`}
             >
@@ -1987,9 +2047,9 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
          ===================================================================== */}
       {navDrawerOpen && (
         <div
-          className={`absolute inset-x-2 top-13 short:top-11 ${
-            isMapExpanded ? 'bottom-12' : 'bottom-2'
-          } z-30 backdrop-blur-2xl border rounded-2xl p-2.5 flex flex-col gap-2 animate-ios-sheet-in ${
+          className={`absolute inset-x-2 top-[3.25rem] ${
+            isMapExpanded ? 'bottom-14' : 'bottom-2'
+          } z-30 backdrop-blur-2xl border rounded-2xl p-3 flex flex-col gap-2 animate-ios-sheet-in ${
             isLightMap
               ? 'bg-white/98 border-slate-300 text-slate-950 shadow-[0_16px_44px_rgba(15,23,42,0.3)]'
               : 'bg-[#0b1220]/98 border-slate-600 text-white shadow-[0_16px_44px_rgba(0,0,0,0.88)]'
@@ -2012,8 +2072,8 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                 type="search"
                 value={placeQuery}
                 onChange={(e) => setPlaceQuery(e.target.value)}
-                placeholder="Gõ điểm đến (có dấu hoặc không dấu: ho guom, vincom...)"
-                className={`w-full h-9 pl-9 pr-8 rounded-xl border text-xs sm:text-sm font-bold focus:outline-none transition-colors ${
+                placeholder="Gõ điểm đến (ho guom, vincom, san bay...)"
+                className={`w-full h-11 pl-10 pr-9 rounded-xl border text-sm font-bold focus:outline-none transition-colors ${
                   isLightMap
                     ? 'bg-slate-100 border-slate-300 text-slate-950 placeholder-slate-500 focus:bg-white focus:border-blue-600'
                     : 'bg-slate-800 border-slate-600 text-white placeholder-slate-400 focus:bg-slate-900 focus:border-sky-400'
@@ -2024,19 +2084,19 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                   type="button"
                   onClick={() => setPlaceQuery('')}
                   aria-label="Xóa từ khóa tìm kiếm"
-                  className={`w-6 h-6 rounded-full absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center justify-center ${
+                  className={`w-7 h-7 rounded-full absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center justify-center ${
                     isLightMap
                       ? 'text-slate-500 hover:bg-slate-200 hover:text-slate-900'
                       : 'text-slate-400 hover:bg-slate-700 hover:text-white'
                   }`}
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="w-4 h-4" />
                 </button>
               )}
             </div>
             <button
               type="submit"
-              className={`h-9 px-3.5 rounded-xl font-extrabold text-xs shrink-0 shadow-sm active:scale-95 transition ${
+              className={`h-11 px-4 rounded-xl font-extrabold text-sm shrink-0 shadow-sm active:scale-95 transition ${
                 isLightMap
                   ? 'bg-blue-600 hover:bg-blue-700 text-white'
                   : 'bg-sky-400 hover:bg-sky-300 text-slate-950'
@@ -2048,13 +2108,13 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
               type="button"
               onClick={() => setNavDrawerOpen(false)}
               aria-label="Đóng hộp tìm kiếm bản đồ"
-              className={`h-9 w-9 rounded-xl border flex items-center justify-center shrink-0 active:scale-95 transition ${
+              className={`h-11 w-11 rounded-xl border flex items-center justify-center shrink-0 active:scale-95 transition ${
                 isLightMap
                   ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
                   : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-200'
               }`}
             >
-              <X className="w-4 h-4" />
+              <X className="w-5 h-5" />
             </button>
           </form>
 
@@ -2069,7 +2129,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                   handleQuickPinSlot('home');
                 }
               }}
-              className={`min-h-[30px] px-2.5 rounded-full border text-[11px] font-extrabold whitespace-nowrap flex items-center gap-1 active:scale-95 transition ${
+              className={`min-h-[2.35rem] px-3 rounded-full border text-xs font-extrabold whitespace-nowrap flex items-center gap-1.5 active:scale-95 transition ${
                 homePlace
                   ? isLightMap
                     ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
@@ -2079,7 +2139,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                   : 'bg-indigo-950/80 border-dashed border-indigo-400/60 text-indigo-200 hover:bg-indigo-900'
               }`}
             >
-              <Home className="w-3 h-3 shrink-0" />
+              <Home className="w-3.5 h-3.5 shrink-0" />
               <span>{homePlace ? `Về nhà` : 'Ghim vị trí Nhà'}</span>
             </button>
 
@@ -2092,7 +2152,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                   handleQuickPinSlot('work');
                 }
               }}
-              className={`min-h-[30px] px-2.5 rounded-full border text-[11px] font-extrabold whitespace-nowrap flex items-center gap-1 active:scale-95 transition ${
+              className={`min-h-[2.35rem] px-3 rounded-full border text-xs font-extrabold whitespace-nowrap flex items-center gap-1.5 active:scale-95 transition ${
                 workPlace
                   ? isLightMap
                     ? 'bg-amber-600 border-amber-600 text-white shadow-sm'
@@ -2102,14 +2162,14 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                   : 'bg-amber-950/80 border-dashed border-amber-400/60 text-amber-200 hover:bg-amber-900'
               }`}
             >
-              <Briefcase className="w-3 h-3 shrink-0" />
+              <Briefcase className="w-3.5 h-3.5 shrink-0" />
               <span>{workPlace ? `Cơ quan` : 'Ghim Cơ quan'}</span>
             </button>
 
             {customSavedPlaces.map((sp) => (
               <div
                 key={sp.id}
-                className={`min-h-[30px] rounded-full border flex items-center overflow-hidden shrink-0 ${
+                className={`min-h-[2.35rem] rounded-full border flex items-center overflow-hidden shrink-0 ${
                   isLightMap
                     ? 'bg-slate-100 border-slate-300 text-slate-900'
                     : 'bg-slate-800 border-slate-600 text-white'
@@ -2118,22 +2178,22 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                 <button
                   type="button"
                   onClick={() => startRouteTo({ name: sp.name, lat: sp.lat, lon: sp.lon })}
-                  className="px-2.5 py-1 text-[11px] font-extrabold whitespace-nowrap flex items-center gap-1 active:scale-95"
+                  className="px-3 py-1 text-xs font-extrabold whitespace-nowrap flex items-center gap-1 active:scale-95"
                 >
                   <span>{sp.icon}</span>
-                  <span className="max-w-[110px] truncate">{sp.name}</span>
+                  <span className="max-w-[7.5rem] truncate">{sp.name}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => onRemoveSavedPlace(sp.id)}
                   aria-label={`Xóa điểm ghim ${sp.name}`}
-                  className={`px-1.5 py-1 ${
+                  className={`px-2 py-1.5 ${
                     isLightMap
                       ? 'text-slate-500 hover:text-rose-600'
                       : 'text-slate-400 hover:text-rose-300'
                   }`}
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             ))}
@@ -2156,7 +2216,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                     setPlaceQuery('');
                     runPlaceSearch('', chip.id);
                   }}
-                  className={`min-h-[30px] px-2.5 rounded-full border text-[11px] font-extrabold whitespace-nowrap flex items-center gap-1 active:scale-95 transition ${
+                  className={`min-h-[2.35rem] px-3 rounded-full border text-xs font-extrabold whitespace-nowrap flex items-center gap-1.5 active:scale-95 transition ${
                     isChipActive
                       ? chip.id === 'ev'
                         ? isLightMap
@@ -2196,12 +2256,12 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
           <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-1.5">
             {isSearchingPlaces || isRouting ? (
               <div
-                className={`h-full flex items-center justify-center gap-2 text-xs font-extrabold ${
+                className={`h-full flex items-center justify-center gap-2 text-sm font-extrabold ${
                   isLightMap ? 'text-slate-700' : 'text-slate-200'
                 }`}
               >
                 <Loader2
-                  className={`w-4 h-4 animate-spin ${
+                  className={`w-5 h-5 animate-spin ${
                     isLightMap ? 'text-blue-600' : 'text-sky-400'
                   }`}
                 />
@@ -2226,7 +2286,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                 return (
                   <div
                     key={idx}
-                    className={`w-full px-2.5 py-2 rounded-xl border flex items-center justify-between gap-1.5 transition ${
+                    className={`w-full px-3 py-2.5 rounded-xl border flex items-center justify-between gap-2 transition ${
                       isLightMap
                         ? 'bg-slate-50 hover:bg-blue-50 border-slate-200/90'
                         : 'bg-slate-900/95 hover:bg-slate-800 border-slate-700'
@@ -2238,7 +2298,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                       className="min-w-0 flex-1 text-left active:scale-99"
                     >
                       <h5
-                        className={`text-xs sm:text-[13px] font-extrabold truncate ${
+                        className={`text-sm font-extrabold truncate ${
                           isLightMap ? 'text-slate-950' : 'text-white'
                         }`}
                       >
@@ -2246,7 +2306,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                       </h5>
                       {pl.subtitle && (
                         <p
-                          className={`text-[11px] font-semibold truncate mt-0.5 ${
+                          className={`text-xs font-semibold truncate mt-0.5 ${
                             isLightMap ? 'text-slate-600' : 'text-slate-300'
                           }`}
                         >
@@ -2255,20 +2315,20 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                       )}
                     </button>
 
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       {/* Ghim làm Nhà / Cơ quan / Yêu thích */}
                       <button
                         type="button"
                         onClick={() => handleQuickPinSlot('home', pl)}
                         title="Đặt làm Nhà riêng"
                         aria-label={`Đặt ${pl.name} làm Nhà riêng`}
-                        className={`w-7 h-7 rounded-lg border flex items-center justify-center active:scale-90 transition cq-hide-sm ${
+                        className={`w-9 h-9 rounded-xl border flex items-center justify-center active:scale-90 transition cq-hide-sm ${
                           isLightMap
                             ? 'bg-white border-slate-300 text-slate-600 hover:text-indigo-700'
                             : 'bg-slate-800 border-slate-600 text-slate-300 hover:text-indigo-300'
                         }`}
                       >
-                        <Home className="w-3.5 h-3.5" />
+                        <Home className="w-4 h-4" />
                       </button>
 
                       <button
@@ -2276,7 +2336,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                         onClick={() => handleTogglePinCustomPlace(pl)}
                         title={isPinned ? 'Bỏ ghim địa điểm' : 'Ghim địa điểm này'}
                         aria-label={isPinned ? `Bỏ ghim ${pl.name}` : `Ghim ${pl.name}`}
-                        className={`w-7 h-7 rounded-lg border flex items-center justify-center active:scale-90 transition ${
+                        className={`w-9 h-9 rounded-xl border flex items-center justify-center active:scale-90 transition ${
                           isPinned
                             ? 'bg-amber-400 border-amber-400 text-slate-950'
                             : isLightMap
@@ -2284,7 +2344,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                             : 'bg-slate-800 border-slate-600 text-slate-300 hover:text-amber-300'
                         }`}
                       >
-                        <Star className={`w-3.5 h-3.5 ${isPinned ? 'fill-slate-950' : ''}`} />
+                        <Star className={`w-4 h-4 ${isPinned ? 'fill-slate-950' : ''}`} />
                       </button>
 
                       {/* Nút Send-to-Car: Gửi địa điểm từ Điện thoại lên màn hình xe VF5 */}
@@ -2294,16 +2354,16 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                           disabled={sendingToCarIdx === idx}
                           onClick={() => handleSendPlaceToCar(pl, idx)}
                           title={`Gửi điểm đến lên màn VF5-${syncCode}`}
-                          className={`h-7 px-2 rounded-lg border text-[10px] font-black flex items-center gap-1 active:scale-95 transition ${
+                          className={`min-h-[2.25rem] px-2.5 rounded-xl border text-xs font-black flex items-center gap-1 active:scale-95 transition ${
                             isLightMap
                               ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700'
                               : 'bg-emerald-500 border-emerald-400 text-slate-950 hover:bg-emerald-400'
                           }`}
                         >
                           {sendingToCarIdx === idx ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           ) : (
-                            <Send className="w-3 h-3" />
+                            <Send className="w-3.5 h-3.5" />
                           )}
                           <span className="cq-hide-sm">Gửi xe</span>
                         </button>
@@ -2312,7 +2372,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                       <button
                         type="button"
                         onClick={() => startRouteTo(pl)}
-                        className={`h-7 px-2.5 rounded-lg text-[11px] font-mono font-black shadow-sm active:scale-95 transition ${
+                        className={`min-h-[2.25rem] px-3 rounded-xl text-xs font-mono font-black shadow-sm active:scale-95 transition ${
                           isLightMap ? 'bg-blue-600 text-white' : 'bg-sky-400 text-slate-950'
                         }`}
                       >
@@ -2365,7 +2425,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                     ? `Giao thông trực tiếp đang BẬT (cập nhật ${trafficUpdatedAt}) — Chạm để tắt`
                     : 'Chạm để bật hiển thị tình trạng giao thông trực tiếp'
                 }
-                className={`pointer-events-auto min-h-[32px] short:min-h-[28px] px-2.5 rounded-full backdrop-blur-xl border text-[11px] font-extrabold flex items-center gap-1.5 shadow-xl active:scale-95 transition ${
+                className={`pointer-events-auto min-h-[2.4rem] px-3 rounded-full backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-xl active:scale-95 transition ${
                   showTraffic
                     ? isLightMap
                       ? 'bg-white/96 hover:bg-white border-emerald-400 text-slate-900'
@@ -2377,17 +2437,17 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
               >
                 <span className="flex items-center gap-[2px] shrink-0" aria-hidden="true">
                   <span
-                    className={`w-1.5 h-3 rounded-full ${
+                    className={`w-1.5 h-3.5 rounded-full ${
                       showTraffic ? 'bg-[#16c964]' : 'bg-slate-400/70'
                     }`}
                   />
                   <span
-                    className={`w-1.5 h-3 rounded-full ${
+                    className={`w-1.5 h-3.5 rounded-full ${
                       showTraffic ? 'bg-[#f59e0b]' : 'bg-slate-400/50'
                     }`}
                   />
                   <span
-                    className={`w-1.5 h-3 rounded-full ${
+                    className={`w-1.5 h-3.5 rounded-full ${
                       showTraffic ? 'bg-[#ef4444]' : 'bg-slate-400/35'
                     }`}
                   />
@@ -2407,7 +2467,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                 </span>
                 {showTraffic && (
                   <span
-                    className={`cq-hide-md flex items-center gap-1.5 pl-1.5 ml-0.5 border-l text-[10px] font-bold ${
+                    className={`cq-hide-md flex items-center gap-1.5 pl-1.5 ml-0.5 border-l text-[0.7rem] font-bold ${
                       isLightMap
                         ? 'border-slate-300 text-slate-700'
                         : 'border-slate-700 text-slate-200'
@@ -2437,9 +2497,9 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
                   setIsRouteOverview(false);
                   setIsFollowing(true);
                 }}
-                className="pointer-events-auto min-h-[34px] short:min-h-[30px] px-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-xl active:scale-95 transition"
+                className="pointer-events-auto min-h-[2.45rem] px-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-xl active:scale-95 transition"
               >
-                <LocateFixed className="w-3.5 h-3.5" />
+                <LocateFixed className="w-4 h-4" />
                 <span>Bám mũi xe</span>
               </button>
             )}

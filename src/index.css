@@ -41,12 +41,12 @@
   container-type: size;
 }
 
-/* Container queries cho các cột tùy biến bề ngang trong Cockpit HUD */
+/* Container queries cho các cột tùy biến bề ngang trong Cockpit HUD (dùng đơn vị rem để tự thích ứng khi đổi Cỡ chữ!) */
 .cockpit-pane-cq {
   container-type: inline-size;
 }
 
-@container (max-width: 440px) {
+@container (max-width: 25rem) {
   .cq-hide-md {
     display: none !important;
   }
@@ -56,7 +56,7 @@
   display: none;
 }
 
-@container (max-width: 315px) {
+@container (max-width: 18.5rem) {
   .cq-hide-sm {
     display: none !important;
   }
@@ -65,9 +65,39 @@
   }
 }
 
-@container (max-width: 255px) {
+@container (max-width: 14.5rem) {
   .cq-hide-xs {
     display: none !important;
+  }
+}
+
+/* Danh sách kênh TV Live tự mở thành lưới 2 cột khi bề ngang rộng (màn hình to / dài ultrawide!) */
+.tv-list-cq {
+  container-type: inline-size;
+}
+
+.tv-channel-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.45rem;
+  align-content: start;
+}
+
+@container (min-width: 32rem) {
+  .tv-channel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Màn hình cảm ứng ô tô: tăng vùng chạm tối thiểu cho thanh trượt & các nút điều khiển */
+@media (pointer: coarse) {
+  input[type='range'].car-scrubber {
+    height: 2.75rem;
+  }
+  input[type='range'].car-scrubber::-webkit-slider-thumb {
+    width: 1.6rem;
+    height: 1.6rem;
+    margin-top: -0.52rem;
   }
 }
 

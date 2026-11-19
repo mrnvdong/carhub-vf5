@@ -213,7 +213,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
               <button
                 type="button"
                 onClick={() => onSwitchMode('addTrack')}
-                className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-extrabold flex items-center gap-1.5 transition ${
+                className={`min-h-[2.5rem] px-3.5 rounded-full text-xs sm:text-sm font-extrabold flex items-center gap-1.5 transition ${
                   mode === 'addTrack' ? theme.segActive : theme.segIdle
                 }`}
               >
@@ -224,7 +224,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
             <button
               type="button"
               onClick={() => onSwitchMode('sync')}
-              className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-extrabold flex items-center gap-1.5 transition ${
+              className={`min-h-[2.5rem] px-3.5 rounded-full text-xs sm:text-sm font-extrabold flex items-center gap-1.5 transition ${
                 mode === 'sync' ? theme.segActive : theme.segIdle
               }`}
             >
@@ -237,7 +237,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Đóng cửa sổ"
-            className={`h-11 w-11 short:h-10 short:w-10 rounded-full border flex items-center justify-center shrink-0 active:scale-90 transition ${theme.iconBtn}`}
+            className={`h-11 w-11 rounded-full border flex items-center justify-center shrink-0 active:scale-90 transition ${theme.iconBtn}`}
           >
             <X className="w-5 h-5" />
           </button>
