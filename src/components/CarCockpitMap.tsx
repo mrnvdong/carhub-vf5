@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   Map as MapLibreMap,
   Marker as MapLibreMarker,
@@ -16,7 +16,6 @@ import {
   Maximize2,
   Minimize2,
   Search,
-  Zap,
   X,
   Bell,
   BellOff,
@@ -28,8 +27,18 @@ import {
   ArrowLeftRight,
   Columns2,
   Play,
+  Volume2,
+  VolumeX,
+  Send,
+  Star,
+  Home,
+  Briefcase,
+  Trash2,
 } from 'lucide-react';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
+import { ActiveNavSummary, PendingNavTarget, SavedPlace } from '../types';
+import { sendNavToCar } from '../services/sync';
+import { playTurnChime, speakVietnamese, unlockCarAudio } from '../services/voiceAudio';
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -79,7 +88,6 @@ async function buildAutomotiveLight3DStyle(): Promise<StyleSpecification | strin
       }
       cachedLight3DTemplate = spec;
     }
-    // Luôn trả bản sao mới để MapLibre không ghi đè làm hỏng style gốc khi chuyển qua lại Sáng/Đêm
     return JSON.parse(JSON.stringify(cachedLight3DTemplate));
   } catch {
     return LIBERTY_STYLE_URL;
@@ -272,6 +280,7 @@ interface ActiveRoute {
 export interface CarCockpitMapProps {
   telemetry: CockpitTelemetry;
   clockTime: string;
+  isVisible?: boolean;
   isMapExpanded: boolean;
   onToggleExpandMap: () => void;
   mapSide: 'left' | 'right';
@@ -279,6 +288,14 @@ export interface CarCockpitMapProps {
   mapWidthPct: number;
   onChangeMapWidthPct: (pct: number) => void;
   suppressResizeObserver?: boolean;
+  savedPlaces: SavedPlace[];
+  onSavePlace: (place: SavedPlace) => void;
+  onRemoveSavedPlace: (id: string) => void;
+  syncCode: string;
+  incomingNavTarget: PendingNavTarget | null;
+  onConsumeIncomingNav: () => void;
+  onActiveNavChange?: (summary: ActiveNavSummary | null) => void;
+  onNotifyToast?: (msg: string) => void;
 }
 
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -292,9 +309,48 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
+// Tính khoảng cách thực tế còn lại dọc theo polyline tuyến đường + khoảng cách lệch khỏi tuyến (cross-track)
+function computeRouteProgress(
+  lat: number,
+  lon: number,
+  coords: [number, number][],
+  totalKm: number,
+  totalMin: number
+): { remainingKm: number; remainingMin: number; crossTrackDistM: number } {
+  if (!Array.isArray(coords) || coords.length < 2) {
+    return { remainingKm: totalKm, remainingMin: totalMin, crossTrackDistM: 0 };
+  }
+
+  let closestIdx = 0;
+  let minDistM = Infinity;
+  for (let i = 0; i < coords.length; i++) {
+    const d = haversineMeters(lat, lon, coords[i][1], coords[i][0]);
+    if (d < minDistM) {
+      minDistM = d;
+      closestIdx = i;
+    }
+  }
+
+  let remainingM = 0;
+  for (let i = closestIdx; i < coords.length - 1; i++) {
+    remainingM += haversineMeters(coords[i][1], coords[i][0], coords[i + 1][1], coords[i + 1][0]);
+  }
+
+  const remainingKm = Math.max(0.1, Math.round((remainingM / 1000) * 10) / 10);
+  const ratio = totalKm > 0 ? Math.min(1, remainingKm / totalKm) : 1;
+  const remainingMin = Math.max(1, Math.round(totalMin * ratio));
+
+  return {
+    remainingKm,
+    remainingMin,
+    crossTrackDistM: Math.round(minDistM),
+  };
+}
+
+const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
   telemetry,
   clockTime,
+  isVisible = true,
   isMapExpanded,
   onToggleExpandMap,
   mapSide,
@@ -302,6 +358,14 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
   mapWidthPct,
   onChangeMapWidthPct,
   suppressResizeObserver = false,
+  savedPlaces,
+  onSavePlace,
+  onRemoveSavedPlace,
+  syncCode,
+  incomingNavTarget,
+  onConsumeIncomingNav,
+  onActiveNavChange,
+  onNotifyToast,
 }) => {
   const {
     speedKmh,
@@ -324,11 +388,27 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
   const suppressResizeRef = useRef<boolean>(suppressResizeObserver);
   suppressResizeRef.current = suppressResizeObserver;
 
+  // Lưu lớp bản đồ người dùng chọn vào localStorage
   const [mapTheme, setMapTheme] = useState<MapTheme>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_cockpit_map_theme') as MapTheme | null;
+      if (saved === 'vector3d' || saved === 'dark3d' || saved === 'osm' || saved === 'satellite') {
+        return saved;
+      }
+    } catch {}
     const hr = new Date().getHours();
     return hr >= 18 || hr < 6 ? 'dark3d' : 'vector3d';
   });
   const appliedThemeRef = useRef<MapTheme>(mapTheme);
+
+  const [voiceNavEnabled, setVoiceNavEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_voice_nav');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
 
   const [is3DHeadingUp, setIs3DHeadingUp] = useState<boolean>(true);
   const [isFollowing, setIsFollowing] = useState<boolean>(true);
@@ -344,7 +424,9 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
   const [isSearchingPlaces, setIsSearchingPlaces] = useState<boolean>(false);
   const [activeRoute, setActiveRoute] = useState<ActiveRoute | null>(null);
   const [isRouting, setIsRouting] = useState<boolean>(false);
+  const [isRerouting, setIsRerouting] = useState<boolean>(false);
   const [routeError, setRouteError] = useState<string | null>(null);
+  const [sendingToCarIdx, setSendingToCarIdx] = useState<number | null>(null);
 
   const isLightMap = mapTheme === 'vector3d' || mapTheme === 'osm';
   const isLightMapRef = useRef<boolean>(isLightMap);
@@ -353,7 +435,23 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
   const activeRouteRef = useRef<ActiveRoute | null>(activeRoute);
   activeRouteRef.current = activeRoute;
 
-  // Đồng bộ vệt dẫn đường lên MapLibre (tự động đổi màu Xanh Hoàng Gia trên nền Sáng & Xanh Neon trên nền Đêm)
+  const lastRerouteAtRef = useRef<number>(0);
+  const spokenMarksRef = useRef<Set<string>>(new Set());
+  const lastConsumedNavIdRef = useRef<string>('');
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_cockpit_map_theme', mapTheme);
+    } catch {}
+  }, [mapTheme]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('carhub_voice_nav', String(voiceNavEnabled));
+    } catch {}
+  }, [voiceNavEnabled]);
+
+  // Đồng bộ vệt dẫn đường lên MapLibre (Xanh Hoàng Gia trên nền Sáng & Xanh Neon trên nền Đêm)
   const syncRouteDataToMap = useCallback((map: MapLibreMap) => {
     const apply = () => {
       try {
@@ -415,7 +513,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     }
   }, []);
 
-  // Khởi tạo bản đồ WebGL 3D MapLibre
+  // Khởi tạo bản đồ WebGL 3D MapLibre (chỉ khởi tạo 1 lần duy nhất nhờ giữ sống Cockpit!)
   useEffect(() => {
     const container = mapContainerRef.current;
     if (!container || mapRef.current) return;
@@ -512,7 +610,6 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
       window.requestAnimationFrame(() => map.resize());
       window.setTimeout(() => map.resize(), 250);
 
-      // Throttle resize + trailing sync để kéo thanh ngăn / thanh trượt Bố cục mượt 60fps không giật WebGL!
       resizeObs = new ResizeObserver(() => {
         const now = performance.now();
         if (trailingResizeTimer !== null) {
@@ -549,16 +646,16 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Khi kết thúc kéo thả thanh ngăn -> gọi resize 1 lần chuẩn xác cuối cùng
+  // Khi quay lại tab Cockpit hoặc kết thúc kéo thanh ngăn -> gọi resize 1 lần chuẩn xác
   useEffect(() => {
-    if (!suppressResizeObserver && mapRef.current) {
+    if (isVisible && !suppressResizeObserver && mapRef.current) {
       window.requestAnimationFrame(() => {
         mapRef.current?.resize();
       });
     }
-  }, [suppressResizeObserver, mapWidthPct, mapSide, isMapExpanded]);
+  }, [isVisible, suppressResizeObserver, mapWidthPct, mapSide, isMapExpanded]);
 
-  // Đổi lớp bản đồ (Sáng 3D / Đêm 3D / OSM / Vệ tinh) — dùng { diff: false } để không bị lem màu chữ cũ!
+  // Đổi lớp bản đồ (Sáng 3D / Đêm 3D / OSM / Vệ tinh) — { diff: false } chống lem màu chữ!
   useEffect(() => {
     const map = mapRef.current;
     if (!map || appliedThemeRef.current === mapTheme) return;
@@ -578,7 +675,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     };
   }, [mapTheme, syncRouteDataToMap]);
 
-  // Nếu xe bắt đầu lăn bánh (> 5 km/h) khi đang xem toàn cảnh lộ trình -> tự động chuyển sang Bám mũi xe 3D!
+  // Nếu xe bắt đầu lăn bánh (>= 5 km/h) khi đang xem toàn cảnh lộ trình -> tự chuyển sang Bám mũi xe 3D
   useEffect(() => {
     if (isRouteOverview && speedKmh !== null && speedKmh >= 5) {
       setIsRouteOverview(false);
@@ -600,7 +697,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
       carArrowElRef.current.style.transform = `rotate(${arrowDeg}deg)`;
     }
 
-    if (isFollowing && !isRouteOverview) {
+    if (isVisible && isFollowing && !isRouteOverview) {
       map.easeTo({
         center: [position.lon, position.lat],
         zoom: is3DHeadingUp ? 16.2 : 15.5,
@@ -612,7 +709,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
         duration: 600,
       });
     }
-  }, [position.lat, position.lon, position.heading, isFollowing, is3DHeadingUp, isRouteOverview]);
+  }, [position.lat, position.lon, position.heading, isFollowing, is3DHeadingUp, isRouteOverview, isVisible]);
 
   // Cập nhật vệt đường & cờ đích khi có lộ trình mới
   useEffect(() => {
@@ -642,9 +739,9 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
         .setLngLat([activeRoute.destLon, activeRoute.destLat])
         .addTo(map);
 
-      // Phóng bao quát toàn bộ lộ trình từ xe tới Đích để tài xế nhìn thấy ngay vệt đường xanh!
+      // Chỉ zoom bao quát khi bắt đầu tuyến mới (không zoom ngược ra toàn cảnh khi đang auto-reroute lúc xe đang chạy!)
       const coords: [number, number][] = activeRoute.geometry?.coordinates || [];
-      if (coords.length >= 2) {
+      if (coords.length >= 2 && (!speedKmh || speedKmh < 5)) {
         const bounds = new LngLatBounds(coords[0], coords[0]);
         for (const c of coords) {
           bounds.extend([c[0], c[1]]);
@@ -652,7 +749,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
         bounds.extend([position.lon, position.lat]);
         setIsRouteOverview(true);
         map.fitBounds(bounds, {
-          padding: { top: 68, bottom: 58, left: 40, right: 40 },
+          padding: { top: 78, bottom: 58, left: 40, right: 40 },
           pitch: 30,
           bearing: 0,
           duration: 850,
@@ -738,7 +835,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     [position.lat, position.lon]
   );
 
-  // Tự động tìm địa điểm sau 380ms khi gõ chữ (không bắt bấm Enter trên màn xe)
+  // Tự động tìm địa điểm sau 380ms khi gõ chữ
   useEffect(() => {
     if (!navDrawerOpen) return;
     const trimmed = placeQuery.trim();
@@ -750,54 +847,115 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
   }, [placeQuery, navDrawerOpen, runPlaceSearch]);
 
   // Gọi Edge API /api/route (FOSSGIS OSRM + fallback) kèm bước rẽ tiếng Việt
-  const startRouteTo = async (place: PlaceItem) => {
-    setIsRouting(true);
-    setRouteError(null);
-    if (gpsStatus === 'idle') {
-      requestGps();
-    }
-
-    try {
-      const apiUrl = `/api/route?fromLat=${position.lat.toFixed(5)}&fromLon=${position.lon.toFixed(
-        5
-      )}&toLat=${place.lat.toFixed(5)}&toLon=${place.lon.toFixed(5)}`;
-
-      const res = await fetch(apiUrl, { signal: AbortSignal.timeout(8500) });
-      const ct = res.headers.get('content-type') || '';
-
-      if (res.ok && ct.includes('application/json')) {
-        const data = await res.json();
-        if (data?.success && data?.geometry) {
-          setActiveRoute({
-            destinationName: place.name,
-            destLat: place.lat,
-            destLon: place.lon,
-            distanceKm: data.distanceKm,
-            durationMin: data.durationMin,
-            geometry: data.geometry,
-            steps: Array.isArray(data.steps) ? data.steps : [],
-          });
-          setNavDrawerOpen(false);
-          setIsRouting(false);
-          return;
-        }
-        setRouteError(data?.error || 'Không tính được đường đi tới địa điểm này.');
+  const startRouteTo = useCallback(
+    async (
+      place: { name: string; lat: number; lon: number },
+      options?: { isReroute?: boolean; fromPhone?: boolean }
+    ) => {
+      unlockCarAudio();
+      const isReroute = Boolean(options?.isReroute);
+      if (isReroute) {
+        setIsRerouting(true);
       } else {
-        setRouteError('Máy chủ dẫn đường đang bận, vui lòng thử lại sau giây lát.');
+        setIsRouting(true);
       }
-    } catch {
-      setRouteError('Lỗi kết nối mạng khi tính lộ trình.');
-    }
-    setIsRouting(false);
-  };
+      setRouteError(null);
+
+      if (gpsStatus === 'idle') {
+        requestGps();
+      }
+
+      try {
+        const apiUrl = `/api/route?fromLat=${position.lat.toFixed(5)}&fromLon=${position.lon.toFixed(
+          5
+        )}&toLat=${place.lat.toFixed(5)}&toLon=${place.lon.toFixed(5)}`;
+
+        const res = await fetch(apiUrl, { signal: AbortSignal.timeout(8500) });
+        const ct = res.headers.get('content-type') || '';
+
+        if (res.ok && ct.includes('application/json')) {
+          const data = await res.json();
+          if (data?.success && data?.geometry) {
+            spokenMarksRef.current = new Set();
+            lastRerouteAtRef.current = Date.now();
+            setActiveRoute({
+              destinationName: place.name,
+              destLat: place.lat,
+              destLon: place.lon,
+              distanceKm: data.distanceKm,
+              durationMin: data.durationMin,
+              geometry: data.geometry,
+              steps: Array.isArray(data.steps) ? data.steps : [],
+            });
+            setNavDrawerOpen(false);
+            setIsRouting(false);
+            setIsRerouting(false);
+
+            if (voiceNavEnabled) {
+              if (options?.fromPhone) {
+                speakVietnamese(
+                  `Đã nhận điểm đến từ điện thoại, dẫn đường tới ${place.name}, khoảng ${data.distanceKm} ki lô mét`,
+                  { dedupeKey: `start-phone-${place.name}`, cooldownMs: 5000, chime: true }
+                );
+              } else if (isReroute) {
+                speakVietnamese('Đã cập nhật lại tuyến đường mới', {
+                  dedupeKey: 'reroute-done',
+                  cooldownMs: 8000,
+                  chime: true,
+                });
+              } else {
+                speakVietnamese(
+                  `Bắt đầu dẫn đường tới ${place.name}, khoảng ${data.distanceKm} ki lô mét, dự kiến ${data.durationMin} phút`,
+                  { dedupeKey: `start-${place.name}`, cooldownMs: 5000, chime: true }
+                );
+              }
+            } else if (options?.fromPhone) {
+              playTurnChime();
+            }
+            return;
+          }
+          if (!isReroute) {
+            setRouteError(data?.error || 'Không tính được đường đi tới địa điểm này.');
+          }
+        } else if (!isReroute) {
+          setRouteError('Máy chủ dẫn đường đang bận, vui lòng thử lại sau giây lát.');
+        }
+      } catch {
+        if (!isReroute) {
+          setRouteError('Lỗi kết nối mạng khi tính lộ trình.');
+        }
+      }
+      setIsRouting(false);
+      setIsRerouting(false);
+    },
+    [gpsStatus, position.lat, position.lon, requestGps, voiceNavEnabled]
+  );
+
+  // Send-to-Car: Tự nhận điểm đến từ điện thoại qua Mã Xe VF5-XXXX
+  useEffect(() => {
+    if (!incomingNavTarget || !incomingNavTarget.id) return;
+    if (lastConsumedNavIdRef.current === incomingNavTarget.id) return;
+    lastConsumedNavIdRef.current = incomingNavTarget.id;
+
+    onNotifyToast?.(`📲 Đã nhận điểm đến từ điện thoại: ${incomingNavTarget.name}`);
+    startRouteTo(
+      {
+        name: incomingNavTarget.name,
+        lat: incomingNavTarget.lat,
+        lon: incomingNavTarget.lon,
+      },
+      { fromPhone: true }
+    );
+    onConsumeIncomingNav();
+  }, [incomingNavTarget, onConsumeIncomingNav, onNotifyToast, startRouteTo]);
 
   const stepIndexRef = useRef<number>(1);
   useEffect(() => {
     stepIndexRef.current = activeRoute && activeRoute.steps.length > 1 ? 1 : 0;
   }, [activeRoute]);
 
-  // Theo dõi tuần tự từng bước rẽ trên lộ trình (tự động chuyển bước khi xe tiến vào < 35m quanh giao lộ)
-  const nextTurn = React.useMemo(() => {
+  // Theo dõi tuần tự từng bước rẽ trên lộ trình
+  const nextTurn = useMemo(() => {
     if (!activeRoute || activeRoute.steps.length === 0) return null;
     const steps = activeRoute.steps;
     let idx = Math.min(stepIndexRef.current, steps.length - 1);
@@ -812,29 +970,187 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
     }
 
     const chosen = steps[idx] || steps[steps.length - 1];
-    const distM = Math.round(
-      haversineMeters(position.lat, position.lon, chosen.lat, chosen.lon)
-    );
-    return { step: chosen, distM };
+    const distM = Math.round(haversineMeters(position.lat, position.lon, chosen.lat, chosen.lon));
+    return { step: chosen, distM, stepIdx: idx };
   }, [activeRoute, position.lat, position.lon]);
+
+  // Tính quãng đường & thời gian còn lại CHÍNH XÁC dọc theo Polyline thực tế + độ lệch khỏi tuyến
+  const routeProgress = useMemo(() => {
+    if (!activeRoute) return null;
+    const coords: [number, number][] = activeRoute.geometry?.coordinates || [];
+    return computeRouteProgress(
+      position.lat,
+      position.lon,
+      coords,
+      activeRoute.distanceKm,
+      activeRoute.durationMin
+    );
+  }, [activeRoute, position.lat, position.lon]);
+
+  // Auto-Reroute: Nếu đang chạy GPS mà lệch khỏi tuyến > 75m (đi nhầm ngã rẽ) -> tự tính lại đường mới!
+  useEffect(() => {
+    if (!activeRoute || !routeProgress || gpsStatus !== 'active' || isRerouting || isRouting) {
+      return;
+    }
+    const now = Date.now();
+    if (routeProgress.crossTrackDistM > 75 && now - lastRerouteAtRef.current > 12000) {
+      lastRerouteAtRef.current = now;
+      onNotifyToast?.('🔄 Đi chệch tuyến — Đang tự dẫn đường lại...');
+      startRouteTo(
+        {
+          name: activeRoute.destinationName,
+          lat: activeRoute.destLat,
+          lon: activeRoute.destLon,
+        },
+        { isReroute: true }
+      );
+    }
+  }, [
+    activeRoute,
+    routeProgress,
+    gpsStatus,
+    isRerouting,
+    isRouting,
+    onNotifyToast,
+    startRouteTo,
+  ]);
+
+  // Giọng nói chỉ đường tiếng Việt tự động ở mốc 180m và 45m trước mỗi ngã rẽ + khi tới đích!
+  useEffect(() => {
+    if (!activeRoute || !nextTurn || !voiceNavEnabled || gpsStatus !== 'active') return;
+
+    const { step, distM, stepIdx } = nextTurn;
+    const isArrive = step.arrow === '🏁';
+
+    if (isArrive && distM <= 35) {
+      const mark = `arrive-${activeRoute.destinationName}`;
+      if (!spokenMarksRef.current.has(mark)) {
+        spokenMarksRef.current.add(mark);
+        speakVietnamese(`Bạn đã đến ${activeRoute.destinationName}`, {
+          dedupeKey: mark,
+          cooldownMs: 30000,
+          chime: true,
+        });
+      }
+      return;
+    }
+
+    if (distM <= 185 && distM > 55) {
+      const mark = `step-${stepIdx}-180`;
+      if (!spokenMarksRef.current.has(mark)) {
+        spokenMarksRef.current.add(mark);
+        const rounded = Math.max(50, Math.round(distM / 10) * 10);
+        speakVietnamese(`Còn ${rounded} mét, ${step.instruction}`, {
+          dedupeKey: mark,
+          cooldownMs: 15000,
+          chime: true,
+        });
+      }
+    } else if (distM <= 55) {
+      const mark = `step-${stepIdx}-45`;
+      if (!spokenMarksRef.current.has(mark)) {
+        spokenMarksRef.current.add(mark);
+        speakVietnamese(`Chuẩn bị ${step.instruction}`, {
+          dedupeKey: mark,
+          cooldownMs: 12000,
+          chime: true,
+        });
+      }
+    }
+  }, [activeRoute, nextTurn, voiceNavEnabled, gpsStatus]);
+
+  // Đồng bộ tóm tắt lộ trình lên VideoPlayer cho thanh Mini Turn & Speed Pill khi chuyển tab
+  useEffect(() => {
+    if (!onActiveNavChange) return;
+    if (!activeRoute || !routeProgress) {
+      onActiveNavChange(null);
+      return;
+    }
+    onActiveNavChange({
+      destinationName: activeRoute.destinationName,
+      remainingKm: routeProgress.remainingKm,
+      remainingMin: routeProgress.remainingMin,
+      nextInstruction: nextTurn?.step.instruction || 'Tiếp tục theo lộ trình',
+      nextArrow: nextTurn?.step.arrow || '⬆️',
+      nextDistM: nextTurn?.distM || 0,
+    });
+  }, [activeRoute, routeProgress, nextTurn, onActiveNavChange]);
+
+  const handleSendPlaceToCar = async (pl: PlaceItem, idx: number) => {
+    if (syncCode.length < 4) {
+      onNotifyToast?.('Hãy gắn Mã Xe VF5 (trong mục Playlist) trước khi gửi điểm đến.');
+      return;
+    }
+    setSendingToCarIdx(idx);
+    const res = await sendNavToCar(syncCode, {
+      name: pl.name,
+      subtitle: pl.subtitle,
+      lat: pl.lat,
+      lon: pl.lon,
+    });
+    setSendingToCarIdx(null);
+    if (res.success) {
+      onNotifyToast?.(`📲 Đã gửi "${pl.name}" lên màn hình xe VF5-${syncCode}!`);
+    } else {
+      onNotifyToast?.(res.error || 'Không gửi được điểm đến lên xe.');
+    }
+  };
+
+  const homePlace = savedPlaces.find((p) => p.slot === 'home');
+  const workPlace = savedPlaces.find((p) => p.slot === 'work');
+  const customSavedPlaces = savedPlaces.filter((p) => p.slot !== 'home' && p.slot !== 'work');
+
+  const handleQuickPinSlot = (slot: 'home' | 'work', pl?: PlaceItem) => {
+    const targetLat = pl ? pl.lat : position.lat;
+    const targetLon = pl ? pl.lon : position.lon;
+    const name = pl ? pl.name : slot === 'home' ? 'Nhà riêng' : 'Cơ quan';
+    const subtitle = pl
+      ? pl.subtitle
+      : roadInfo?.roadName || `${targetLat.toFixed(4)}, ${targetLon.toFixed(4)}`;
+
+    onSavePlace({
+      id: `slot-${slot}`,
+      slot,
+      icon: slot === 'home' ? '🏠' : '🏢',
+      name,
+      subtitle,
+      lat: targetLat,
+      lon: targetLon,
+    });
+    onNotifyToast?.(
+      slot === 'home' ? `🏠 Đã ghim "${name}" làm Nhà riêng!` : `🏢 Đã ghim "${name}" làm Cơ quan!`
+    );
+  };
+
+  const handleTogglePinCustomPlace = (pl: PlaceItem) => {
+    const existing = savedPlaces.find(
+      (s) =>
+        s.slot === 'custom' &&
+        Math.abs(s.lat - pl.lat) < 0.0005 &&
+        Math.abs(s.lon - pl.lon) < 0.0005
+    );
+    if (existing) {
+      onRemoveSavedPlace(existing.id);
+      onNotifyToast?.(`Đã bỏ ghim "${pl.name}"`);
+    } else {
+      onSavePlace({
+        id: `place-${Date.now()}`,
+        slot: 'custom',
+        icon: '⭐',
+        name: pl.name,
+        subtitle: pl.subtitle,
+        lat: pl.lat,
+        lon: pl.lon,
+      });
+      onNotifyToast?.(`⭐ Đã ghim nhanh "${pl.name}"`);
+    }
+  };
 
   const speedValue = speedKmh !== null ? speedKmh : 0;
   const activeLimit = roadInfo?.speedLimit ?? null;
   const isOverLimit = activeLimit !== null && speedKmh !== null && speedValue > activeLimit;
   const isDangerOverLimit =
     activeLimit !== null && speedKmh !== null && speedValue >= activeLimit + 5;
-
-  const remainingRouteKm = activeRoute
-    ? Math.max(
-        0.1,
-        Math.round(
-          (haversineMeters(position.lat, position.lon, activeRoute.destLat, activeRoute.destLon) /
-            1000) *
-            1.25 *
-            10
-        ) / 10
-      )
-    : null;
 
   return (
     <div
@@ -1014,7 +1330,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
               runPlaceSearch('', 'ev');
             }
           }}
-          title="Tìm đường & Trạm sạc VinFast"
+          title="Tìm đường, Địa điểm quen & Trạm sạc VinFast"
           className={`min-h-[36px] short:min-h-[32px] px-2.5 rounded-xl backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition ${
             navDrawerOpen
               ? isLightMap
@@ -1187,7 +1503,9 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                   isLightMap ? 'text-emerald-700' : 'text-emerald-300'
                 }`}
               >
-                {isMapExpanded ? '100% (Toàn màn)' : `Map ${mapWidthPct}% • Nhạc ${100 - mapWidthPct}%`}
+                {isMapExpanded
+                  ? '100% (Toàn màn)'
+                  : `Map ${mapWidthPct}% • Nhạc ${100 - mapWidthPct}%`}
               </span>
             </div>
 
@@ -1246,7 +1564,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                   } as React.CSSProperties
                 }
                 onChange={(e) => onChangeMapWidthPct(parseInt(e.target.value, 10))}
-                className="car-scrubber"
+                className={isLightMap ? 'car-scrubber car-scrubber-light' : 'car-scrubber'}
               />
             )}
 
@@ -1263,11 +1581,11 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
       )}
 
       {/* =====================================================================
-          3. THẺ HƯỚNG DẪN RẼ TIẾP THEO & LỘ TRÌNH ĐANG CHẠY
+          3. THẺ HƯỚNG DẪN RẼ TIẾP THEO (Đặt dưới cụm ODO bên trái -> KHÔNG BAO GIỜ đè nhau khi map hẹp!)
          ===================================================================== */}
       {activeRoute && !navDrawerOpen && !layoutMenuOpen && (
         <div
-          className={`absolute top-13 short:top-11 right-2 z-20 max-w-[270px] backdrop-blur-xl border rounded-2xl p-2.5 flex flex-col gap-1.5 shadow-2xl ${
+          className={`absolute top-[4.65rem] short:top-[4.1rem] left-2 z-20 max-w-[min(285px,calc(100%-16px))] backdrop-blur-xl border rounded-2xl p-2.5 flex flex-col gap-1.5 shadow-2xl ${
             isLightMap
               ? 'bg-blue-700 text-white border-blue-500'
               : 'bg-sky-950/96 text-white border-sky-400/70'
@@ -1275,11 +1593,18 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              {nextTurn && (
-                <p className="text-xs font-black text-white leading-snug line-clamp-2">
-                  {nextTurn.step.arrow} {nextTurn.step.instruction}
-                  {nextTurn.distM > 0 ? ` (${nextTurn.distM}m)` : ''}
+              {isRerouting ? (
+                <p className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  <span>Đang tính lại đường đi mới...</span>
                 </p>
+              ) : (
+                nextTurn && (
+                  <p className="text-xs font-black text-white leading-snug line-clamp-2">
+                    {nextTurn.step.arrow} {nextTurn.step.instruction}
+                    {nextTurn.distM > 0 ? ` (${nextTurn.distM}m)` : ''}
+                  </p>
+                )
               )}
               <div
                 className={`flex items-center gap-1 text-[11px] font-bold truncate mt-0.5 ${
@@ -1288,19 +1613,50 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
               >
                 <Flag className="w-3 h-3 shrink-0" />
                 <span className="truncate">
-                  {activeRoute.destinationName} • ~{remainingRouteKm ?? activeRoute.distanceKm} km (
-                  {activeRoute.durationMin}p)
+                  {activeRoute.destinationName} •{' '}
+                  {routeProgress ? routeProgress.remainingKm : activeRoute.distanceKm} km (
+                  {routeProgress ? routeProgress.remainingMin : activeRoute.durationMin}p)
                 </span>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setActiveRoute(null)}
-              aria-label="Hủy lộ trình"
-              className="w-7 h-7 rounded-full bg-white/20 hover:bg-rose-500 text-white flex items-center justify-center shrink-0 transition"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  unlockCarAudio();
+                  setVoiceNavEnabled((v) => {
+                    const next = !v;
+                    onNotifyToast?.(
+                      next ? '🔊 Đã bật giọng nói chỉ đường tiếng Việt' : '🔇 Đã tắt giọng nói chỉ đường'
+                    );
+                    return next;
+                  });
+                }}
+                aria-label="Bật hoặc tắt giọng nói chỉ đường"
+                title={voiceNavEnabled ? 'Đang bật giọng nói chỉ đường' : 'Đang tắt giọng nói chỉ đường'}
+                className={`w-7 h-7 rounded-full flex items-center justify-center transition ${
+                  voiceNavEnabled
+                    ? 'bg-emerald-400 text-slate-950'
+                    : 'bg-white/20 text-white/70 hover:bg-white/30'
+                }`}
+              >
+                {voiceNavEnabled ? (
+                  <Volume2 className="w-3.5 h-3.5" />
+                ) : (
+                  <VolumeX className="w-3.5 h-3.5" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveRoute(null)}
+                aria-label="Hủy lộ trình"
+                className="w-7 h-7 rounded-full bg-white/20 hover:bg-rose-500 text-white flex items-center justify-center transition"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
 
           {isRouteOverview && (
@@ -1320,7 +1676,7 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
       )}
 
       {/* =====================================================================
-          4. HỘP TÌM ĐỊA ĐIỂM & TRẠM SẠC VINFAST NHANH (TƯƠNG PHẢN CAO CẢ SÁNG LẪN ĐÊM!)
+          4. HỘP TÌM ĐỊA ĐIỂM, GHIM NHÀ/CƠ QUAN & GỬI LÊN XE (SEND-TO-CAR)
          ===================================================================== */}
       {navDrawerOpen && (
         <div
@@ -1393,6 +1749,88 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
             </button>
           </form>
 
+          {/* Hàng 1: Địa điểm quen thuộc 1 chạm (🏠 Về nhà, 🏢 Cơ quan & các điểm đã ghim) */}
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                if (homePlace) {
+                  startRouteTo({ name: homePlace.name, lat: homePlace.lat, lon: homePlace.lon });
+                } else {
+                  handleQuickPinSlot('home');
+                }
+              }}
+              className={`min-h-[30px] px-2.5 rounded-full border text-[11px] font-extrabold whitespace-nowrap flex items-center gap-1 active:scale-95 transition ${
+                homePlace
+                  ? isLightMap
+                    ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
+                    : 'bg-indigo-500 border-indigo-400 text-white shadow-sm'
+                  : isLightMap
+                  ? 'bg-indigo-50 border-dashed border-indigo-400 text-indigo-800 hover:bg-indigo-100'
+                  : 'bg-indigo-950/80 border-dashed border-indigo-400/60 text-indigo-200 hover:bg-indigo-900'
+              }`}
+            >
+              <Home className="w-3 h-3 shrink-0" />
+              <span>{homePlace ? `Về nhà` : 'Ghim vị trí Nhà'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (workPlace) {
+                  startRouteTo({ name: workPlace.name, lat: workPlace.lat, lon: workPlace.lon });
+                } else {
+                  handleQuickPinSlot('work');
+                }
+              }}
+              className={`min-h-[30px] px-2.5 rounded-full border text-[11px] font-extrabold whitespace-nowrap flex items-center gap-1 active:scale-95 transition ${
+                workPlace
+                  ? isLightMap
+                    ? 'bg-amber-600 border-amber-600 text-white shadow-sm'
+                    : 'bg-amber-500 border-amber-400 text-slate-950 shadow-sm'
+                  : isLightMap
+                  ? 'bg-amber-50 border-dashed border-amber-400 text-amber-900 hover:bg-amber-100'
+                  : 'bg-amber-950/80 border-dashed border-amber-400/60 text-amber-200 hover:bg-amber-900'
+              }`}
+            >
+              <Briefcase className="w-3 h-3 shrink-0" />
+              <span>{workPlace ? `Cơ quan` : 'Ghim Cơ quan'}</span>
+            </button>
+
+            {customSavedPlaces.map((sp) => (
+              <div
+                key={sp.id}
+                className={`min-h-[30px] rounded-full border flex items-center overflow-hidden shrink-0 ${
+                  isLightMap
+                    ? 'bg-slate-100 border-slate-300 text-slate-900'
+                    : 'bg-slate-800 border-slate-600 text-white'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => startRouteTo({ name: sp.name, lat: sp.lat, lon: sp.lon })}
+                  className="px-2.5 py-1 text-[11px] font-extrabold whitespace-nowrap flex items-center gap-1 active:scale-95"
+                >
+                  <span>{sp.icon}</span>
+                  <span className="max-w-[110px] truncate">{sp.name}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemoveSavedPlace(sp.id)}
+                  aria-label={`Xóa điểm ghim ${sp.name}`}
+                  className={`px-1.5 py-1 ${
+                    isLightMap
+                      ? 'text-slate-500 hover:text-rose-600'
+                      : 'text-slate-400 hover:text-rose-300'
+                  }`}
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Hàng 2: Danh mục tìm nhanh POI */}
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
             {[
               { id: 'ev', label: 'Trạm sạc gần đây', icon: '⚡' },
@@ -1469,46 +1907,112 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
                 Không tìm thấy địa điểm — Hãy thử gõ tên đường / quận rõ hơn
               </p>
             ) : (
-              placeResults.map((pl, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => startRouteTo(pl)}
-                  className={`w-full text-left px-3 py-2 rounded-xl border flex items-center justify-between gap-2 active:scale-99 transition ${
-                    isLightMap
-                      ? 'bg-slate-50 hover:bg-blue-50 border-slate-200/90'
-                      : 'bg-slate-900/95 hover:bg-slate-800 border-slate-700'
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <h5
-                      className={`text-xs sm:text-[13px] font-extrabold truncate ${
-                        isLightMap ? 'text-slate-950' : 'text-white'
-                      }`}
-                    >
-                      {pl.name}
-                    </h5>
-                    {pl.subtitle && (
-                      <p
-                        className={`text-[11px] font-semibold truncate mt-0.5 ${
-                          isLightMap ? 'text-slate-600' : 'text-slate-300'
-                        }`}
-                      >
-                        {pl.subtitle}
-                      </p>
-                    )}
-                  </div>
-                  <span
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-black shrink-0 shadow-sm ${
+              placeResults.map((pl, idx) => {
+                const isPinned = savedPlaces.some(
+                  (s) =>
+                    s.slot === 'custom' &&
+                    Math.abs(s.lat - pl.lat) < 0.0005 &&
+                    Math.abs(s.lon - pl.lon) < 0.0005
+                );
+                return (
+                  <div
+                    key={idx}
+                    className={`w-full px-2.5 py-2 rounded-xl border flex items-center justify-between gap-1.5 transition ${
                       isLightMap
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-sky-400 text-slate-950'
+                        ? 'bg-slate-50 hover:bg-blue-50 border-slate-200/90'
+                        : 'bg-slate-900/95 hover:bg-slate-800 border-slate-700'
                     }`}
                   >
-                    Đi • {pl.distanceKm} km
-                  </span>
-                </button>
-              ))
+                    <button
+                      type="button"
+                      onClick={() => startRouteTo(pl)}
+                      className="min-w-0 flex-1 text-left active:scale-99"
+                    >
+                      <h5
+                        className={`text-xs sm:text-[13px] font-extrabold truncate ${
+                          isLightMap ? 'text-slate-950' : 'text-white'
+                        }`}
+                      >
+                        {pl.name}
+                      </h5>
+                      {pl.subtitle && (
+                        <p
+                          className={`text-[11px] font-semibold truncate mt-0.5 ${
+                            isLightMap ? 'text-slate-600' : 'text-slate-300'
+                          }`}
+                        >
+                          {pl.subtitle}
+                        </p>
+                      )}
+                    </button>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {/* Ghim làm Nhà / Cơ quan / Yêu thích */}
+                      <button
+                        type="button"
+                        onClick={() => handleQuickPinSlot('home', pl)}
+                        title="Đặt làm Nhà riêng"
+                        aria-label={`Đặt ${pl.name} làm Nhà riêng`}
+                        className={`w-7 h-7 rounded-lg border flex items-center justify-center active:scale-90 transition cq-hide-sm ${
+                          isLightMap
+                            ? 'bg-white border-slate-300 text-slate-600 hover:text-indigo-700'
+                            : 'bg-slate-800 border-slate-600 text-slate-300 hover:text-indigo-300'
+                        }`}
+                      >
+                        <Home className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleTogglePinCustomPlace(pl)}
+                        title={isPinned ? 'Bỏ ghim địa điểm' : 'Ghim địa điểm này'}
+                        aria-label={isPinned ? `Bỏ ghim ${pl.name}` : `Ghim ${pl.name}`}
+                        className={`w-7 h-7 rounded-lg border flex items-center justify-center active:scale-90 transition ${
+                          isPinned
+                            ? 'bg-amber-400 border-amber-400 text-slate-950'
+                            : isLightMap
+                            ? 'bg-white border-slate-300 text-slate-600 hover:text-amber-600'
+                            : 'bg-slate-800 border-slate-600 text-slate-300 hover:text-amber-300'
+                        }`}
+                      >
+                        <Star className={`w-3.5 h-3.5 ${isPinned ? 'fill-slate-950' : ''}`} />
+                      </button>
+
+                      {/* Nút Send-to-Car: Gửi địa điểm từ Điện thoại lên màn hình xe VF5 */}
+                      {syncCode.length >= 4 && (
+                        <button
+                          type="button"
+                          disabled={sendingToCarIdx === idx}
+                          onClick={() => handleSendPlaceToCar(pl, idx)}
+                          title={`Gửi điểm đến lên màn VF5-${syncCode}`}
+                          className={`h-7 px-2 rounded-lg border text-[10px] font-black flex items-center gap-1 active:scale-95 transition ${
+                            isLightMap
+                              ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700'
+                              : 'bg-emerald-500 border-emerald-400 text-slate-950 hover:bg-emerald-400'
+                          }`}
+                        >
+                          {sendingToCarIdx === idx ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Send className="w-3 h-3" />
+                          )}
+                          <span className="cq-hide-sm">Gửi xe</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => startRouteTo(pl)}
+                        className={`h-7 px-2.5 rounded-lg text-[11px] font-mono font-black shadow-sm active:scale-95 transition ${
+                          isLightMap ? 'bg-blue-600 text-white' : 'bg-sky-400 text-slate-950'
+                        }`}
+                      >
+                        Đi • {pl.distanceKm} km
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
@@ -1626,4 +2130,5 @@ export const CarCockpitMap: React.FC<CarCockpitMapProps> = ({
   );
 };
 
+export const CarCockpitMap = React.memo(CarCockpitMapInner);
 export default CarCockpitMap;

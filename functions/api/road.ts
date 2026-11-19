@@ -172,16 +172,18 @@ export async function onRequestGet(context: any) {
     });
   }
 
-  // Cache raw OSM bbox response on ~110m grid cell for 24h at Cloudflare Edge
+  // Cache pruned road/hazard OSM grid cell (~110m grid, ~210m bbox radius) for 24h at Cloudflare Edge
   const gridLat = Math.round(lat * 900) / 900;
   const gridLon = Math.round(lon * 900) / 900;
-  const d = 0.0028; // ~310m radius around grid center
+  const d = 0.0019; // ~210m radius around grid center (2.2x smaller payload than 0.0028)
   const osmUrl = `https://api.openstreetmap.org/api/0.6/map.json?bbox=${(gridLon - d).toFixed(
     5
   )},${(gridLat - d).toFixed(5)},${(gridLon + d).toFixed(5)},${(gridLat + d).toFixed(5)}`;
 
   const cache = (caches as any).default;
-  const osmCacheKey = new Request(`https://carhub-osm-grid.internal/v1/${gridLat.toFixed(4)}/${gridLon.toFixed(4)}`);
+  const osmCacheKey = new Request(
+    `https://carhub-osm-grid.internal/v2/${gridLat.toFixed(4)}/${gridLon.toFixed(4)}`
+  );
 
   let elements: any[] | null = null;
 
@@ -199,7 +201,7 @@ export async function onRequestGet(context: any) {
     try {
       const osmRes = await fetch(osmUrl, {
         headers: {
-          'User-Agent': 'CarHub-VF5-HUD/1.2 (https://carhub-vf5.pages.dev)',
+          'User-Agent': 'CarHub-VF5-HUD/2.0 (https://carhub-vf5.pages.dev)',
           Accept: 'application/json',
         },
         signal: AbortSignal.timeout(4500),
@@ -207,7 +209,68 @@ export async function onRequestGet(context: any) {
 
       if (osmRes.ok) {
         const osmJson: any = await osmRes.json();
-        elements = Array.isArray(osmJson?.elements) ? osmJson.elements : [];
+        const rawElements: any[] = Array.isArray(osmJson?.elements) ? osmJson.elements : [];
+
+        // Prune buildings/trees/relations before caching: keep ONLY drivable highway ways,
+        // their referenced geometry nodes, and traffic hazard/camera nodes (>80% smaller!).
+        const neededNodeIds = new Set<number>();
+        const keptWays: any[] = [];
+        for (const el of rawElements) {
+          if (
+            el.type === 'way' &&
+            el.tags?.highway &&
+            DRIVABLE_HIGHWAYS.has(el.tags.highway) &&
+            Array.isArray(el.nodes)
+          ) {
+            keptWays.push({
+              type: 'way',
+              id: el.id,
+              nodes: el.nodes,
+              tags: {
+                highway: el.tags.highway,
+                name: el.tags.name,
+                'name:vi': el.tags['name:vi'],
+                ref: el.tags.ref,
+                maxspeed: el.tags.maxspeed,
+                'maxspeed:forward': el.tags['maxspeed:forward'],
+                'maxspeed:backward': el.tags['maxspeed:backward'],
+                lanes: el.tags.lanes,
+                oneway: el.tags.oneway,
+              },
+            });
+            for (const nid of el.nodes) neededNodeIds.add(nid);
+          }
+        }
+
+        const isHazardTag = (t: Record<string, string> | undefined) => {
+          if (!t) return false;
+          return (
+            t.highway === 'speed_camera' ||
+            t.enforcement === 'maxspeed' ||
+            (t.man_made === 'surveillance' &&
+              (t['surveillance:type'] === 'camera' || t.surveillance === 'traffic')) ||
+            t.barrier === 'toll_booth' ||
+            t.railway === 'level_crossing' ||
+            t.amenity === 'school' ||
+            t.highway === 'traffic_signals'
+          );
+        };
+
+        const keptNodes: any[] = [];
+        for (const el of rawElements) {
+          if (el.type === 'node' && typeof el.lat === 'number' && typeof el.lon === 'number') {
+            const hz = isHazardTag(el.tags);
+            if (hz || neededNodeIds.has(el.id)) {
+              keptNodes.push(
+                hz
+                  ? { type: 'node', id: el.id, lat: el.lat, lon: el.lon, tags: el.tags }
+                  : { type: 'node', id: el.id, lat: el.lat, lon: el.lon }
+              );
+            }
+          }
+        }
+
+        elements = [...keptNodes, ...keptWays];
         if (cache && elements.length > 0) {
           const toCache = new Response(JSON.stringify({ elements }), {
             headers: {

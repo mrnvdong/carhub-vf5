@@ -13,10 +13,18 @@ import {
   QueueSource,
   UserPlaylist,
   NightMode,
+  SavedPlace,
+  PendingNavTarget,
 } from './types';
 import { getCategoryQuery } from './constants/categories';
 import { searchVideos, fetchRadioMix } from './services/api';
-import { pullSyncData, pushSyncData, normalizeSyncCode } from './services/sync';
+import {
+  pullSyncData,
+  pushSyncData,
+  normalizeSyncCode,
+  pollPendingNav,
+  clearPendingNav,
+} from './services/sync';
 import { useCarHardwareControls } from './hooks/useCarHardwareControls';
 
 const DEFAULT_PLAYLISTS: UserPlaylist[] = [
@@ -226,6 +234,22 @@ export const App: React.FC = () => {
     }
   });
 
+  const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_saved_places');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+
+  const [incomingNavTarget, setIncomingNavTarget] = useState<PendingNavTarget | null>(null);
+  const lastSeenNavIdRef = useRef<string>('');
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const suppressNextAutoPushRef = useRef<boolean>(false);
+
   const [videos, setVideos] = useState<VideoItem[]>(() => {
     try {
       const cached = localStorage.getItem('carhub_cached_videos');
@@ -389,6 +413,12 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     try {
+      localStorage.setItem('carhub_saved_places', JSON.stringify(savedPlaces));
+    } catch {}
+  }, [savedPlaces]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem('carhub_recent_searches', JSON.stringify(recentSearches));
     } catch {}
   }, [recentSearches]);
@@ -401,31 +431,23 @@ export const App: React.FC = () => {
     }
   }, [videos]);
 
-  // Upgrade #2: Tự động tải Playlist từ mây nếu mở link có ?sync=XXXX hoặc đã gắn Mã Xe
+  // Upgrade #2: Đồng bộ chuẩn xác (hỗ trợ xóa bài/playlist + đồng bộ điểm ghim bản đồ + không tự đẩy ngược sau khi tải!)
   const applyPulledSync = useCallback(
-    (pulledFavs: VideoItem[], pulledPlaylists: UserPlaylist[], code: string) => {
+    (
+      pulledFavs: VideoItem[],
+      pulledPlaylists: UserPlaylist[],
+      pulledPlaces: SavedPlace[],
+      code: string
+    ) => {
+      suppressNextAutoPushRef.current = true;
       setSyncCode(code);
-      setFavorites((prev) => mergeUniqueTracks(pulledFavs, prev));
-      setPlaylists((prev) => {
-        const byName = new Map<string, UserPlaylist>();
-        for (const p of prev) {
-          byName.set(p.name.toLowerCase(), p);
-        }
-        for (const inc of pulledPlaylists) {
-          const key = inc.name.toLowerCase();
-          const existing = byName.get(key);
-          if (existing) {
-            byName.set(key, {
-              ...existing,
-              icon: inc.icon || existing.icon,
-              items: mergeUniqueTracks(inc.items || [], existing.items),
-            });
-          } else {
-            byName.set(key, inc);
-          }
-        }
-        return Array.from(byName.values());
-      });
+      setFavorites(Array.isArray(pulledFavs) ? pulledFavs : []);
+      if (Array.isArray(pulledPlaylists) && pulledPlaylists.length > 0) {
+        setPlaylists(pulledPlaylists);
+      }
+      if (Array.isArray(pulledPlaces)) {
+        setSavedPlaces(pulledPlaces);
+      }
     },
     []
   );
@@ -439,7 +461,25 @@ export const App: React.FC = () => {
       pullSyncData(targetCode)
         .then((res) => {
           if (res.success && res.data) {
-            applyPulledSync(res.data.favorites || [], res.data.playlists || [], targetCode);
+            applyPulledSync(
+              res.data.favorites || [],
+              res.data.playlists || [],
+              res.data.savedPlaces || [],
+              targetCode
+            );
+            if (res.data.pendingNav) {
+              let isSelfSent = false;
+              try {
+                isSelfSent =
+                  sessionStorage.getItem('carhub_self_sent_nav_id') === res.data.pendingNav.id;
+              } catch {}
+              const sentMs = Date.parse(res.data.pendingNav.sentAt || '');
+              const isFresh = !isNaN(sentMs) && Date.now() - sentMs < 20 * 60 * 1000;
+              if (!isSelfSent && isFresh && lastSeenNavIdRef.current !== res.data.pendingNav.id) {
+                lastSeenNavIdRef.current = res.data.pendingNav.id;
+                setIncomingNavTarget(res.data.pendingNav);
+              }
+            }
           }
         })
         .catch(() => {});
@@ -447,19 +487,80 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Tự động đẩy ngầm lên mây khi người dùng sửa Yêu thích / Playlist (nếu đã liên kết Mã Xe)
+  // Tự động đẩy ngầm lên mây khi người dùng sửa Yêu thích / Playlist / Điểm ghim (bỏ qua nếu vừa tải về từ mây!)
   const isInitialMountRef = useRef(true);
   useEffect(() => {
     if (isInitialMountRef.current) {
       isInitialMountRef.current = false;
       return;
     }
+    if (suppressNextAutoPushRef.current) {
+      suppressNextAutoPushRef.current = false;
+      return;
+    }
     if (syncCode.length < 4) return;
     const timer = window.setTimeout(() => {
-      pushSyncData(syncCode, favorites, playlists).catch(() => {});
+      pushSyncData(syncCode, favorites, playlists, savedPlaces).catch(() => {});
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [favorites, playlists, syncCode]);
+  }, [favorites, playlists, savedPlaces, syncCode]);
+
+  // Send-to-Car Polling nhẹ (12s/lần khi tab đang bật & đã gắn Mã Xe): nhận điểm đến từ điện thoại lên màn VF5!
+  useEffect(() => {
+    if (syncCode.length < 4) return;
+    let cancelled = false;
+
+    const checkNav = async () => {
+      if (cancelled || document.visibilityState !== 'visible') return;
+      const pending = await pollPendingNav(syncCode);
+      if (cancelled || !pending || !pending.id) return;
+      if (lastSeenNavIdRef.current === pending.id) return;
+      try {
+        if (sessionStorage.getItem('carhub_self_sent_nav_id') === pending.id) return;
+      } catch {}
+
+      const sentMs = Date.parse(pending.sentAt || '');
+      const isFresh = isNaN(sentMs) || Date.now() - sentMs < 20 * 60 * 1000;
+      if (!isFresh) return;
+
+      lastSeenNavIdRef.current = pending.id;
+      setIncomingNavTarget(pending);
+    };
+
+    const timer = window.setInterval(checkNav, 12000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') checkNav();
+    };
+    document.addEventListener('visibilitychange', onVis);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [syncCode]);
+
+  const handleConsumeIncomingNav = useCallback(() => {
+    setIncomingNavTarget(null);
+    if (syncCode.length >= 4) {
+      clearPendingNav(syncCode).catch(() => {});
+    }
+  }, [syncCode]);
+
+  const handleSavePlace = useCallback((place: SavedPlace) => {
+    setSavedPlaces((prev) => {
+      if (place.slot === 'home' || place.slot === 'work') {
+        const filtered = prev.filter((p) => p.slot !== place.slot);
+        return [place, ...filtered];
+      }
+      const filtered = prev.filter((p) => p.id !== place.id);
+      return [place, ...filtered].slice(0, 20);
+    });
+  }, []);
+
+  const handleRemoveSavedPlace = useCallback((id: string) => {
+    setSavedPlaces((prev) => prev.filter((p) => p.id !== id));
+  }, []);
 
   const playVideo = useCallback(
     (video: VideoItem, sourceOverride?: QueueSource, playlistId?: string) => {
@@ -486,6 +587,10 @@ export const App: React.FC = () => {
 
   const loadCategory = useCallback(
     async (catId: string, query: string, isInitialStartup = false) => {
+      searchAbortRef.current?.abort();
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
+
       setSelectedCategory(catId);
       setSearchQuery('');
       setIsLoadingVideos(true);
@@ -500,7 +605,8 @@ export const App: React.FC = () => {
       }
 
       try {
-        const result = await searchVideos(query);
+        const result = await searchVideos(query, null, controller.signal);
+        if (controller.signal.aborted) return;
         if (result.items.length > 0) {
           setVideos(result.items);
           setNextContinuation(result.nextContinuation);
@@ -509,9 +615,13 @@ export const App: React.FC = () => {
           }
         }
       } catch (err) {
-        console.error('Failed to load category', err);
+        if (!controller.signal.aborted) {
+          console.error('Failed to load category', err);
+        }
       } finally {
-        setIsLoadingVideos(false);
+        if (!controller.signal.aborted) {
+          setIsLoadingVideos(false);
+        }
       }
     },
     [playVideo]
@@ -539,6 +649,10 @@ export const App: React.FC = () => {
       const cleanQuery = query.trim();
       if (!cleanQuery) return;
 
+      searchAbortRef.current?.abort();
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
+
       setSearchQuery(cleanQuery);
       setSelectedCategory('');
       setQueueSource('explore');
@@ -555,7 +669,8 @@ export const App: React.FC = () => {
       });
 
       try {
-        const result = await searchVideos(cleanQuery);
+        const result = await searchVideos(cleanQuery, null, controller.signal);
+        if (controller.signal.aborted) return;
         setVideos(result.items);
         setNextContinuation(result.nextContinuation);
         if (result.items.length > 0) {
@@ -564,9 +679,13 @@ export const App: React.FC = () => {
           setRailSection('browse');
         }
       } catch (err) {
-        console.error('Search failed', err);
+        if (!controller.signal.aborted) {
+          console.error('Search failed', err);
+        }
       } finally {
-        setIsLoadingVideos(false);
+        if (!controller.signal.aborted) {
+          setIsLoadingVideos(false);
+        }
       }
     },
     [playVideo]
@@ -865,6 +984,7 @@ export const App: React.FC = () => {
             onSelectCategory={(catId, q) => loadCategory(catId, q, false)}
             searchQuery={searchQuery}
             favoritesCount={totalSavedCount}
+            favoritesOnlyCount={favorites.length}
             historyCount={history.length}
             onClearHistory={handleClearHistory}
             onOpenSearchModal={handleOpenSearchModal}
@@ -883,6 +1003,11 @@ export const App: React.FC = () => {
             isMixActive={queueSource === 'mix'}
             isLoadingMix={isLoadingMix}
             onStartAutoMix={handleStartAutoMix}
+            savedPlaces={savedPlaces}
+            onSavePlace={handleSavePlace}
+            onRemoveSavedPlace={handleRemoveSavedPlace}
+            incomingNavTarget={incomingNavTarget}
+            onConsumeIncomingNav={handleConsumeIncomingNav}
           />
         ) : isLoadingVideos ? (
           <div className="w-full h-full bg-[#050507] flex flex-col items-center justify-center gap-3 text-center p-6">
@@ -970,6 +1095,7 @@ export const App: React.FC = () => {
         onToggleTrackInPlaylist={handleToggleTrackInPlaylist}
         onCreatePlaylist={handleCreatePlaylist}
         onDeletePlaylist={handleDeletePlaylist}
+        savedPlaces={savedPlaces}
         syncCode={syncCode}
         onSaveSyncCode={setSyncCode}
         onApplyPulledData={applyPulledSync}

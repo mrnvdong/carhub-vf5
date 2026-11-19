@@ -39,6 +39,34 @@ export interface UserPlaylist {
   items: VideoItem[];
 }
 
+export interface SavedPlace {
+  id: string;
+  slot?: 'home' | 'work' | 'custom';
+  icon: string;
+  name: string;
+  subtitle: string;
+  lat: number;
+  lon: number;
+}
+
+export interface PendingNavTarget {
+  id: string;
+  name: string;
+  subtitle: string;
+  lat: number;
+  lon: number;
+  sentAt: string;
+}
+
+export interface ActiveNavSummary {
+  destinationName: string;
+  remainingKm: number;
+  remainingMin: number;
+  nextInstruction: string;
+  nextArrow: string;
+  nextDistM: number;
+}
+
 export type UiScale = 'normal' | 'large' | 'xlarge';
 export type ViewMode = 'classic' | 'ytmusic';
 export type RepeatMode = 'off' | 'all' | 'one';

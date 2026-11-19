@@ -1,25 +1,12 @@
 // Cloudflare Pages Function: /api/mix
 // Generates an endless "Auto-Mix / Radio" playlist tailored to the currently playing song
 // using YouTube InnerTube /next (RD{videoId} Radio Mix + Related Music)
-
-const INNERTUBE_WEB_CLIENT = {
-  clientName: 'WEB',
-  clientVersion: '2.20250312.04.00',
-  hl: 'vi',
-  gl: 'VN',
-};
-
-const INNERTUBE_UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
-function parseDuration(text: string): number {
-  if (!text) return 0;
-  const parts = text.split(':').map(Number);
-  if (parts.some((n) => isNaN(n))) return 0;
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  return 0;
-}
+import {
+  INNERTUBE_WEB_CLIENT,
+  INNERTUBE_UA,
+  parseDuration,
+  searchViaYouTubeInnerTube,
+} from '../_lib/youtubeSearch';
 
 export async function onRequestGet(context: any) {
   const { request } = context;
@@ -135,20 +122,15 @@ export async function onRequestGet(context: any) {
     console.warn('Mix /next fetch failed:', err);
   }
 
-  // Fallback: if RD Mix returned few items (e.g., non-music upload), search similar tracks by artist/title
+  // Fallback: if RD Mix returned few items (e.g., non-music upload), call shared InnerTube search directly (no HTTP self-fetch)
   if (items.length < 5 && (artist || title)) {
     try {
       const fallbackQuery = artist ? `nhạc ${artist} tuyển chọn hay nhất` : `${title} nhạc tương tự`;
-      const searchUrl = new URL('/api/search', request.url);
-      searchUrl.searchParams.set('q', fallbackQuery);
-      const sRes = await fetch(searchUrl.toString());
-      if (sRes.ok) {
-        const sData: any = await sRes.json();
-        for (const it of sData.items || []) {
-          if (it?.id && !seen.has(it.id)) {
-            seen.add(it.id);
-            items.push(it);
-          }
+      const sData = await searchViaYouTubeInnerTube(fallbackQuery, null, false);
+      for (const it of sData?.items || []) {
+        if (it?.id && !seen.has(it.id)) {
+          seen.add(it.id);
+          items.push(it);
         }
       }
     } catch {}

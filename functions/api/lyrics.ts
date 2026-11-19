@@ -197,11 +197,13 @@ async function queryYouTubeCaptions(videoId: string) {
       const text = ev.segs
         .map((s: any) => s.utf8 || '')
         .join('')
-        .replace(/\[âm nhạc\]|\[music\]|♪/gi, '')
+        .replace(/\[[^\]]*\]/g, '')
+        .replace(/\(\s*(?:âm nhạc|music|tiếng vỗ tay|applause|laughter)\s*\)/gi, '')
+        .replace(/[♪♫]+/g, '')
         .replace(/\s+/g, ' ')
         .trim();
 
-      if (text.length > 0) {
+      if (text.length > 0 && /[\p{L}\p{N}]/u.test(text)) {
         lines.push({
           time: ev.tStartMs / 1000,
           text,
@@ -244,7 +246,7 @@ export async function onRequestGet(context: any) {
   const cacheKey = new Request(
     `${url.origin}/api/lyrics?id=${encodeURIComponent(id)}&t=${encodeURIComponent(
       title
-    )}&a=${encodeURIComponent(artist)}&v=2`
+    )}&a=${encodeURIComponent(artist)}&v=3`
   );
   if (cache) {
     try {

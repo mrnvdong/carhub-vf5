@@ -1,4 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import {
+  playSpeedWarningBeep,
+  speakVietnamese,
+  unlockCarAudio,
+} from '../services/voiceAudio';
 
 export interface WeatherInfo {
   temperature: number;
@@ -86,39 +91,6 @@ function decodeWeatherCode(code: number, isDay: boolean): {
   return { label: 'Thời tiết ổn định', icon: '🌤️', isRainy: false };
 }
 
-// Phát 2 tiếng bíp nhẹ cảnh báo vượt giới hạn tốc độ (độc lập với YouTube iframe)
-function playSpeedWarningBeep() {
-  try {
-    const AudioCtx =
-      (window as any).AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const now = ctx.currentTime;
-
-    const beep = (startOffset: number, freq: number) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, now + startOffset);
-      gain.gain.setValueAtTime(0.001, now + startOffset);
-      gain.gain.exponentialRampToValueAtTime(0.18, now + startOffset + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + startOffset + 0.14);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + startOffset);
-      osc.stop(now + startOffset + 0.15);
-    };
-
-    beep(0, 880);
-    beep(0.18, 1046);
-    window.setTimeout(() => {
-      try {
-        ctx.close();
-      } catch {}
-    }, 600);
-  } catch {}
-}
-
 export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
   const [speedKmh, setSpeedKmh] = useState<number | null>(null);
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'active' | 'denied' | 'unsupported'>('idle');
@@ -169,18 +141,24 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
   const lastRoadQueryRef = useRef<{ lat: number; lon: number; time: number } | null>(null);
   const lastBeepAtRef = useRef<number>(0);
   const wasOverLimitRef = useRef<boolean>(false);
+  const announcedCameraKeysRef = useRef<Map<string, number>>(new Map());
 
   const handleToggleSpeedAlertSound = useCallback(() => {
+    unlockCarAudio();
     setSpeedAlertSound((prev) => {
       const next = !prev;
       try {
         localStorage.setItem('carhub_speed_beep', String(next));
       } catch {}
+      if (next) {
+        playSpeedWarningBeep();
+      }
       return next;
     });
   }, []);
 
   const startWatch = useCallback(() => {
+    unlockCarAudio();
     if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
       setGpsStatus('unsupported');
       return;
@@ -256,7 +234,7 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
           setSpeedKmh((prev) => (prev === null ? 0 : prev));
         }
 
-        // Chỉ kích hoạt cập nhật hạ tầng đường bộ lần đầu hoặc khi xe di chuyển >= 65m (và cách >= 4s)
+        // Cập nhật hạ tầng đường bộ lần đầu hoặc khi xe di chuyển >= 65m (và cách >= 4s)
         const lastQ = lastRoadQueryRef.current;
         const movedEnough =
           !lastQ ||
@@ -311,7 +289,7 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
     };
   }, [active, startWatch]);
 
-  // Truy vấn API hạ tầng đường bộ & biển tốc độ (/api/road) mỗi khi xe sang đoạn đường mới
+  // Truy vấn API hạ tầng đường bộ & biển tốc độ (/api/road)
   useEffect(() => {
     if (!active || !liveGpsFix) return;
     let cancelled = false;
@@ -350,7 +328,7 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
     };
   }, [active, liveGpsFix]);
 
-  // Cảnh báo âm thanh nhẹ khi xe bắt đầu vượt giới hạn tốc độ (>= +4 km/h để tránh nhiễu ranh giới)
+  // Cảnh báo âm thanh (đã unlock iOS) + giọng nói tiếng Việt khi vượt tốc độ >= +4 km/h
   useEffect(() => {
     if (!active || !speedAlertSound || speedKmh === null || !roadInfo?.speedLimit) {
       wasOverLimitRef.current = false;
@@ -363,11 +341,38 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
       if (Date.now() - lastBeepAtRef.current > 18000) {
         lastBeepAtRef.current = Date.now();
         playSpeedWarningBeep();
+        speakVietnamese(
+          `Chú ý, giới hạn tốc độ ${roadInfo.speedLimit} ki lô mét trên giờ`,
+          { dedupeKey: `speed-${roadInfo.speedLimit}`, cooldownMs: 22000 }
+        );
       }
     } else if (speedKmh <= roadInfo.speedLimit) {
       wasOverLimitRef.current = false;
     }
   }, [active, speedAlertSound, speedKmh, roadInfo?.speedLimit]);
+
+  // Cảnh báo giọng nói khi phát hiện Camera phạt nguội / Đường sắt phía trước (< 280m)
+  useEffect(() => {
+    if (!active || !speedAlertSound || !roadInfo?.hazards || roadInfo.hazards.length === 0) {
+      return;
+    }
+    const now = Date.now();
+    for (const hz of roadInfo.hazards) {
+      if ((hz.type === 'camera' || hz.type === 'railway') && hz.distanceM <= 280) {
+        const key = `${hz.type}:${(hz.lat ?? 0).toFixed(3)},${(hz.lon ?? 0).toFixed(3)}`;
+        const lastAt = announcedCameraKeysRef.current.get(key) || 0;
+        if (now - lastAt > 65000) {
+          announcedCameraKeysRef.current.set(key, now);
+          const msg =
+            hz.type === 'camera'
+              ? `Phía trước ${hz.distanceM} mét có ca me ra giám sát tốc độ`
+              : `Phía trước ${hz.distanceM} mét có giao cắt đường sắt`;
+          speakVietnamese(msg, { dedupeKey: key, cooldownMs: 60000, chime: true });
+          break;
+        }
+      }
+    }
+  }, [active, speedAlertSound, roadInfo?.hazards]);
 
   // Lấy thời tiết thực tế từ Open-Meteo
   useEffect(() => {
@@ -408,14 +413,27 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
     };
   }, [weatherCoords.lat, weatherCoords.lon]);
 
-  return {
-    speedKmh,
-    gpsStatus,
-    position: livePosition,
-    weather,
-    roadInfo,
-    speedAlertSound,
-    onToggleSpeedAlertSound: handleToggleSpeedAlertSound,
-    requestGps: startWatch,
-  };
+  // Bọc useMemo để tránh tạo object mới gây re-render CarCockpitMap 4 lần/giây khi YouTube cập nhật currentTime!
+  return useMemo(
+    () => ({
+      speedKmh,
+      gpsStatus,
+      position: livePosition,
+      weather,
+      roadInfo,
+      speedAlertSound,
+      onToggleSpeedAlertSound: handleToggleSpeedAlertSound,
+      requestGps: startWatch,
+    }),
+    [
+      speedKmh,
+      gpsStatus,
+      livePosition,
+      weather,
+      roadInfo,
+      speedAlertSound,
+      handleToggleSpeedAlertSound,
+      startWatch,
+    ]
+  );
 }

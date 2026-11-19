@@ -13,7 +13,7 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
-import { UserPlaylist, VideoItem } from '../types';
+import { SavedPlace, UserPlaylist, VideoItem } from '../types';
 import { normalizeSyncCode, pushSyncData, pullSyncData } from '../services/sync';
 
 interface PlaylistSyncModalProps {
@@ -28,9 +28,15 @@ interface PlaylistSyncModalProps {
   onToggleTrackInPlaylist: (playlistId: string, track: VideoItem) => void;
   onCreatePlaylist: (name: string, icon: string) => string;
   onDeletePlaylist: (playlistId: string) => void;
+  savedPlaces: SavedPlace[];
   syncCode: string;
   onSaveSyncCode: (code: string) => void;
-  onApplyPulledData: (favorites: VideoItem[], playlists: UserPlaylist[], code: string) => void;
+  onApplyPulledData: (
+    favorites: VideoItem[],
+    playlists: UserPlaylist[],
+    savedPlaces: SavedPlace[],
+    code: string
+  ) => void;
 }
 
 const PRESET_NEW_PLAYLISTS = [
@@ -52,6 +58,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
   onToggleTrackInPlaylist,
   onCreatePlaylist,
   onDeletePlaylist,
+  savedPlaces,
   syncCode,
   onSaveSyncCode,
   onApplyPulledData,
@@ -60,6 +67,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [confirmEmptyPush, setConfirmEmptyPush] = useState<boolean>(false);
 
   const [newPlName, setNewPlName] = useState<string>('');
   const [newPlIcon, setNewPlIcon] = useState<string>('🎵');
@@ -69,6 +77,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
       setCodeDigits(syncCode || '');
       setStatusMsg(null);
       setCopiedLink(false);
+      setConfirmEmptyPush(false);
     }
   }, [isOpen, syncCode]);
 
@@ -76,14 +85,18 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
 
   const cleanCode = normalizeSyncCode(codeDigits);
   const totalPlaylistTracks = playlists.reduce((acc, p) => acc + p.items.length, 0);
+  const isLocalEmpty =
+    favorites.length === 0 && totalPlaylistTracks === 0 && savedPlaces.length === 0;
 
   const handleDigitPress = (d: string) => {
     setStatusMsg(null);
+    setConfirmEmptyPush(false);
     setCodeDigits((prev) => (prev.length < 6 ? prev + d : prev));
   };
 
   const handleBackspace = () => {
     setStatusMsg(null);
+    setConfirmEmptyPush(false);
     setCodeDigits((prev) => prev.slice(0, -1));
   };
 
@@ -92,16 +105,27 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
       setStatusMsg({ type: 'err', text: 'Hãy bấm đủ ít nhất 4 chữ số cho Mã Xe (ví dụ: 6868).' });
       return;
     }
+    // Chống lỡ tay bấm Đẩy lên mây từ màn xe trống làm ghi đè mất dữ liệu đã soạn trên điện thoại!
+    if (isLocalEmpty && !confirmEmptyPush) {
+      setConfirmEmptyPush(true);
+      setStatusMsg({
+        type: 'err',
+        text: 'Máy này đang có 0 bài hát & 0 điểm ghim. Nếu bạn muốn TẢI nhạc về xe hãy bấm nút xanh "Tải về màn VF5"! Bấm "Đẩy lên mây" lần nữa nếu chắc chắn muốn ghi đè trống.',
+      });
+      return;
+    }
+
+    setConfirmEmptyPush(false);
     setIsSyncing(true);
     setStatusMsg(null);
-    const res = await pushSyncData(cleanCode, favorites, playlists);
+    const res = await pushSyncData(cleanCode, favorites, playlists, savedPlaces);
     setIsSyncing(false);
 
     if (res.success) {
       onSaveSyncCode(cleanCode);
       setStatusMsg({
         type: 'ok',
-        text: `Đã lưu thành công lên mã VF5-${cleanCode}! Mở APTV / asCar trên xe và nhập mã ${cleanCode} để tải về.`,
+        text: `Đã lưu thành công lên mã VF5-${cleanCode}! Mở APTV / asCar trên xe nhập mã ${cleanCode} để tải nhạc, điểm ghim & nhận dẫn đường từ điện thoại.`,
       });
     } else {
       setStatusMsg({ type: 'err', text: res.error || 'Không thể đẩy dữ liệu.' });
@@ -113,18 +137,24 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
       setStatusMsg({ type: 'err', text: 'Hãy bấm đủ ít nhất 4 chữ số Mã Xe để tải về.' });
       return;
     }
+    setConfirmEmptyPush(false);
     setIsSyncing(true);
     setStatusMsg(null);
     const res = await pullSyncData(cleanCode);
     setIsSyncing(false);
 
     if (res.success && res.data) {
-      onApplyPulledData(res.data.favorites || [], res.data.playlists || [], cleanCode);
+      onApplyPulledData(
+        res.data.favorites || [],
+        res.data.playlists || [],
+        res.data.savedPlaces || [],
+        cleanCode
+      );
       setStatusMsg({
         type: 'ok',
-        text: `Đã đồng bộ về xe: ${res.data.favorites?.length || 0} bài Yêu thích & ${
+        text: `Đã đồng bộ về xe: ${res.data.favorites?.length || 0} bài Yêu thích, ${
           res.data.playlists?.length || 0
-        } Playlist!`,
+        } Playlist & ${res.data.savedPlaces?.length || 0} điểm bản đồ!`,
       });
     } else {
       setStatusMsg({ type: 'err', text: res.error || 'Không tìm thấy mã xe này.' });
@@ -275,9 +305,13 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                     mã số này và bấm <strong className="text-emerald-300">Tải về màn VF5</strong>.
                   </p>
                   <div className="text-xs font-bold text-sky-300 bg-sky-500/10 border border-sky-400/25 rounded-xl px-3 py-1.5">
-                    Máy này hiện có: {favorites.length} bài Yêu thích • {playlists.length} Playlist (
-                    {totalPlaylistTracks} bài)
+                    Máy này: {favorites.length} Yêu thích • {playlists.length} Playlist (
+                    {totalPlaylistTracks} bài) • {savedPlaces.length} điểm ghim bản đồ
                   </div>
+                  <p className="text-[11px] text-emerald-300/90 font-semibold">
+                    💡 Mẹo Send-to-Car: Khi đã gắn cùng Mã Xe, tìm địa chỉ trên điện thoại rồi bấm{' '}
+                    <strong>“Gửi xe”</strong> — Bản đồ 3D trên VF5 sẽ tự vẽ lộ trình ngay!
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

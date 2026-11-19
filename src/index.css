@@ -233,3 +233,34 @@ input[type='range'].car-scrubber::-moz-range-thumb {
   border: 2px solid rgba(0, 0, 0, 0.25);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
 }
+
+/* Phiên bản nền Sáng (3D Sáng / OSM) cho thanh trượt độ rộng trong bảng Bố cục */
+input[type='range'].car-scrubber-light::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    #2563eb 0%,
+    #2563eb var(--progress, 0%),
+    #cbd5e1 var(--progress, 0%),
+    #cbd5e1 100%
+  );
+}
+
+input[type='range'].car-scrubber-light::-webkit-slider-thumb {
+  background: #1d4ed8;
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.4);
+}
+
+input[type='range'].car-scrubber-light::-moz-range-track {
+  background: #cbd5e1;
+}
+
+input[type='range'].car-scrubber-light::-moz-range-progress {
+  background: #2563eb;
+}
+
+input[type='range'].car-scrubber-light::-moz-range-thumb {
+  background: #1d4ed8;
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.4);
+}

@@ -3,7 +3,6 @@ import { VideoItem } from '../types';
 const PIPED_FALLBACK_INSTANCES = [
   'https://api.piped.private.coffee',
   'https://pipedapi.ducks.party',
-  'https://pipedapi.kavin.rocks',
 ];
 
 export interface SearchResult {
@@ -22,36 +21,75 @@ function dedupeVideos(items: VideoItem[]): VideoItem[] {
   return out;
 }
 
+// Kết hợp AbortSignal bên ngoài + timeout tương thích 100% iOS Safari 16/17 WKWebView
+function createTimedSignal(timeoutMs: number, externalSignal?: AbortSignal): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      window.clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', onExternalAbort);
+    },
+  };
+}
+
 export async function searchVideos(
   query: string,
-  continuation?: string | null
+  continuation?: string | null,
+  externalSignal?: AbortSignal
 ): Promise<SearchResult> {
-  // 1. Primary: Cloudflare Pages Edge API (/api/search -> YouTube InnerTube)
-  try {
-    let url = `/api/search?q=${encodeURIComponent(query)}`;
-    if (continuation) {
-      url += `&continuation=${encodeURIComponent(continuation)}`;
-    }
+  if (externalSignal?.aborted) {
+    return { items: [], nextContinuation: null };
+  }
 
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(6500),
-    });
-    const contentType = res.headers.get('content-type') || '';
-    if (res.ok && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (Array.isArray(data.items) && data.items.length > 0) {
-        return {
-          items: dedupeVideos(data.items),
-          nextContinuation: data.nextContinuation || null,
-        };
+  // 1. Primary: Cloudflare Pages Edge API (/api/search -> YouTube InnerTube)
+  {
+    const { signal, cleanup } = createTimedSignal(6500, externalSignal);
+    try {
+      let url = `/api/search?q=${encodeURIComponent(query)}`;
+      if (continuation) {
+        url += `&continuation=${encodeURIComponent(continuation)}`;
       }
+
+      const res = await fetch(url, { signal });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (Array.isArray(data.items) && data.items.length > 0) {
+          return {
+            items: dedupeVideos(data.items),
+            nextContinuation: data.nextContinuation || null,
+          };
+        }
+      }
+    } catch (err) {
+      if (externalSignal?.aborted) {
+        return { items: [], nextContinuation: null };
+      }
+      console.warn('Backend API search error, trying direct Piped fallback', err);
+    } finally {
+      cleanup();
     }
-  } catch (err) {
-    console.warn('Backend API search error, trying direct Piped fallback', err);
   }
 
   // 2. Client-side fallback to public Piped instances (also powers local `vite dev`)
   for (const instance of PIPED_FALLBACK_INSTANCES) {
+    if (externalSignal?.aborted) break;
+    const { signal, cleanup } = createTimedSignal(2600, externalSignal);
     try {
       let pipedUrl = `${instance}/search?q=${encodeURIComponent(query)}&filter=videos`;
       if (continuation) {
@@ -60,9 +98,7 @@ export async function searchVideos(
         )}&q=${encodeURIComponent(query)}&filter=videos`;
       }
 
-      const res = await fetch(pipedUrl, {
-        signal: AbortSignal.timeout(4500),
-      });
+      const res = await fetch(pipedUrl, { signal });
       if (res.ok) {
         const data = await res.json();
         const items: VideoItem[] = (data.items || [])
@@ -97,6 +133,8 @@ export async function searchVideos(
       }
     } catch {
       continue;
+    } finally {
+      cleanup();
     }
   }
 

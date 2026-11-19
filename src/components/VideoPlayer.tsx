@@ -37,6 +37,7 @@ import {
   Cloud,
   Plus,
   FastForward,
+  Navigation,
 } from 'lucide-react';
 import {
   StreamData,
@@ -49,6 +50,9 @@ import {
   SponsorSegment,
   UserPlaylist,
   NightMode,
+  SavedPlace,
+  PendingNavTarget,
+  ActiveNavSummary,
 } from '../types';
 import { MEDIA_CATEGORIES } from '../constants/categories';
 import { formatSeconds } from '../services/api';
@@ -89,6 +93,7 @@ interface VideoPlayerProps {
   onSelectCategory: (catId: string, query: string) => void;
   searchQuery: string;
   favoritesCount: number;
+  favoritesOnlyCount: number;
   historyCount: number;
   onClearHistory: () => void;
   onOpenSearchModal: (startVoice?: boolean) => void;
@@ -111,6 +116,12 @@ interface VideoPlayerProps {
   isMixActive: boolean;
   isLoadingMix: boolean;
   onStartAutoMix: () => void;
+  // Upgrade #6: Saved Map Places & Send-to-Car Navigation
+  savedPlaces: SavedPlace[];
+  onSavePlace: (place: SavedPlace) => void;
+  onRemoveSavedPlace: (id: string) => void;
+  incomingNavTarget: PendingNavTarget | null;
+  onConsumeIncomingNav: () => void;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -144,6 +155,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onSelectCategory,
   searchQuery,
   favoritesCount,
+  favoritesOnlyCount,
   historyCount,
   onClearHistory,
   onOpenSearchModal,
@@ -162,6 +174,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   isMixActive,
   isLoadingMix,
   onStartAutoMix,
+  savedPlaces,
+  onSavePlace,
+  onRemoveSavedPlace,
+  incomingNavTarget,
+  onConsumeIncomingNav,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -198,8 +215,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isBuffering, setIsBuffering] = useState<boolean>(true);
   const [hasUnlockedAudio, setHasUnlockedAudio] = useState<boolean>(false);
+  const hasUnlockedAudioRef = useRef<boolean>(false);
+  hasUnlockedAudioRef.current = hasUnlockedAudio;
+  const isMainScrubbingRef = useRef<boolean>(false);
+  const lastTouchEndAtRef = useRef<number>(0);
+
   const [needsIframeTapHint, setNeedsIframeTapHint] = useState<boolean>(false);
   const [embedError, setEmbedError] = useState<string | null>(null);
+  const [hasMountedCockpit, setHasMountedCockpit] = useState<boolean>(false);
+  const [activeNavSummary, setActiveNavSummary] = useState<ActiveNavSummary | null>(null);
 
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [dragTime, setDragTime] = useState<number | null>(null);
@@ -221,8 +245,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const isCockpitView = railSection === 'cockpit';
   const showVideoInViewport = isVideoMode && isNowPlayingView;
 
-  // GPS Speedometer & Open-Meteo Weather (GPS chỉ bật khi đang mở tab Cockpit để tiết kiệm pin iPhone)
-  const telemetry = useCockpitTelemetry(isCockpitView);
+  // Giữ sống CockpitView ngay sau lần mở đầu tiên (hoặc khi nhận điểm đến từ điện thoại Send-to-Car!)
+  useEffect(() => {
+    if (isCockpitView && !hasMountedCockpit) {
+      setHasMountedCockpit(true);
+    }
+  }, [isCockpitView, hasMountedCockpit]);
+
+  useEffect(() => {
+    if (incomingNavTarget) {
+      setHasMountedCockpit(true);
+      if (!isCockpitView) {
+        onChangeRailSection('cockpit');
+      }
+    }
+  }, [incomingNavTarget, isCockpitView, onChangeRailSection]);
+
+  // Giữ GPS & cảnh báo tốc độ / giọng nói chỉ đường chạy nền khi đang mở Cockpit HOẶC đang có lộ trình dẫn đường!
+  const telemetry = useCockpitTelemetry(isCockpitView || Boolean(activeNavSummary));
 
   const showToast = useCallback((label: string) => {
     setHardwareNotice(label);
@@ -589,12 +629,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const handlePlayExplicit = useCallback(() => {
     postEmbedCommand('playVideo');
-    if (!hasUnlockedAudio && !isVideoMode) {
+    if (!hasUnlockedAudioRef.current && !isVideoMode) {
       window.setTimeout(() => {
-        setNeedsIframeTapHint((prev) => (!hasUnlockedAudio ? true : prev));
+        if (!hasUnlockedAudioRef.current) {
+          setNeedsIframeTapHint(true);
+        }
       }, 850);
     }
-  }, [hasUnlockedAudio, isVideoMode, postEmbedCommand]);
+  }, [isVideoMode, postEmbedCommand]);
 
   const handlePauseExplicit = useCallback(() => {
     postEmbedCommand('pauseVideo');
@@ -639,6 +681,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const handleArtTouchEnd = useCallback(
     (e: React.TouchEvent, allowTapPlayToggle: boolean) => {
+      lastTouchEndAtRef.current = Date.now();
       const start = touchStartRef.current;
       touchStartRef.current = null;
       if (!start || start.interactive || e.changedTouches.length === 0) return;
@@ -740,6 +783,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     safeDuration > 0 ? Math.min(100, Math.max(0, (displayedTime / safeDuration) * 100)) : 0;
   const remainingTime = Math.max(0, safeDuration - displayedTime);
 
+  const handleOpenAddPlaylistModal = useCallback(() => {
+    onOpenSyncModal('addTrack');
+  }, [onOpenSyncModal]);
+
+  const handleCockpitScrubStart = useCallback(() => {
+    setDragTime(currentTime);
+  }, [currentTime]);
+
+  const handleCockpitScrubMove = useCallback((val: number) => {
+    setDragTime(val);
+  }, []);
+
+  const handleCockpitScrubCommit = useCallback(
+    (val: number) => {
+      setDragTime(null);
+      handleSeekTo(val);
+    },
+    [handleSeekTo]
+  );
+
+  const cockpitGestureHandlers = useMemo(
+    () => ({
+      onTouchStart: handleArtOrCardTouchStart,
+      onTouchEnd: (e: React.TouchEvent) => handleArtTouchEnd(e, false),
+    }),
+    [handleArtOrCardTouchStart, handleArtTouchEnd]
+  );
+
   const overlayIframeOnArtForFirstUnlock =
     !isVideoMode && isNowPlayingView && !hasUnlockedAudio && !isPlaying;
 
@@ -782,12 +853,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div className="fixed inset-0 z-40 pointer-events-none bg-black/25" />
       )}
 
-      {/* Toast thông báo thông minh (Vô lăng, Vuốt mù, SponsorBlock, Auto-Mix) */}
+      {/* Toast thông báo thông minh (Vô lăng, Vuốt mù, SponsorBlock, Auto-Mix, Send-to-Car) */}
       {hardwareNotice && (
         <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 bg-black/85 backdrop-blur-xl text-white px-4 py-2 rounded-full text-xs sm:text-sm font-bold flex items-center gap-2 shadow-2xl border border-white/25 pointer-events-none max-w-[90vw]">
           <ShieldCheck className="w-4 h-4 text-rose-400 shrink-0" />
           <span className="truncate">{hardwareNotice}</span>
         </div>
+      )}
+
+      {/* MINI SPEED & TURN PILL: Khi đang mở tab Nhạc/Khám phá mà vẫn đang dẫn đường -> 1 chạm quay về Cockpit! */}
+      {!isCockpitView && !isFullscreen && activeNavSummary && (
+        <button
+          type="button"
+          onClick={() => onChangeRailSection('cockpit')}
+          className={`fixed top-2 right-2.5 z-40 max-w-[min(360px,calc(100vw-6rem))] px-3 py-1.5 rounded-full border backdrop-blur-2xl shadow-2xl flex items-center gap-2 active:scale-95 transition ${
+            telemetry.roadInfo?.speedLimit &&
+            telemetry.speedKmh !== null &&
+            telemetry.speedKmh >= telemetry.roadInfo.speedLimit + 5
+              ? 'bg-rose-600/95 border-rose-300 text-white animate-pulse'
+              : 'bg-sky-950/94 border-sky-400/60 text-white hover:bg-sky-900'
+          }`}
+        >
+          <span className="px-1.5 py-0.5 rounded-md bg-black/40 font-mono text-xs font-black text-emerald-300 shrink-0">
+            {telemetry.speedKmh ?? 0} km/h
+          </span>
+          <Navigation className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+          <span className="text-xs font-extrabold truncate">
+            {activeNavSummary.nextArrow} {activeNavSummary.nextInstruction}
+            {activeNavSummary.nextDistM > 0 ? ` (${activeNavSummary.nextDistM}m)` : ''} •{' '}
+            {activeNavSummary.remainingKm}km
+          </span>
+        </button>
       )}
 
       {/* =====================================================================
@@ -1024,8 +1120,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   onTouchStart={handleArtOrCardTouchStart}
                   onTouchEnd={(e) => handleArtTouchEnd(e, true)}
                   onClick={(e) => {
-                    // Hỗ trợ click chuột trên máy tính / màn không gửi TouchEvent
-                    if ('ontouchstart' in window) return;
+                    // Tránh bắn đúp nếu sự kiện vừa được xử lý qua TouchEvent (< 450ms)
+                    if (Date.now() - lastTouchEndAtRef.current < 450) return;
                     if (e.detail === 2) {
                       if (singleTapTimerRef.current) {
                         window.clearTimeout(singleTapTimerRef.current);
@@ -1282,22 +1378,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     step={1}
                     value={Math.min(displayedTime, safeDuration || 100)}
                     style={{ '--progress': `${progressPercent}%` } as React.CSSProperties}
-                    onPointerDown={() => setDragTime(currentTime)}
+                    onPointerDown={() => {
+                      isMainScrubbingRef.current = true;
+                      setDragTime(currentTime);
+                    }}
                     onChange={(e) => setDragTime(parseFloat(e.target.value))}
                     onPointerUp={(e) => {
+                      if (!isMainScrubbingRef.current) return;
+                      isMainScrubbingRef.current = false;
                       const val = parseFloat((e.target as HTMLInputElement).value);
                       setDragTime(null);
                       handleSeekTo(val);
                     }}
-                    onTouchEnd={() => {
-                      if (dragTime !== null) {
-                        const finalVal = dragTime;
-                        setDragTime(null);
-                        handleSeekTo(finalVal);
-                      }
+                    onPointerCancel={(e) => {
+                      if (!isMainScrubbingRef.current) return;
+                      isMainScrubbingRef.current = false;
+                      const val = parseFloat((e.target as HTMLInputElement).value);
+                      setDragTime(null);
+                      handleSeekTo(val);
                     }}
                     onKeyUp={() => {
                       if (dragTime !== null) {
+                        isMainScrubbingRef.current = false;
                         const finalVal = dragTime;
                         setDragTime(null);
                         handleSeekTo(finalVal);
@@ -1683,10 +1785,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
 
         {/* -------------------------------------------------------------------
-            B. MÀN HÌNH COCKPIT HUD LÁI XE VF5 (Tốc độ GPS km/h + Thời tiết + Karaoke 2 dòng)
+            B. MÀN HÌNH COCKPIT HUD LÁI XE VF5 (Giữ sống sau lần mở đầu để không mất lộ trình dẫn đường khi đổi tab!)
            ------------------------------------------------------------------- */}
-        {isCockpitView && (
+        {hasMountedCockpit && (
           <CockpitView
+            isVisible={isCockpitView}
             streamData={streamData}
             isPlaying={isPlaying}
             isBuffering={isBuffering}
@@ -1700,7 +1803,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             activeLyricIndex={activeLyricIndex}
             isFavorite={isFavorite}
             onToggleFavorite={onToggleFavorite}
-            onOpenAddPlaylist={() => onOpenSyncModal('addTrack')}
+            onOpenAddPlaylist={handleOpenAddPlaylistModal}
             isMixActive={isMixActive}
             isLoadingMix={isLoadingMix}
             onStartAutoMix={onStartAutoMix}
@@ -1713,17 +1816,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onNext={onNext}
             onPrev={onPrev}
             onTogglePlay={togglePlay}
-            onScrubStart={() => setDragTime(currentTime)}
-            onScrubMove={(val) => setDragTime(val)}
-            onScrubCommit={(val) => {
-              setDragTime(null);
-              handleSeekTo(val);
-            }}
-            gestureHandlers={{
-              onTouchStart: handleArtOrCardTouchStart,
-              onTouchEnd: (e) => handleArtTouchEnd(e, false),
-            }}
+            onScrubStart={handleCockpitScrubStart}
+            onScrubMove={handleCockpitScrubMove}
+            onScrubCommit={handleCockpitScrubCommit}
+            gestureHandlers={cockpitGestureHandlers}
             heartBurst={heartBurst}
+            savedPlaces={savedPlaces}
+            onSavePlace={onSavePlace}
+            onRemoveSavedPlace={onRemoveSavedPlace}
+            syncCode={syncCode}
+            incomingNavTarget={incomingNavTarget}
+            onConsumeIncomingNav={onConsumeIncomingNav}
+            onActiveNavChange={setActiveNavSummary}
+            onNotifyToast={showToast}
           />
         )}
 
@@ -1803,7 +1908,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       : 'bg-white/10 text-white/85 border-white/15 hover:bg-white/20'
                   }`}
                 >
-                  <span>❤️ Yêu thích ({favoritesCount})</span>
+                  <span>❤️ Yêu thích ({favoritesOnlyCount})</span>
                 </button>
 
                 {playlists.map((pl) => {
