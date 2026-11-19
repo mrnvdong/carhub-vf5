@@ -1,4 +1,12 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, Suspense, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useMemo,
+  Suspense,
+  useCallback,
+} from 'react';
 import {
   Play,
   Pause,
@@ -14,6 +22,8 @@ import {
   ArrowLeftRight,
   GripVertical,
   Tv,
+  Film,
+  Radio,
   Music,
   Bell,
   BellOff,
@@ -24,6 +34,16 @@ import {
   Volume2,
   VolumeX,
   X,
+  Search,
+  Star,
+  ChevronLeft,
+  ChevronRight,
+  RefreshCw,
+  Wifi,
+  Maximize2,
+  ListVideo,
+  Activity,
+  Square,
 } from 'lucide-react';
 import {
   ActiveNavSummary,
@@ -38,6 +58,12 @@ import {
 import { formatSeconds } from '../services/api';
 import { LyricsResult } from '../services/lyrics';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
+import {
+  TvLiveController,
+  getChannelFavKey,
+  stripVietnameseTones,
+} from '../hooks/useTvLive';
+import { TvPlayerStage, TvPlayerStatus } from './TvPlayerStage';
 import { MapErrorBoundary } from './MapErrorBoundary';
 import { getCarTheme } from '../utils/theme';
 
@@ -104,6 +130,10 @@ interface CockpitViewProps {
   mapTheme: MapTheme;
   onChangeMapTheme: (theme: MapTheme) => void;
   isLightTheme: boolean;
+  tv: TvLiveController;
+  onPauseMusic: () => void;
+  onOpenFullTv: () => void;
+  onCockpitTvActiveChange?: (active: boolean) => void;
 }
 
 export const CockpitView: React.FC<CockpitViewProps> = React.memo(
@@ -158,17 +188,41 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     mapTheme,
     onChangeMapTheme,
     isLightTheme,
+    tv,
+    onPauseMusic,
+    onOpenFullTv,
+    onCockpitTvActiveChange,
   }) => {
     const theme = getCarTheme(isLightTheme);
     const splitContainerRef = useRef<HTMLDivElement | null>(null);
     const telemetryCardRef = useRef<HTMLDivElement | null>(null);
     const navControlsRef = useRef<CockpitNavControls | null>(null);
     const videoSlotRef = useRef<HTMLDivElement | null>(null);
+    const tvVideoRef = useRef<HTMLVideoElement | null>(null);
     const badgeTextRef = useRef<HTMLSpanElement | null>(null);
     const rafDragRef = useRef<number | null>(null);
     const isScrubbingRef = useRef<boolean>(false);
 
     const [cockpitNavSummary, setCockpitNavSummary] = useState<ActiveNavSummary | null>(null);
+
+    // Chế độ Live TV ngay trong Cockpit (3 lựa chọn: Nhạc | Video | TV)
+    const [cockpitTvMode, setCockpitTvMode] = useState<boolean>(false);
+    const [showTvPicker, setShowTvPicker] = useState<boolean>(false);
+    const [tvGroup, setTvGroup] = useState<string>('__popular__');
+    const [tvSearch, setTvSearch] = useState<string>('');
+    const [tvOnlyLive, setTvOnlyLive] = useState<boolean>(false);
+    const [tvMuted, setTvMuted] = useState<boolean>(false);
+    const [tvForceProxy, setTvForceProxy] = useState<boolean>(false);
+    const [tvReloadNonce, setTvReloadNonce] = useState<number>(0);
+    const [tvFailedLogos, setTvFailedLogos] = useState<Record<string, boolean>>({});
+    const [tvStatus, setTvStatus] = useState<TvPlayerStatus>({
+      isPlaying: false,
+      isBuffering: false,
+      isResolving: false,
+      streamMode: 'direct',
+      canSwitchDirect: true,
+      error: null,
+    });
 
     const handleActiveNavChange = useCallback(
       (summary: ActiveNavSummary | null) => {
@@ -225,8 +279,133 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       }
     });
 
+    const isCockpitTvMounted = isVisible && cockpitTvMode && !isMapExpanded;
+
+    useEffect(() => {
+      onCockpitTvActiveChange?.(isCockpitTvMounted);
+    }, [isCockpitTvMounted, onCockpitTvActiveChange]);
+
+    useEffect(() => {
+      return () => {
+        onCockpitTvActiveChange?.(false);
+      };
+    }, [onCockpitTvActiveChange]);
+
+    useEffect(() => {
+      setTvForceProxy(false);
+    }, [tv.activeChannel?.id]);
+
+    // Tự tạm dừng TV nếu nhạc nền (YouTube/SoundCloud) được phát lại từ phím vô lăng hoặc trang khác
+    const prevMusicPlayingRef = useRef<boolean>(isPlaying);
+    useEffect(() => {
+      if (!prevMusicPlayingRef.current && isPlaying && cockpitTvMode) {
+        try {
+          tvVideoRef.current?.pause();
+        } catch {}
+      }
+      prevMusicPlayingRef.current = isPlaying;
+    }, [isPlaying, cockpitTvMode]);
+
+    // Danh sách kênh trong Quick Picker của Cockpit (100% không ẩn kênh nào!)
+    const tvBaseChannels = useMemo(() => {
+      if (!tv.playlist) return [];
+      const q = stripVietnameseTones(tvSearch.trim());
+      if (q) {
+        return tv.playlist.channels.filter(
+          (c) =>
+            stripVietnameseTones(c.name).includes(q) ||
+            stripVietnameseTones(c.group).includes(q)
+        );
+      }
+      if (tvGroup === '__favorites__') {
+        return tv.playlist.channels.filter((c) => tv.favoriteSet.has(getChannelFavKey(c)));
+      }
+      if (tvGroup === '__popular__') {
+        return tv.popularChannels;
+      }
+      if (tvGroup === '__all__') {
+        return tv.playlist.channels;
+      }
+      return tv.playlist.channels.filter((c) => c.group === tvGroup);
+    }, [tv.playlist, tvSearch, tvGroup, tv.favoriteSet, tv.popularChannels]);
+
+    const tvDisplayedChannels = useMemo(() => {
+      if (!tvOnlyLive) return tvBaseChannels;
+      return tvBaseChannels.filter((c) => tv.pingMap[c.id]?.status === 'live');
+    }, [tvBaseChannels, tvOnlyLive, tv.pingMap]);
+
+    const tvPingSummary = useMemo(() => {
+      let live = 0;
+      let dead = 0;
+      for (const c of tvBaseChannels) {
+        const s = tv.pingMap[c.id]?.status;
+        if (s === 'live') live++;
+        else if (s === 'dead') dead++;
+      }
+      return { live, dead };
+    }, [tvBaseChannels, tv.pingMap]);
+
+    // Tự động Ping nhẹ khi mở bảng chọn kênh TV trong Cockpit
+    useEffect(() => {
+      if (!isCockpitTvMounted || !showTvPicker || !tv.playlist || tvBaseChannels.length === 0) {
+        return;
+      }
+      const isSearching = tvSearch.trim().length > 0;
+      const timer = window.setTimeout(() => {
+        const limit = tvGroup === '__all__' && !isSearching ? 30 : 40;
+        tv.pingChannels(tvBaseChannels.slice(0, limit), false);
+      }, isSearching ? 400 : 120);
+      return () => window.clearTimeout(timer);
+    }, [isCockpitTvMounted, showTvPicker, tv.playlist, tvGroup, tvSearch, tvBaseChannels, tv.pingChannels]);
+
+    const handleCockpitZapTv = useCallback(
+      (delta: number) => {
+        const list =
+          tvDisplayedChannels.length > 0
+            ? tvDisplayedChannels
+            : tvBaseChannels.length > 0
+            ? tvBaseChannels
+            : tv.playlist?.channels || [];
+        if (list.length === 0) return;
+        const curIdx = tv.activeChannel
+          ? list.findIndex((c) => c.id === tv.activeChannel!.id)
+          : -1;
+        const nextIdx = curIdx < 0 ? 0 : (curIdx + delta + list.length) % list.length;
+        tv.setActiveChannel(list[nextIdx]);
+      },
+      [tvDisplayedChannels, tvBaseChannels, tv]
+    );
+
+    const handleCockpitTvPlayToggle = () => {
+      const v = tvVideoRef.current;
+      if (!v) return;
+      if (v.paused) {
+        onPauseMusic();
+        v.play().catch(() => {});
+      } else {
+        v.pause();
+      }
+    };
+
+    const handleCockpitTvProxyToggle = () => {
+      if (!tv.activeChannel) return;
+      const nextProxy = tvStatus.streamMode === 'direct';
+      if (!nextProxy && !tvStatus.canSwitchDirect) {
+        onNotifyToast('Kênh này bắt buộc chạy qua Proxy do nguồn không hỗ trợ HTTPS/CORS.');
+        return;
+      }
+      onNotifyToast(nextProxy ? '🔁 Chuyển sang Proxy ổn định...' : '⚡ Phát trực tiếp CDN...');
+      setTvForceProxy(nextProxy);
+      setTvReloadNonce((n) => n + 1);
+    };
+
+    const handleCockpitTvForceProxyRetry = useCallback(() => {
+      setTvForceProxy(true);
+      setTvReloadNonce((n) => n + 1);
+    }, []);
+
     const effectiveVideoMode = isVideoMode && !isSoundCloudTrack;
-    const showVideoSlot = isVisible && effectiveVideoMode && !isMapExpanded;
+    const showVideoSlot = isVisible && effectiveVideoMode && !cockpitTvMode && !isMapExpanded;
 
     // Đo tọa độ chính xác của khung Video 16:9 và đồng bộ trực tiếp trước khi trình duyệt vẽ frame (0 giật, 0 vỡ layout!)
     const syncVideoSlotRect = useCallback(() => {
@@ -351,13 +530,13 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
           container.style.setProperty('--map-pct', `${pct}%`);
           if (badgeTextRef.current) {
             badgeTextRef.current.textContent = `Bản đồ ${pct}% • ${
-              isVideoMode ? 'Video' : 'Nhạc'
+              cockpitTvMode ? 'TV Live' : isVideoMode ? 'Video' : 'Nhạc'
             } ${100 - pct}%`;
           }
           syncVideoSlotRect();
         });
       },
-      [mapSide, isVideoMode, syncVideoSlotRect]
+      [mapSide, isVideoMode, cockpitTvMode, syncVideoSlotRect]
     );
 
     const handleDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -407,6 +586,11 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         ? lyricsData.lines[activeLyricIndex + 1]?.text
         : null;
 
+    const isCurrentTvFav = tv.activeChannel
+      ? tv.favoriteSet.has(getChannelFavKey(tv.activeChannel))
+      : false;
+    const activeTvPing = tv.activeChannel ? tv.pingMap[tv.activeChannel.id] : undefined;
+
     return (
       <div
         ref={splitContainerRef}
@@ -425,7 +609,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         {isDraggingSplit && (
           <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-1.5 rounded-full bg-emerald-500 text-black text-xs font-black shadow-2xl pointer-events-none">
             <span ref={badgeTextRef}>
-              Bản đồ {livePctRef.current}% • {isVideoMode ? 'Video' : 'Nhạc'}{' '}
+              Bản đồ {livePctRef.current}% •{' '}
+              {cockpitTvMode ? 'TV Live' : isVideoMode ? 'Video' : 'Nhạc'}{' '}
               {100 - livePctRef.current}%
             </span>
           </div>
@@ -514,66 +699,120 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         )}
 
         {/* =====================================================================
-            3. KHUNG GIẢI TRÍ COCKPIT (Cấu trúc 3 tầng cố định cân đối chuẩn CarPlay — đổi Nhạc ↔ Video 0 giật!)
+            3. KHUNG GIẢI TRÍ COCKPIT (Cấu trúc 3 tầng cố định cân đối chuẩn CarPlay — đổi Nhạc ↔ Video ↔ TV 0 giật!)
            ===================================================================== */}
         {isMapExpanded ? (
-          <div
-            {...gestureHandlers}
-            className={`shrink-0 rounded-2xl border px-3 py-2 flex items-center justify-between gap-3 ${theme.cardElevated}`}
-          >
-            <div className="flex items-center gap-2.5 min-w-0 flex-1">
-              <img
-                src={streamData.thumbnailUrl}
-                alt={streamData.title}
-                className="w-10 h-10 rounded-xl object-cover shrink-0 bg-black"
-              />
-              <div className="min-w-0">
-                <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
-                  {streamData.title}
-                </h4>
-                <p
-                  className={`text-[11px] font-bold truncate ${
-                    isLightTheme ? 'text-emerald-700' : 'text-emerald-300'
+          cockpitTvMode && tv.activeChannel ? (
+            <div
+              className={`shrink-0 rounded-2xl border px-3 py-2 flex items-center justify-between gap-3 ${theme.cardElevated}`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <div
+                  className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 p-1 ${
+                    isLightTheme ? 'bg-slate-900 border-slate-300' : 'bg-black/60 border-white/15'
                   }`}
                 >
-                  {currentLyricText ? `♪ ${currentLyricText}` : streamData.uploader}
-                </p>
+                  {tv.activeChannel.logo && !tvFailedLogos[tv.activeChannel.id] ? (
+                    <img
+                      src={tv.activeChannel.logo}
+                      alt={tv.activeChannel.name}
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <Tv className="w-5 h-5 text-sky-400" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] font-black shrink-0">
+                      TV
+                    </span>
+                    <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
+                      {tv.activeChannel.name}
+                    </h4>
+                  </div>
+                  <p className={`text-[11px] font-bold truncate ${theme.textSub}`}>
+                    {tv.activeChannel.group} • Thu gọn bản đồ để xem tiếp TV
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleToggleExpandMap}
+                  className="min-h-[36px] px-3 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold active:scale-95 transition"
+                >
+                  Mở TV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCockpitTvMode(false)}
+                  className={`min-h-[36px] px-3 rounded-full border text-xs font-bold active:scale-95 transition ${theme.iconBtn}`}
+                >
+                  Nhạc
+                </button>
               </div>
             </div>
+          ) : (
+            <div
+              {...gestureHandlers}
+              className={`shrink-0 rounded-2xl border px-3 py-2 flex items-center justify-between gap-3 ${theme.cardElevated}`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <img
+                  src={streamData.thumbnailUrl}
+                  alt={streamData.title}
+                  className="w-10 h-10 rounded-xl object-cover shrink-0 bg-black"
+                />
+                <div className="min-w-0">
+                  <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
+                    {streamData.title}
+                  </h4>
+                  <p
+                    className={`text-[11px] font-bold truncate ${
+                      isLightTheme ? 'text-emerald-700' : 'text-emerald-300'
+                    }`}
+                  >
+                    {currentLyricText ? `♪ ${currentLyricText}` : streamData.uploader}
+                  </p>
+                </div>
+              </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={onPrev}
-                disabled={!hasPrev}
-                aria-label="Bài trước"
-                className={`w-9 h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 ${theme.iconBtn}`}
-              >
-                <SkipBack className="w-4 h-4 fill-current" />
-              </button>
-              <button
-                type="button"
-                onClick={onTogglePlay}
-                aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-                className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-90 ${theme.primaryCta}`}
-              >
-                {isPlaying ? (
-                  <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
-                ) : (
-                  <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={onNext}
-                disabled={!hasNext}
-                aria-label="Bài tiếp theo"
-                className={`w-9 h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 ${theme.iconBtn}`}
-              >
-                <SkipForward className="w-4 h-4 fill-current" />
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={onPrev}
+                  disabled={!hasPrev}
+                  aria-label="Bài trước"
+                  className={`w-9 h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 ${theme.iconBtn}`}
+                >
+                  <SkipBack className="w-4 h-4 fill-current" />
+                </button>
+                <button
+                  type="button"
+                  onClick={onTogglePlay}
+                  aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-90 ${theme.primaryCta}`}
+                >
+                  {isPlaying ? (
+                    <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
+                  ) : (
+                    <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={onNext}
+                  disabled={!hasNext}
+                  aria-label="Bài tiếp theo"
+                  className={`w-9 h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 ${theme.iconBtn}`}
+                >
+                  <SkipForward className="w-4 h-4 fill-current" />
+                </button>
+              </div>
             </div>
-          </div>
+          )
         ) : (
           <div
             className={`cockpit-pane-cq flex-1 min-w-0 car:min-h-0 car:h-full flex flex-col gap-2 short:gap-1.5 ${
@@ -908,359 +1147,898 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             </div>
 
             {/* =================================================================
-                3B. KHUNG GIẢI TRÍ NHẠC / VIDEO (Cấu trúc 3 tầng cố định cân đối chuẩn CarPlay)
+                3B. KHUNG GIẢI TRÍ NHẠC / VIDEO / TV LIVE (Cấu trúc 3 tầng cố định cân đối chuẩn CarPlay)
                ================================================================= */}
             <div
-              {...gestureHandlers}
+              {...(cockpitTvMode ? {} : gestureHandlers)}
               className={`flex-1 min-w-0 min-h-[250px] car:min-h-0 rounded-2xl sm:rounded-3xl border p-3 sm:p-3.5 short:p-2 vshort:p-1.5 flex flex-col justify-between gap-2 short:gap-1.5 vshort:gap-1 relative overflow-hidden ${theme.card}`}
             >
-            {heartBurst && (
-              <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-black/15">
-                <Heart className="w-20 h-20 text-rose-500 fill-rose-500 animate-ping" />
-              </div>
-            )}
+              {heartBurst && !cockpitTvMode && (
+                <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-black/15">
+                  <Heart className="w-20 h-20 text-rose-500 fill-rose-500 animate-ping" />
+                </div>
+              )}
 
-            {/* TẦNG 1 (CỐ ĐỊNH): THANH CHUYỂN NHẠC / VIDEO + NGUỒN SOUNDCLOUD/YOUTUBE GỌN SẠCH */}
-            <div className="flex items-center justify-between gap-1.5 shrink-0">
-              <div className="flex items-center gap-1.5 min-w-0">
-                {/* Segmented Switch iOS: Nhạc (Lyrics) | Video */}
-                <div
-                  className={`inline-flex items-center p-0.5 rounded-full border shrink-0 ${theme.segTrack}`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (isVideoMode) onToggleViewMode();
-                    }}
-                    aria-label="Chế độ Nghe nhạc và Lời bài hát"
-                    className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
-                      !effectiveVideoMode ? theme.segActive : theme.segIdle
-                    }`}
+              {/* TẦNG 1 (CỐ ĐỊNH): THANH CHUYỂN NHẠC / VIDEO / TV + HÀNH ĐỘNG NHANH */}
+              <div className="flex items-center justify-between gap-1.5 shrink-0">
+                <div className="flex items-center gap-1 min-w-0">
+                  {/* Segmented Switch iOS: Nhạc | Video | TV */}
+                  <div
+                    className={`inline-flex items-center p-0.5 rounded-full border shrink-0 ${theme.segTrack}`}
                   >
-                    <Music className="w-3 h-3 shrink-0" />
-                    <span>Nhạc</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (isSoundCloudTrack) {
-                        onChangeMusicSource('youtube');
-                        if (!isVideoMode) onToggleViewMode();
-                      } else if (!isVideoMode) {
-                        onToggleViewMode();
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCockpitTvMode(false);
+                        setShowTvPicker(false);
+                        if (isVideoMode) onToggleViewMode();
+                      }}
+                      aria-label="Chế độ Nghe nhạc và Lời bài hát"
+                      className={`h-7 px-2 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
+                        !cockpitTvMode && !effectiveVideoMode ? theme.segActive : theme.segIdle
+                      }`}
+                    >
+                      <Music className="w-3 h-3 shrink-0" />
+                      <span>Nhạc</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCockpitTvMode(false);
+                        setShowTvPicker(false);
+                        if (isSoundCloudTrack) {
+                          onChangeMusicSource('youtube');
+                          if (!isVideoMode) onToggleViewMode();
+                        } else if (!isVideoMode) {
+                          onToggleViewMode();
+                        }
+                      }}
+                      aria-label="Chế độ Phát Video YouTube"
+                      className={`h-7 px-2 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
+                        !cockpitTvMode && effectiveVideoMode
+                          ? isLightTheme
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : 'bg-sky-400 text-slate-950 shadow-sm'
+                          : theme.segIdle
+                      }`}
+                    >
+                      <Film className="w-3 h-3 shrink-0" />
+                      <span>Video</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCockpitTvMode(true);
+                        onPauseMusic();
+                      }}
+                      aria-label="Chế độ Xem TV & Radio trực tiếp ngay trong Cockpit"
+                      className={`h-7 px-2 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
+                        cockpitTvMode
+                          ? 'bg-rose-600 text-white shadow-sm'
+                          : theme.segIdle
+                      }`}
+                    >
+                      <Tv className="w-3 h-3 shrink-0" />
+                      <span>TV</span>
+                    </button>
+                  </div>
+
+                  {/* Khi ở Nhạc/Video: Nút đổi nhanh nguồn YouTube <-> SoundCloud */}
+                  {!cockpitTvMode && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onChangeMusicSource(musicSource === 'soundcloud' ? 'youtube' : 'soundcloud')
                       }
-                    }}
-                    aria-label="Chế độ Phát Video YouTube"
-                    className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
-                      effectiveVideoMode
-                        ? isLightTheme
-                          ? 'bg-blue-600 text-white shadow-sm'
-                          : 'bg-sky-400 text-slate-950 shadow-sm'
-                        : theme.segIdle
-                    }`}
-                  >
-                    <Tv className="w-3 h-3 shrink-0" />
-                    <span>Video</span>
-                  </button>
-                </div>
-
-                {/* Nút 1 chạm đổi nhanh nguồn YouTube <-> SoundCloud ngay trong Cockpit */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChangeMusicSource(musicSource === 'soundcloud' ? 'youtube' : 'soundcloud')
-                  }
-                  title={
-                    musicSource === 'soundcloud'
-                      ? 'Đang dùng nguồn SoundCloud • Bấm để đổi sang YouTube'
-                      : 'Đang dùng nguồn YouTube • Bấm để đổi sang SoundCloud'
-                  }
-                  className={`h-7 px-2 rounded-full border text-[10px] font-black flex items-center gap-1 shrink-0 active:scale-95 transition ${
-                    musicSource === 'soundcloud' || isSoundCloudTrack
-                      ? 'bg-[#ff5500] border-orange-400 text-white shadow-sm'
-                      : theme.iconBtn
-                  }`}
-                >
-                  <span>{musicSource === 'soundcloud' || isSoundCloudTrack ? '☁️ SC' : '▶ YT'}</span>
-                </button>
-              </div>
-
-              {/* Nhóm icon hành động bên phải (thoáng, không bao giờ đè chữ!) */}
-              <div className="flex items-center gap-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={toggleMapSide}
-                  aria-label="Đổi vị trí Trái Phải giữa Nhạc và Bản đồ"
-                  title="Đổi bên Trái / Phải với Bản đồ"
-                  className={`hidden car:flex w-8 h-8 rounded-full border items-center justify-center active:scale-90 transition ${
-                    isLightTheme
-                      ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-700'
-                      : 'bg-white/10 hover:bg-white/20 border-white/15 text-emerald-300'
-                  }`}
-                >
-                  <ArrowLeftRight className="w-3.5 h-3.5" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onStartAutoMix}
-                  disabled={isLoadingMix}
-                  aria-label="Phát đài nhạc tương tự bài này"
-                  title="Phát liên hoàn bài tương tự (Auto-Mix)"
-                  className={`cq-hide-xs w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
-                    isMixActive
-                      ? 'bg-amber-400 text-slate-950 border-amber-400 shadow'
-                      : isLightTheme
-                      ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-700'
-                      : 'bg-white/10 hover:bg-white/20 border-white/15 text-amber-200'
-                  }`}
-                >
-                  {isLoadingMix ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Zap className="w-3.5 h-3.5 fill-current" />
+                      title={
+                        musicSource === 'soundcloud'
+                          ? 'Đang dùng nguồn SoundCloud • Bấm để đổi sang YouTube'
+                          : 'Đang dùng nguồn YouTube • Bấm để đổi sang SoundCloud'
+                      }
+                      className={`h-7 px-2 rounded-full border text-[10px] font-black flex items-center gap-1 shrink-0 active:scale-95 transition ${
+                        musicSource === 'soundcloud' || isSoundCloudTrack
+                          ? 'bg-[#ff5500] border-orange-400 text-white shadow-sm'
+                          : theme.iconBtn
+                      }`}
+                    >
+                      <span>
+                        {musicSource === 'soundcloud' || isSoundCloudTrack ? '☁️ SC' : '▶ YT'}
+                      </span>
+                    </button>
                   )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onOpenAddPlaylist}
-                  aria-label="Lưu vào Playlist"
-                  title="Lưu vào Playlist"
-                  className={`cq-hide-sm w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
-                >
-                  <FolderPlus className="w-3.5 h-3.5" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onToggleFavorite}
-                  aria-label={isFavorite ? 'Bỏ lưu yêu thích' : 'Lưu yêu thích'}
-                  title={isFavorite ? 'Bỏ yêu thích' : 'Yêu thích'}
-                  className={`w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
-                    isFavorite
-                      ? isLightTheme
-                        ? 'bg-rose-50 border-rose-300 text-rose-600'
-                        : 'bg-rose-500/25 border-rose-400/50 text-rose-400'
-                      : theme.iconBtn
-                  }`}
-                >
-                  <Heart
-                    className={`w-3.5 h-3.5 ${
-                      isFavorite ? (isLightTheme ? 'fill-rose-600' : 'fill-rose-400') : ''
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
-
-            {/* TẦNG 2 (TRUNG TÂM CÂN ĐỐI TỈ LỆ): VIDEO 16:9 CHUẨN HOẶC ALBUM + KARAOKE */}
-            {effectiveVideoMode ? (
-              <div className="flex-1 min-h-0 flex flex-col gap-2 short:gap-1.5">
-                {/* Sân khấu 16:9 chuẩn container-type: size -> Video luôn nền đen chuẩn điện ảnh */}
-                <div className="media-stage relative h-[185px] xs:h-[210px] car:h-auto car:flex-1 car:min-h-0 w-full flex items-center justify-center">
-                  <div
-                    ref={videoSlotRef}
-                    aria-label="Khung phát Video YouTube trong Cockpit"
-                    className={`car-video-fit relative rounded-2xl overflow-hidden bg-black border shadow-lg ${
-                      isLightTheme ? 'border-slate-300' : 'border-white/15'
-                    }`}
-                  >
-                    <img
-                      src={streamData.thumbnailUrl}
-                      alt=""
-                      aria-hidden="true"
-                      className="w-full h-full object-cover opacity-25 blur-sm scale-105 pointer-events-none"
-                    />
-                  </div>
                 </div>
 
-                {/* Thông tin Video căn giữa thoáng rộng 100% bề ngang */}
-                <div className="shrink-0 text-center px-1">
-                  <h3 className={`text-xs sm:text-sm font-extrabold truncate leading-snug ${theme.text}`}>
-                    {streamData.title}
-                  </h3>
-                  <p className={`text-[11px] font-semibold truncate ${theme.textSub}`}>
-                    {streamData.uploader}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="flex-1 min-h-0 flex flex-col justify-center gap-2.5 short:gap-2">
-                {/* Thông tin Bài hát + Ảnh bìa rộng rãi 100% bề ngang */}
-                <div className="flex items-center gap-3 short:gap-2.5 shrink-0 px-0.5">
-                  <div
-                    onClick={onTogglePlay}
-                    className={`relative w-14 h-14 sm:w-16 sm:h-16 short:w-12 short:h-12 rounded-2xl overflow-hidden shrink-0 border shadow-lg cursor-pointer bg-black transition-transform duration-300 ${
-                      isLightTheme ? 'border-slate-300' : 'border-white/20'
-                    } ${isPlaying && !isBuffering ? 'scale-100' : 'scale-95'}`}
-                  >
-                    <img
-                      src={streamData.thumbnailUrl}
-                      alt={streamData.title}
-                      className="w-full h-full object-cover"
-                    />
-                    {isBuffering && (
-                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                        <Loader2 className="w-5 h-5 text-white animate-spin" />
-                      </div>
+                {/* Nhóm nút hành động bên phải */}
+                {cockpitTvMode ? (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowTvPicker((v) => !v)}
+                      aria-label="Mở danh sách chọn kênh TV nhanh"
+                      title="Chọn kênh TV & xem Ping Live"
+                      className={`h-7 px-2 rounded-full border text-[10.5px] font-extrabold flex items-center gap-1 active:scale-95 transition ${
+                        showTvPicker
+                          ? isLightTheme
+                            ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                            : 'bg-sky-400 border-sky-300 text-slate-950 shadow-sm'
+                          : theme.iconBtn
+                      }`}
+                    >
+                      <ListVideo className="w-3.5 h-3.5 shrink-0" />
+                      <span className="cq-hide-xs">Kênh</span>
+                    </button>
+
+                    {tv.activeChannel && (
+                      <button
+                        type="button"
+                        onClick={() => tv.toggleFavoriteChannel(tv.activeChannel!)}
+                        aria-label={isCurrentTvFav ? 'Bỏ yêu thích kênh' : 'Lưu kênh yêu thích'}
+                        title={isCurrentTvFav ? 'Bỏ khỏi Yêu thích' : 'Lưu kênh Yêu thích'}
+                        className={`w-7 h-7 rounded-full border flex items-center justify-center active:scale-90 transition ${
+                          isCurrentTvFav
+                            ? 'bg-amber-400 border-amber-400 text-slate-950'
+                            : theme.iconBtn
+                        }`}
+                      >
+                        <Star className={`w-3.5 h-3.5 ${isCurrentTvFav ? 'fill-slate-950' : ''}`} />
+                      </button>
                     )}
+
+                    <button
+                      type="button"
+                      onClick={onOpenFullTv}
+                      aria-label="Mở màn hình TV Live đầy đủ"
+                      title="Mở toàn bộ trang TV Live"
+                      className={`w-7 h-7 rounded-full border flex items-center justify-center active:scale-90 transition ${
+                        isLightTheme
+                          ? 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700'
+                          : 'bg-white/10 hover:bg-white/20 border-white/15 text-sky-300'
+                      }`}
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={toggleMapSide}
+                      aria-label="Đổi vị trí Trái Phải giữa TV và Bản đồ"
+                      title="Đổi bên Trái / Phải với Bản đồ"
+                      className={`hidden car:flex w-7 h-7 rounded-full border items-center justify-center active:scale-90 transition ${
+                        isLightTheme
+                          ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-700'
+                          : 'bg-white/10 hover:bg-white/20 border-white/15 text-emerald-300'
+                      }`}
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={toggleMapSide}
+                      aria-label="Đổi vị trí Trái Phải giữa Nhạc và Bản đồ"
+                      title="Đổi bên Trái / Phải với Bản đồ"
+                      className={`hidden car:flex w-8 h-8 rounded-full border items-center justify-center active:scale-90 transition ${
+                        isLightTheme
+                          ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-700'
+                          : 'bg-white/10 hover:bg-white/20 border-white/15 text-emerald-300'
+                      }`}
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onStartAutoMix}
+                      disabled={isLoadingMix}
+                      aria-label="Phát đài nhạc tương tự bài này"
+                      title="Phát liên hoàn bài tương tự (Auto-Mix)"
+                      className={`cq-hide-xs w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
+                        isMixActive
+                          ? 'bg-amber-400 text-slate-950 border-amber-400 shadow'
+                          : isLightTheme
+                          ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-700'
+                          : 'bg-white/10 hover:bg-white/20 border-white/15 text-amber-200'
+                      }`}
+                    >
+                      {isLoadingMix ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Zap className="w-3.5 h-3.5 fill-current" />
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onOpenAddPlaylist}
+                      aria-label="Lưu vào Playlist"
+                      title="Lưu vào Playlist"
+                      className={`cq-hide-sm w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
+                    >
+                      <FolderPlus className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onToggleFavorite}
+                      aria-label={isFavorite ? 'Bỏ lưu yêu thích' : 'Lưu yêu thích'}
+                      title={isFavorite ? 'Bỏ yêu thích' : 'Yêu thích'}
+                      className={`w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
+                        isFavorite
+                          ? isLightTheme
+                            ? 'bg-rose-50 border-rose-300 text-rose-600'
+                            : 'bg-rose-500/25 border-rose-400/50 text-rose-400'
+                          : theme.iconBtn
+                      }`}
+                    >
+                      <Heart
+                        className={`w-3.5 h-3.5 ${
+                          isFavorite ? (isLightTheme ? 'fill-rose-600' : 'fill-rose-400') : ''
+                        }`}
+                      />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* TẦNG 2 (TRUNG TÂM CÂN ĐỐI TỈ LỆ): TV LIVE (hoặc Bảng chọn kênh TV) / VIDEO 16:9 / ALBUM + KARAOKE */}
+              {cockpitTvMode ? (
+                <div className="flex-1 min-h-0 flex flex-col gap-1.5 overflow-hidden">
+                  {/* Sân khấu TV giữ mount khi mở bảng chọn kênh để tiếng Radio/VTV không bị ngắt khi lướt chọn kênh! */}
+                  <div
+                    className={`${
+                      showTvPicker ? 'hidden' : 'flex'
+                    } flex-1 min-h-0 flex-col gap-1.5`}
+                  >
+                    <div className="relative h-[180px] xs:h-[205px] car:h-auto car:flex-1 car:min-h-0 w-full">
+                      {isCockpitTvMounted && (
+                        <TvPlayerStage
+                          channel={tv.activeChannel}
+                          isLightTheme={isLightTheme}
+                          compact
+                          isMuted={tvMuted}
+                          forceProxy={tvForceProxy}
+                          reloadNonce={tvReloadNonce}
+                          videoRef={tvVideoRef}
+                          onPauseMusic={onPauseMusic}
+                          onZapNext={() => handleCockpitZapTv(1)}
+                          onForceProxyRetry={handleCockpitTvForceProxyRetry}
+                          onStatusChange={setTvStatus}
+                          onPingUpdate={tv.markChannelLiveState}
+                        />
+                      )}
+                      {tv.isLoadingPlaylist && !tv.activeChannel && (
+                        <div className="absolute inset-0 bg-black/75 rounded-2xl flex flex-col items-center justify-center gap-1.5">
+                          <Loader2 className="w-6 h-6 text-sky-400 animate-spin" />
+                          <span className="text-[11px] font-bold text-white/90">
+                            Đang nạp danh sách 524 kênh TV...
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Tên kênh + trạng thái Ping Live (chạm vào để mở danh sách kênh nhanh!) */}
+                    <button
+                      type="button"
+                      onClick={() => setShowTvPicker(true)}
+                      className={`shrink-0 w-full rounded-xl border px-2.5 py-1 flex items-center justify-between gap-2 text-left active:scale-[0.99] transition ${theme.well}`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[8.5px] font-black uppercase shrink-0">
+                            {tv.activeChannel?.isVod
+                              ? 'PHIM'
+                              : tv.activeChannel?.isRadio
+                              ? 'FM'
+                              : 'LIVE'}
+                          </span>
+                          <span className={`text-xs font-extrabold truncate ${theme.text}`}>
+                            {tv.activeChannel?.name || 'Chạm để chọn kênh TV'}
+                          </span>
+                        </div>
+                        <p className={`text-[10px] font-semibold truncate mt-0.5 ${theme.textSub}`}>
+                          {tv.activeChannel
+                            ? `${tv.activeChannel.group}${
+                                tv.activeChannel.manifestType === 'mpd' ? ' • MPD' : ''
+                              } • ${tvStatus.streamMode === 'proxy' ? 'Proxy' : 'CDN'}`
+                            : '524 kênh TV & Radio sẵn sàng'}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {activeTvPing && (
+                          <span
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[9.5px] font-mono font-extrabold ${
+                              activeTvPing.status === 'live'
+                                ? isLightTheme
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                                  : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300'
+                                : activeTvPing.status === 'dead'
+                                ? isLightTheme
+                                  ? 'bg-rose-50 border-rose-300 text-rose-700'
+                                  : 'bg-rose-500/20 border-rose-400/45 text-rose-300'
+                                : isLightTheme
+                                ? 'bg-blue-50 border-blue-200 text-blue-600'
+                                : 'bg-sky-500/20 border-sky-400/45 text-sky-300'
+                            }`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                activeTvPing.status === 'live'
+                                  ? 'bg-emerald-500'
+                                  : activeTvPing.status === 'dead'
+                                  ? 'bg-rose-500'
+                                  : 'bg-sky-400 animate-ping'
+                              }`}
+                            />
+                            <span>
+                              {activeTvPing.status === 'live'
+                                ? activeTvPing.latencyMs
+                                  ? `${activeTvPing.latencyMs}ms`
+                                  : 'Live'
+                                : activeTvPing.status === 'dead'
+                                ? 'Off'
+                                : '...'}
+                            </span>
+                          </span>
+                        )}
+                        <span className={`text-[10px] font-extrabold ${theme.textMuted}`}>▾</span>
+                      </div>
+                    </button>
                   </div>
 
-                  <div className="min-w-0 flex-1">
+                  {/* Bảng chọn kênh nhanh ngay trong Cockpit (đủ 100% kênh + đèn Ping Live/Off!) */}
+                  {showTvPicker && (
+                    <div className="flex-1 min-h-0 flex flex-col gap-1.5 overflow-hidden">
+                      {/* Tìm nhanh + Ping + Chỉ Live + Đóng */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        <div className="relative flex-1 min-w-0">
+                          <Search
+                            className={`w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none ${theme.textMuted}`}
+                          />
+                          <input
+                            type="search"
+                            value={tvSearch}
+                            onChange={(e) => setTvSearch(e.target.value)}
+                            placeholder="Tìm VTV, VOV, TV360..."
+                            className={`w-full h-8 pl-7 pr-6 rounded-xl border text-[11px] font-bold focus:outline-none ${theme.input}`}
+                          />
+                          {tvSearch && (
+                            <button
+                              type="button"
+                              onClick={() => setTvSearch('')}
+                              className={`w-5 h-5 absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center ${theme.textMuted}`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setTvOnlyLive((v) => !v)}
+                          title="Chỉ lọc kênh đang Live (mặc định tắt để hiện 100% kênh)"
+                          className={`h-8 px-2 rounded-xl border text-[10px] font-extrabold shrink-0 active:scale-95 transition ${
+                            tvOnlyLive
+                              ? isLightTheme
+                                ? 'bg-emerald-600 border-emerald-600 text-white'
+                                : 'bg-emerald-500 border-emerald-400 text-slate-950'
+                              : theme.chipIdle
+                          }`}
+                        >
+                          Live ({tvPingSummary.live})
+                        </button>
+
+                        {tv.isPinging ? (
+                          <button
+                            type="button"
+                            onClick={tv.cancelPing}
+                            title="Dừng quét Ping"
+                            className={`h-8 px-2 rounded-xl border text-[10px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 ${
+                              isLightTheme
+                                ? 'bg-rose-100 border-rose-300 text-rose-700'
+                                : 'bg-rose-500/25 border-rose-400/50 text-rose-200'
+                            }`}
+                          >
+                            <Square className="w-2.5 h-2.5 fill-current" />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onNotifyToast(
+                                `📡 Đang ping ${Math.min(tvBaseChannels.length, 120)} kênh...`
+                              );
+                              tv.pingChannels(tvBaseChannels, true);
+                            }}
+                            title="Ping kiểm tra Live / Off ngay"
+                            className={`h-8 px-2 rounded-xl border text-[10px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 ${
+                              isLightTheme
+                                ? 'bg-blue-50 border-blue-300 text-blue-700'
+                                : 'bg-sky-500/20 border-sky-400/45 text-sky-200'
+                            }`}
+                          >
+                            <Activity className="w-3.5 h-3.5" />
+                            <span className="cq-hide-xs">Ping</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => setShowTvPicker(false)}
+                          aria-label="Quay lại khung phát TV"
+                          className={`w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 active:scale-90 ${theme.iconBtn}`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Thanh nhóm kênh */}
+                      {!tvSearch.trim() && (
+                        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar shrink-0">
+                          {[
+                            { id: '__popular__', label: '🔥 Phổ biến' },
+                            { id: '__favorites__', label: `⭐ (${tv.favoriteKeys.length})` },
+                            ...(tv.playlist?.groups.map((g) => ({
+                              id: g.name,
+                              label: `${g.name} (${g.count})`,
+                            })) || []),
+                            ...(tv.playlist
+                              ? [{ id: '__all__', label: `Tất cả (${tv.playlist.totalPlayable})` }]
+                              : []),
+                          ].map((tab) => {
+                            const active = tvGroup === tab.id;
+                            return (
+                              <button
+                                key={tab.id}
+                                type="button"
+                                onClick={() => setTvGroup(tab.id)}
+                                className={`min-h-[26px] px-2 rounded-full text-[10px] font-extrabold whitespace-nowrap border active:scale-95 transition ${
+                                  active
+                                    ? isLightTheme
+                                      ? 'bg-blue-600 text-white border-blue-600'
+                                      : 'bg-sky-400 text-slate-950 border-sky-300'
+                                    : theme.chipIdle
+                                }`}
+                              >
+                                {tab.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Danh sách kênh cuộn gọn trong Cockpit */}
+                      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-1 pr-0.5">
+                        {tv.isLoadingPlaylist ? (
+                          <div className="py-8 flex flex-col items-center gap-1.5 text-center">
+                            <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                            <span className={`text-[11px] font-bold ${theme.textSub}`}>
+                              Đang tải danh sách kênh...
+                            </span>
+                          </div>
+                        ) : tvDisplayedChannels.length === 0 ? (
+                          <div className={`py-6 text-center text-[11px] font-bold ${theme.textMuted}`}>
+                            {tvOnlyLive
+                              ? 'Chưa có kênh Live — bấm Ping hoặc tắt lọc Chỉ Live.'
+                              : 'Không tìm thấy kênh phù hợp.'}
+                          </div>
+                        ) : (
+                          tvDisplayedChannels.map((ch) => {
+                            const selected = tv.activeChannel?.id === ch.id;
+                            const p = tv.pingMap[ch.id];
+                            return (
+                              <button
+                                key={ch.id}
+                                type="button"
+                                onClick={() => {
+                                  tv.setActiveChannel(ch);
+                                  setShowTvPicker(false);
+                                }}
+                                className={`w-full rounded-xl border px-2 py-1.5 flex items-center gap-2 text-left active:scale-[0.99] transition ${
+                                  selected
+                                    ? isLightTheme
+                                      ? 'bg-blue-50 border-blue-500 shadow-sm'
+                                      : 'bg-sky-500/25 border-sky-400/70'
+                                    : theme.itemIdle
+                                }`}
+                              >
+                                <div
+                                  className={`w-8 h-6 rounded-md border flex items-center justify-center overflow-hidden p-0.5 shrink-0 ${
+                                    isLightTheme
+                                      ? 'bg-slate-900 border-slate-300'
+                                      : 'bg-black/55 border-white/10'
+                                  }`}
+                                >
+                                  {ch.logo && !tvFailedLogos[ch.id] ? (
+                                    <img
+                                      src={ch.logo}
+                                      alt=""
+                                      loading="lazy"
+                                      onError={() =>
+                                        setTvFailedLogos((prev) => ({ ...prev, [ch.id]: true }))
+                                      }
+                                      className="w-full h-full object-contain"
+                                    />
+                                  ) : ch.isRadio ? (
+                                    <Radio className="w-3.5 h-3.5 text-emerald-400" />
+                                  ) : (
+                                    <Tv className="w-3.5 h-3.5 text-sky-300" />
+                                  )}
+                                </div>
+
+                                <div className="min-w-0 flex-1">
+                                  <p className={`text-[11.5px] font-extrabold truncate ${theme.text}`}>
+                                    {ch.name}
+                                  </p>
+                                  <div className="flex items-center gap-1 text-[9.5px] font-semibold">
+                                    <span className={`truncate ${theme.textMuted}`}>{ch.group}</span>
+                                    {ch.manifestType === 'mpd' && (
+                                      <span
+                                        className={`px-1 rounded font-bold shrink-0 ${
+                                          isLightTheme
+                                            ? 'bg-violet-100 text-violet-800'
+                                            : 'bg-violet-500/25 text-violet-200'
+                                        }`}
+                                      >
+                                        MPD
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Đèn Ping Live / Off ngay trên danh sách Cockpit */}
+                                {p ? (
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[9px] font-mono font-extrabold shrink-0 ${
+                                      p.status === 'live'
+                                        ? isLightTheme
+                                          ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                                          : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300'
+                                        : p.status === 'dead'
+                                        ? isLightTheme
+                                          ? 'bg-rose-50 border-rose-300 text-rose-700'
+                                          : 'bg-rose-500/20 border-rose-400/45 text-rose-300'
+                                        : isLightTheme
+                                        ? 'bg-blue-50 border-blue-200 text-blue-600'
+                                        : 'bg-sky-500/20 border-sky-400/45 text-sky-300'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`w-1.5 h-1.5 rounded-full ${
+                                        p.status === 'live'
+                                          ? 'bg-emerald-500'
+                                          : p.status === 'dead'
+                                          ? 'bg-rose-500'
+                                          : 'bg-sky-400 animate-ping'
+                                      }`}
+                                    />
+                                    <span>
+                                      {p.status === 'live'
+                                        ? p.latencyMs
+                                          ? `${p.latencyMs}ms`
+                                          : 'Live'
+                                        : p.status === 'dead'
+                                        ? 'Off'
+                                        : '...'}
+                                    </span>
+                                  </span>
+                                ) : (
+                                  <span
+                                    className={`w-2 h-2 rounded-full shrink-0 ${
+                                      isLightTheme ? 'bg-slate-300' : 'bg-white/20'
+                                    }`}
+                                  />
+                                )}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : effectiveVideoMode ? (
+                <div className="flex-1 min-h-0 flex flex-col gap-2 short:gap-1.5">
+                  {/* Sân khấu 16:9 chuẩn container-type: size -> Video luôn nền đen chuẩn điện ảnh */}
+                  <div className="media-stage relative h-[185px] xs:h-[210px] car:h-auto car:flex-1 car:min-h-0 w-full flex items-center justify-center">
+                    <div
+                      ref={videoSlotRef}
+                      aria-label="Khung phát Video YouTube trong Cockpit"
+                      className={`car-video-fit relative rounded-2xl overflow-hidden bg-black border shadow-lg ${
+                        isLightTheme ? 'border-slate-300' : 'border-white/15'
+                      }`}
+                    >
+                      <img
+                        src={streamData.thumbnailUrl}
+                        alt=""
+                        aria-hidden="true"
+                        className="w-full h-full object-cover opacity-25 blur-sm scale-105 pointer-events-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Thông tin Video căn giữa thoáng rộng 100% bề ngang */}
+                  <div className="shrink-0 text-center px-1">
                     <h3
-                      className={`text-sm sm:text-base short:text-xs font-extrabold line-clamp-2 leading-snug ${theme.text}`}
+                      className={`text-xs sm:text-sm font-extrabold truncate leading-snug ${theme.text}`}
                     >
                       {streamData.title}
                     </h3>
-                    <p
-                      className={`text-[11px] sm:text-xs font-semibold truncate mt-0.5 ${theme.textSub}`}
-                    >
+                    <p className={`text-[11px] font-semibold truncate ${theme.textSub}`}>
                       {streamData.uploader}
                     </p>
                   </div>
                 </div>
+              ) : (
+                <div className="flex-1 min-h-0 flex flex-col justify-center gap-2.5 short:gap-2">
+                  {/* Thông tin Bài hát + Ảnh bìa rộng rãi 100% bề ngang */}
+                  <div className="flex items-center gap-3 short:gap-2.5 shrink-0 px-0.5">
+                    <div
+                      onClick={onTogglePlay}
+                      className={`relative w-14 h-14 sm:w-16 sm:h-16 short:w-12 short:h-12 rounded-2xl overflow-hidden shrink-0 border shadow-lg cursor-pointer bg-black transition-transform duration-300 ${
+                        isLightTheme ? 'border-slate-300' : 'border-white/20'
+                      } ${isPlaying && !isBuffering ? 'scale-100' : 'scale-95'}`}
+                    >
+                      <img
+                        src={streamData.thumbnailUrl}
+                        alt={streamData.title}
+                        className="w-full h-full object-cover"
+                      />
+                      {isBuffering && (
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                          <Loader2 className="w-5 h-5 text-white animate-spin" />
+                        </div>
+                      )}
+                    </div>
 
-                {/* Khung lời bài hát Karaoke 2 dòng cân đối */}
-                <div
-                  className={`flex-1 min-h-[52px] short:min-h-[44px] max-h-[156px] rounded-2xl border px-3 py-2 short:py-1.5 flex flex-col justify-center text-center shadow-inner ${theme.well}`}
-                >
-                  {currentLyricText ? (
-                    <>
-                      <p
+                    <div className="min-w-0 flex-1">
+                      <h3
                         className={`text-sm sm:text-base short:text-xs font-extrabold line-clamp-2 leading-snug ${theme.text}`}
                       >
-                        “{currentLyricText}”
+                        {streamData.title}
+                      </h3>
+                      <p
+                        className={`text-[11px] sm:text-xs font-semibold truncate mt-0.5 ${theme.textSub}`}
+                      >
+                        {streamData.uploader}
                       </p>
-                      {nextLyricText && (
+                    </div>
+                  </div>
+
+                  {/* Khung lời bài hát Karaoke 2 dòng cân đối */}
+                  <div
+                    className={`flex-1 min-h-[52px] short:min-h-[44px] max-h-[156px] rounded-2xl border px-3 py-2 short:py-1.5 flex flex-col justify-center text-center shadow-inner ${theme.well}`}
+                  >
+                    {currentLyricText ? (
+                      <>
                         <p
-                          className={`text-[11px] sm:text-xs font-semibold truncate mt-1 vshort:hidden ${theme.textMuted}`}
+                          className={`text-sm sm:text-base short:text-xs font-extrabold line-clamp-2 leading-snug ${theme.text}`}
                         >
-                          {nextLyricText}
+                          “{currentLyricText}”
                         </p>
+                        {nextLyricText && (
+                          <p
+                            className={`text-[11px] sm:text-xs font-semibold truncate mt-1 vshort:hidden ${theme.textMuted}`}
+                          >
+                            {nextLyricText}
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <p
+                        className={`text-xs short:text-[11px] font-bold line-clamp-2 ${theme.textMuted}`}
+                      >
+                        🎵 Vuốt ⇄ để qua bài • Chạm đúp thả tim ❤️
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TẦNG 3 (CỐ ĐỊNH ĐÁY): ĐIỀU KHIỂN TV LIVE HOẶC THANH TUA & ĐIỀU KHIỂN NHẠC/VIDEO */}
+              {cockpitTvMode ? (
+                <div className="shrink-0 flex items-center justify-between gap-1.5 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={handleCockpitTvProxyToggle}
+                    title="Đổi giữa phát CDN trực tiếp và Proxy chống chặn"
+                    className={`h-9 short:h-8 px-2.5 rounded-xl border text-[10.5px] font-extrabold flex items-center gap-1 active:scale-95 transition ${
+                      tvStatus.streamMode === 'proxy'
+                        ? isLightTheme
+                          ? 'bg-blue-600 border-blue-600 text-white'
+                          : 'bg-sky-500/25 border-sky-400/50 text-sky-200'
+                        : theme.iconBtn
+                    }`}
+                  >
+                    <Wifi className="w-3.5 h-3.5 shrink-0" />
+                    <span className="cq-hide-xs">
+                      {tvStatus.streamMode === 'proxy' ? 'Proxy' : 'CDN'}
+                    </span>
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleCockpitZapTv(-1)}
+                      aria-label="Kênh TV trước"
+                      className={`w-9 h-9 short:w-8 short:h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleCockpitTvPlayToggle}
+                      aria-label={tvStatus.isPlaying ? 'Tạm dừng TV' : 'Phát TV'}
+                      className={`w-11 h-11 short:w-9 short:h-9 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
+                    >
+                      {tvStatus.isBuffering || tvStatus.isResolving ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : tvStatus.isPlaying ? (
+                        <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
+                      ) : (
+                        <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
                       )}
-                    </>
-                  ) : (
-                    <p className={`text-xs short:text-[11px] font-bold line-clamp-2 ${theme.textMuted}`}>
-                      🎵 Vuốt ⇄ để qua bài • Chạm đúp thả tim ❤️
-                    </p>
-                  )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleCockpitZapTv(1)}
+                      aria-label="Kênh TV tiếp theo"
+                      className={`w-9 h-9 short:w-8 short:h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setTvMuted((m) => !m)}
+                      aria-label={tvMuted ? 'Bật tiếng TV' : 'Tắt tiếng TV'}
+                      className={`w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${
+                        tvMuted
+                          ? isLightTheme
+                            ? 'bg-rose-50 border-rose-300 text-rose-600'
+                            : 'bg-rose-500/25 border-rose-400/50 text-rose-300'
+                          : theme.iconBtn
+                      }`}
+                    >
+                      {tvMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setTvReloadNonce((n) => n + 1)}
+                      aria-label="Tải lại luồng kênh TV"
+                      title="Tải lại kênh"
+                      className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${tvStatus.isResolving ? 'animate-spin' : ''}`}
+                      />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="shrink-0 space-y-1 short:space-y-0.5">
+                  <div>
+                    <input
+                      type="range"
+                      aria-label="Thanh tiến trình Cockpit"
+                      min={0}
+                      max={safeDuration || 100}
+                      step={1}
+                      value={Math.min(displayedTime, safeDuration || 100)}
+                      style={{ '--progress': `${progressPercent}%` } as React.CSSProperties}
+                      onPointerDown={() => {
+                        isScrubbingRef.current = true;
+                        onScrubStart();
+                      }}
+                      onChange={(e) => onScrubMove(parseFloat(e.target.value))}
+                      onPointerUp={(e) =>
+                        commitScrubOnce(parseFloat((e.target as HTMLInputElement).value))
+                      }
+                      onPointerCancel={(e) =>
+                        commitScrubOnce(parseFloat((e.target as HTMLInputElement).value))
+                      }
+                      onKeyUp={(e) =>
+                        commitScrubOnce(parseFloat((e.target as HTMLInputElement).value))
+                      }
+                      className={theme.scrubber}
+                    />
+                    <div
+                      className={`flex justify-between text-[10px] font-mono font-bold -mt-1.5 px-0.5 ${theme.textMuted}`}
+                    >
+                      <span>{formatSeconds(displayedTime)}</span>
+                      <span>{safeDuration > 0 ? `-${formatSeconds(remainingTime)}` : 'AUTO'}</span>
+                    </div>
+                  </div>
 
-            {/* TẦNG 3 (CỐ ĐỊNH ĐÁY): THANH TUA & CỤM NÚT ĐIỀU KHIỂN ĐỐI XỨNG */}
-            <div className="shrink-0 space-y-1 short:space-y-0.5">
-              <div>
-                <input
-                  type="range"
-                  aria-label="Thanh tiến trình Cockpit"
-                  min={0}
-                  max={safeDuration || 100}
-                  step={1}
-                  value={Math.min(displayedTime, safeDuration || 100)}
-                  style={{ '--progress': `${progressPercent}%` } as React.CSSProperties}
-                  onPointerDown={() => {
-                    isScrubbingRef.current = true;
-                    onScrubStart();
-                  }}
-                  onChange={(e) => onScrubMove(parseFloat(e.target.value))}
-                  onPointerUp={(e) => commitScrubOnce(parseFloat((e.target as HTMLInputElement).value))}
-                  onPointerCancel={(e) =>
-                    commitScrubOnce(parseFloat((e.target as HTMLInputElement).value))
-                  }
-                  onKeyUp={(e) => commitScrubOnce(parseFloat((e.target as HTMLInputElement).value))}
-                  className={theme.scrubber}
-                />
-                <div
-                  className={`flex justify-between text-[10px] font-mono font-bold -mt-1.5 px-0.5 ${theme.textMuted}`}
-                >
-                  <span>{formatSeconds(displayedTime)}</span>
-                  <span>{safeDuration > 0 ? `-${formatSeconds(remainingTime)}` : 'AUTO'}</span>
+                  <div className="flex items-center justify-around px-1">
+                    <button
+                      type="button"
+                      onClick={onToggleShuffle}
+                      aria-label="Phát ngẫu nhiên"
+                      className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
+                        isShuffle
+                          ? isLightTheme
+                            ? 'bg-rose-100 border border-rose-300 text-rose-700'
+                            : 'bg-rose-500/30 border border-rose-400/50 text-rose-200'
+                          : isLightTheme
+                          ? 'text-slate-500 hover:text-slate-950 hover:bg-slate-200/70'
+                          : 'text-white/55 hover:text-white'
+                      }`}
+                    >
+                      <Shuffle className="w-4 h-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onPrev}
+                      disabled={!hasPrev}
+                      aria-label="Bài trước"
+                      className={`w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
+                    >
+                      <SkipBack className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onTogglePlay}
+                      aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
+                      className={`w-12 h-12 sm:w-14 sm:h-14 short:w-10 short:h-10 vshort:w-9 vshort:h-9 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
+                    >
+                      {isBuffering ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : isPlaying ? (
+                        <Pause
+                          className={`w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 ${theme.primaryCtaIcon}`}
+                        />
+                      ) : (
+                        <Play
+                          className={`w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 ml-0.5 ${theme.primaryCtaIcon}`}
+                        />
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onNext}
+                      disabled={!hasNext}
+                      aria-label="Bài tiếp theo"
+                      className={`w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
+                    >
+                      <SkipForward className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={onToggleRepeat}
+                      aria-label="Chế độ lặp"
+                      className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
+                        repeatMode !== 'off'
+                          ? isLightTheme
+                            ? 'bg-slate-200 border border-slate-300 text-slate-950'
+                            : 'bg-white/20 border border-white/25 text-white'
+                          : isLightTheme
+                          ? 'text-slate-500 hover:text-slate-950 hover:bg-slate-200/70'
+                          : 'text-white/55 hover:text-white'
+                      }`}
+                    >
+                      {repeatMode === 'one' ? (
+                        <Repeat1
+                          className={`w-4 h-4 ${isLightTheme ? 'text-rose-600' : 'text-rose-300'}`}
+                        />
+                      ) : (
+                        <Repeat className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
                 </div>
-              </div>
-
-              <div className="flex items-center justify-around px-1">
-                <button
-                  type="button"
-                  onClick={onToggleShuffle}
-                  aria-label="Phát ngẫu nhiên"
-                  className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
-                    isShuffle
-                      ? isLightTheme
-                        ? 'bg-rose-100 border border-rose-300 text-rose-700'
-                        : 'bg-rose-500/30 border border-rose-400/50 text-rose-200'
-                      : isLightTheme
-                      ? 'text-slate-500 hover:text-slate-950 hover:bg-slate-200/70'
-                      : 'text-white/55 hover:text-white'
-                  }`}
-                >
-                  <Shuffle className="w-4 h-4" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onPrev}
-                  disabled={!hasPrev}
-                  aria-label="Bài trước"
-                  className={`w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
-                >
-                  <SkipBack className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onTogglePlay}
-                  aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-                  className={`w-12 h-12 sm:w-14 sm:h-14 short:w-10 short:h-10 vshort:w-9 vshort:h-9 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
-                >
-                  {isBuffering ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : isPlaying ? (
-                    <Pause
-                      className={`w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 ${theme.primaryCtaIcon}`}
-                    />
-                  ) : (
-                    <Play
-                      className={`w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 ml-0.5 ${theme.primaryCtaIcon}`}
-                    />
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onNext}
-                  disabled={!hasNext}
-                  aria-label="Bài tiếp theo"
-                  className={`w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
-                >
-                  <SkipForward className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onToggleRepeat}
-                  aria-label="Chế độ lặp"
-                  className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
-                    repeatMode !== 'off'
-                      ? isLightTheme
-                        ? 'bg-slate-200 border border-slate-300 text-slate-950'
-                        : 'bg-white/20 border border-white/25 text-white'
-                      : isLightTheme
-                      ? 'text-slate-500 hover:text-slate-950 hover:bg-slate-200/70'
-                      : 'text-white/55 hover:text-white'
-                  }`}
-                >
-                  {repeatMode === 'one' ? (
-                    <Repeat1
-                      className={`w-4 h-4 ${isLightTheme ? 'text-rose-600' : 'text-rose-300'}`}
-                    />
-                  ) : (
-                    <Repeat className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-            </div>
+              )}
             </div>
           </div>
         )}

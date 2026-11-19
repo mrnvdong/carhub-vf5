@@ -1,14 +1,17 @@
 // Cloudflare Pages Function: /api/tv
-// Live TV & Radio M3U8 engine for VinFast VF5 CarPlay:
-// - action=playlist: Fetches & parses M3U/M3U8 (default https://tinyurl.com/vmt47 -> raw GitHub vmttv), 5m Edge Cache
-// - action=resolve: Follows 302/307 redirects with channel User-Agent/Referer, returns direct CORS CDN URL or proxy URL
-// - action=proxy: SSRF-safe CORS proxy for non-CORS / HTTP / custom-header HLS manifests & segments
+// Live TV & Radio M3U8/DASH engine for VinFast VF5 CarPlay:
+// - GET  action=playlist : Fetches & parses ALL channels from M3U/M3U8 (default https://tinyurl.com/vmt47), 5m Edge Cache
+// - GET  action=resolve  : Follows 302/307 redirects with channel User-Agent/Referer -> direct CORS URL or proxy URL
+// - GET  action=proxy    : SSRF-safe CORS proxy for non-CORS / HTTP / custom-header HLS/DASH manifests & segments
+// - POST action=ping     : Fast parallel live-status ping for up to 16 channels at once (live/dead + latencyMs)
 
 const DEFAULT_PLAYLIST_URL = 'https://tinyurl.com/vmt47';
 
 const JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
   'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
 };
 
 const DEFAULT_UA =
@@ -22,6 +25,8 @@ const PRIORITY_GROUPS: string[] = [
   'Thể Thao',
   'VTVcab',
   'SCTV',
+  'Sự Kiện TV360',
+  'Sự Kiện VTVPrime',
   'Giải Trí',
   'LIVE EVENTS 🔴',
   'Địa phương',
@@ -46,7 +51,6 @@ function isSafeExternalUrl(raw: string): boolean {
     ) {
       return false;
     }
-    // Block private IPv4 ranges (10.x, 127.x, 169.254.x, 172.16-31.x, 192.168.x)
     const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
     if (ipv4) {
       const a = Number(ipv4[1]);
@@ -80,6 +84,8 @@ interface ParsedChannel {
   isRadio: boolean;
   isVod: boolean;
   isDrm: boolean;
+  manifestType: 'hls' | 'mpd';
+  clearKey?: string;
 }
 
 function parseM3uPlaylist(text: string): {
@@ -100,6 +106,8 @@ function parseM3uPlaylist(text: string): {
     ua?: string;
     referer?: string;
     isDrm: boolean;
+    isMpd: boolean;
+    clearKey?: string;
   } | null = null;
 
   let idx = 0;
@@ -126,6 +134,7 @@ function parseM3uPlaylist(text: string): {
         logo: (logoMatch?.[1] || '').trim(),
         tvgId: (idMatch?.[1] || '').trim(),
         isDrm: false,
+        isMpd: false,
       };
       continue;
     }
@@ -141,7 +150,16 @@ function parseM3uPlaylist(text: string): {
     }
 
     if (line.startsWith('#KODIPROP:') && current) {
-      if (/license_type|clearkey|widevine|manifest_type=mpd/i.test(line)) {
+      const prop = line.slice('#KODIPROP:'.length).trim();
+      if (/manifest_type\s*=\s*mpd/i.test(prop)) {
+        current.isMpd = true;
+      }
+      if (/license_type\s*=\s*(clearkey|org\.w3\.clearkey|widevine)/i.test(prop)) {
+        current.isDrm = true;
+      }
+      const keyMatch = prop.match(/license_key\s*=\s*(.+)$/i);
+      if (keyMatch?.[1]) {
+        current.clearKey = keyMatch[1].trim();
         current.isDrm = true;
       }
       continue;
@@ -151,13 +169,13 @@ function parseM3uPlaylist(text: string): {
 
     if (current) {
       const streamUrl = line.split('|')[0].trim();
-      const urlIsMpd = /\.mpd(\?|$)/i.test(streamUrl) || /\/mpd\.php/i.test(streamUrl);
-      const isDrm = current.isDrm || urlIsMpd;
-
-      if (isDrm) {
-        drmCount++;
-      } else if (isSafeExternalUrl(streamUrl)) {
+      if (isSafeExternalUrl(streamUrl)) {
         idx++;
+        const urlIsMpd = /\.mpd(\?|$)/i.test(streamUrl) || /\/mpd\.php/i.test(streamUrl);
+        const isMpd = current.isMpd || urlIsMpd;
+        const isDrm = current.isDrm || isMpd;
+        if (isDrm) drmCount++;
+
         const groupLower = current.group.toLowerCase();
         const nameLower = current.name.toLowerCase();
         const isRadio =
@@ -178,7 +196,9 @@ function parseM3uPlaylist(text: string): {
           referer: current.referer,
           isRadio,
           isVod,
-          isDrm: false,
+          isDrm,
+          manifestType: isMpd ? 'mpd' : 'hls',
+          clearKey: current.clearKey,
         });
       }
       current = null;
@@ -217,7 +237,6 @@ function rewriteHlsPlaylist(
       const trimmed = line.trim();
       if (!trimmed) return line;
 
-      // Rewrite URI="..." inside #EXT-X-KEY, #EXT-X-MAP, #EXT-X-MEDIA, #EXT-X-I-FRAME-STREAM-INF
       if (trimmed.startsWith('#')) {
         if (trimmed.includes('URI="')) {
           return line.replace(/URI="([^"]+)"/g, (_match, rawUri: string) => {
@@ -236,13 +255,168 @@ function rewriteHlsPlaylist(
     .join('\n');
 }
 
+async function pingSingleChannel(ch: {
+  id: string;
+  url: string;
+  ua?: string;
+  referer?: string;
+}): Promise<{
+  id: string;
+  status: 'live' | 'dead';
+  latencyMs: number;
+  reason?: string;
+}> {
+  const t0 = Date.now();
+  if (!ch?.url || !isSafeExternalUrl(ch.url)) {
+    return { id: ch?.id || '', status: 'dead', latencyMs: 0, reason: 'URL không hợp lệ' };
+  }
+
+  const headers: Record<string, string> = {
+    'User-Agent': ch.ua || DEFAULT_UA,
+    Accept: '*/*',
+  };
+  if (ch.referer && isSafeExternalUrl(ch.referer)) {
+    headers['Referer'] = ch.referer;
+  }
+
+  try {
+    const res = await fetch(ch.url, {
+      headers,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(5000),
+    });
+    const latencyMs = Date.now() - t0;
+    const finalUrl = res.url || ch.url;
+
+    if (/\/error\.mp4(\?|$)/i.test(finalUrl)) {
+      try {
+        await res.body?.cancel();
+      } catch {}
+      return { id: ch.id, status: 'dead', latencyMs, reason: 'Nguồn bảo trì' };
+    }
+
+    if (!res.ok) {
+      try {
+        await res.body?.cancel();
+      } catch {}
+      return { id: ch.id, status: 'dead', latencyMs, reason: `HTTP ${res.status}` };
+    }
+
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    const isHlsCt = ct.includes('mpegurl');
+    const isMpdCt = ct.includes('dash+xml') || ct.includes('xml');
+    const isAudioCt = !isHlsCt && (ct.includes('audio/') || ct.includes('aacp'));
+
+    if (isAudioCt) {
+      try {
+        await res.body?.cancel();
+      } catch {}
+      return { id: ch.id, status: 'live', latencyMs };
+    }
+
+    // Đọc tối đa ~2KB đầu để kiểm tra thực sự có #EXTM3U hoặc <MPD (tránh tải file dài!)
+    let headText = '';
+    try {
+      const reader = res.body?.getReader();
+      if (reader) {
+        const decoder = new TextDecoder();
+        let bytesRead = 0;
+        while (bytesRead < 2048) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          headText += decoder.decode(value, { stream: true });
+          bytesRead += value.byteLength;
+        }
+        try {
+          await reader.cancel();
+        } catch {}
+      }
+    } catch {}
+
+    const trimmedHead = headText.trimStart();
+    const isValidStream =
+      trimmedHead.startsWith('#EXTM3U') ||
+      trimmedHead.includes('<MPD') ||
+      (isHlsCt && trimmedHead.length > 10) ||
+      (isMpdCt && trimmedHead.includes('MPD'));
+
+    if (isValidStream) {
+      return { id: ch.id, status: 'live', latencyMs };
+    }
+
+    return { id: ch.id, status: 'dead', latencyMs, reason: 'Không có tín hiệu' };
+  } catch (err: any) {
+    const latencyMs = Date.now() - t0;
+    return {
+      id: ch.id,
+      status: 'dead',
+      latencyMs,
+      reason: err?.name === 'TimeoutError' ? 'Timeout' : 'Mất kết nối',
+    };
+  }
+}
+
+export async function onRequestOptions() {
+  return new Response(null, { status: 204, headers: JSON_HEADERS });
+}
+
+export async function onRequestPost(context: any) {
+  const { request } = context;
+  const reqUrl = new URL(request.url);
+  const action = (reqUrl.searchParams.get('action') || 'ping').trim();
+
+  if (action !== 'ping') {
+    return new Response(JSON.stringify({ success: false, error: 'Unsupported POST action' }), {
+      status: 400,
+      headers: JSON_HEADERS,
+    });
+  }
+
+  try {
+    const body: any = await request.json();
+    const rawList: any[] = Array.isArray(body?.channels) ? body.channels : [];
+    const batch = rawList.slice(0, 14).map((c) => ({
+      id: String(c?.id || ''),
+      url: String(c?.url || ''),
+      ua: typeof c?.ua === 'string' ? c.ua : undefined,
+      referer: typeof c?.referer === 'string' ? c.referer : undefined,
+    }));
+
+    const settled = await Promise.all(batch.map((ch) => pingSingleChannel(ch)));
+    const checkedAt = Date.now();
+    const results: Record<
+      string,
+      { status: 'live' | 'dead'; latencyMs: number; checkedAt: number; reason?: string }
+    > = {};
+
+    for (const r of settled) {
+      if (!r.id) continue;
+      results[r.id] = {
+        status: r.status,
+        latencyMs: r.latencyMs,
+        checkedAt,
+        reason: r.reason,
+      };
+    }
+
+    return new Response(JSON.stringify({ success: true, results }), {
+      headers: { ...JSON_HEADERS, 'Cache-Control': 'no-store' },
+    });
+  } catch {
+    return new Response(JSON.stringify({ success: false, error: 'Invalid ping payload' }), {
+      status: 400,
+      headers: JSON_HEADERS,
+    });
+  }
+}
+
 export async function onRequestGet(context: any) {
   const { request } = context;
   const reqUrl = new URL(request.url);
   const action = (reqUrl.searchParams.get('action') || 'playlist').trim();
 
   // =========================================================================
-  // 1. PLAYLIST: Tải & phân tích danh sách kênh M3U/M3U8 (mặc định tinyurl.com/vmt47)
+  // 1. PLAYLIST: Tải & giữ NGUYÊN 100% TẤT CẢ KÊNH từ M3U/M3U8 (không ẩn kênh nào!)
   // =========================================================================
   if (action === 'playlist') {
     const sourceParam = (reqUrl.searchParams.get('url') || DEFAULT_PLAYLIST_URL).trim();
@@ -255,7 +429,7 @@ export async function onRequestGet(context: any) {
 
     const cache = (caches as any).default;
     const cacheKey = new Request(
-      `https://carhub-tv-playlist.internal/v1?u=${encodeURIComponent(sourceParam)}`
+      `https://carhub-tv-playlist.internal/v2?u=${encodeURIComponent(sourceParam)}`
     );
     if (cache) {
       try {
@@ -297,7 +471,6 @@ export async function onRequestGet(context: any) {
 
       const { epgUrl, channels, drmCount } = parseM3uPlaylist(text);
 
-      // Nhóm kênh & sắp xếp theo thứ tự ưu tiên trên ô tô Việt Nam
       const groupCountMap = new Map<string, number>();
       for (const ch of channels) {
         groupCountMap.set(ch.group, (groupCountMap.get(ch.group) || 0) + 1);
@@ -319,9 +492,9 @@ export async function onRequestGet(context: any) {
         sourceUrl: sourceParam,
         resolvedSourceUrl: upstream.url || sourceParam,
         epgUrl,
-        totalRaw: channels.length + drmCount,
+        totalRaw: channels.length,
         totalPlayable: channels.length,
-        totalDrmFiltered: drmCount,
+        totalDrmCount: drmCount,
         groups,
         channels,
       };
@@ -348,8 +521,7 @@ export async function onRequestGet(context: any) {
   }
 
   // =========================================================================
-  // 2. RESOLVE: Theo dõi 302/307 bằng đúng User-Agent/Referer của kênh
-  //    -> Trả thẳng link CDN nếu HTTPS + CORS:*, hoặc trả link proxy nếu thiếu CORS / HTTP
+  // 2. RESOLVE: Theo dõi 302/307 bằng đúng User-Agent/Referer của kênh (hỗ trợ HLS, DASH MPD & Audio)
   // =========================================================================
   if (action === 'resolve') {
     const targetUrl = (reqUrl.searchParams.get('url') || '').trim();
@@ -375,11 +547,14 @@ export async function onRequestGet(context: any) {
       const upstream = await fetch(targetUrl, {
         headers,
         redirect: 'follow',
-        signal: AbortSignal.timeout(7500),
+        signal: AbortSignal.timeout(12000),
       });
 
       const finalUrl = upstream.url || targetUrl;
       if (/\/error\.mp4(\?|$)/i.test(finalUrl)) {
+        try {
+          await upstream.body?.cancel();
+        } catch {}
         return new Response(
           JSON.stringify({
             success: false,
@@ -390,6 +565,9 @@ export async function onRequestGet(context: any) {
       }
 
       if (!upstream.ok) {
+        try {
+          await upstream.body?.cancel();
+        } catch {}
         return new Response(
           JSON.stringify({
             success: false,
@@ -408,7 +586,6 @@ export async function onRequestGet(context: any) {
         !isHlsContentType &&
         (contentType.includes('audio/') || contentType.includes('aacp'));
 
-      // Nếu là audio trực tiếp (zeno.fm / icecast...) không cần đọc toàn bộ stream!
       if (isDirectAudio) {
         try {
           await upstream.body?.cancel();
@@ -427,23 +604,45 @@ export async function onRequestGet(context: any) {
         );
       }
 
-      const sampleText = await upstream.text();
+      // Đọc tối đa 2KB đầu để nhận diện #EXTM3U hoặc <MPD cực nhanh (không chờ đọc hết file dài!)
+      let sampleText = '';
+      try {
+        const reader = upstream.body?.getReader();
+        if (reader) {
+          const decoder = new TextDecoder();
+          let bytesRead = 0;
+          while (bytesRead < 2048) {
+            const { done, value } = await reader.read();
+            if (done || !value) break;
+            sampleText += decoder.decode(value, { stream: true });
+            bytesRead += value.byteLength;
+          }
+          try {
+            await reader.cancel();
+          } catch {}
+        }
+      } catch {}
+
+      const trimmedSample = sampleText.trimStart();
+      const isMpd =
+        trimmedSample.includes('<MPD') ||
+        contentType.includes('dash+xml') ||
+        /\.mpd(\?|$)/i.test(finalUrl);
       const isHls =
-        sampleText.trimStart().startsWith('#EXTM3U') ||
-        contentType.includes('mpegurl') ||
+        trimmedSample.startsWith('#EXTM3U') ||
+        isHlsContentType ||
         /\.m3u8(\?|$)/i.test(finalUrl);
 
-      if (!isHls) {
+      if (!isHls && !isMpd) {
         return new Response(
           JSON.stringify({
             success: false,
-            error: 'Nguồn kênh không trả về luồng phát HLS hợp lệ (có thể đang ngoại tuyến).',
+            error: 'Nguồn kênh không trả về luồng phát HLS/DASH hợp lệ (có thể đang ngoại tuyến).',
           }),
           { status: 502, headers: JSON_HEADERS }
         );
       }
 
-      // Ưu tiên phát thẳng từ CDN gốc nếu HTTPS + CORS:* + không bắt buộc Referer
       const canPlayDirect = isHttps && hasOpenCors && !referer;
       const proxyUrl = buildProxyUrl(finalUrl, ua, referer);
 
@@ -451,7 +650,7 @@ export async function onRequestGet(context: any) {
         JSON.stringify({
           success: true,
           mode: canPlayDirect ? 'direct' : 'proxy',
-          streamType: 'hls',
+          streamType: isMpd ? 'mpd' : 'hls',
           playUrl: canPlayDirect ? finalUrl : proxyUrl,
           directUrl: isHttps ? finalUrl : null,
           proxyUrl,
@@ -473,7 +672,7 @@ export async function onRequestGet(context: any) {
   }
 
   // =========================================================================
-  // 3. PROXY: Chuyển tiếp HLS manifest (tự viết lại URI con) & segment với CORS:*
+  // 3. PROXY: Chuyển tiếp HLS/DASH manifest & segment với CORS:*
   // =========================================================================
   if (action === 'proxy') {
     const targetUrl = (reqUrl.searchParams.get('url') || '').trim();
@@ -512,6 +711,8 @@ export async function onRequestGet(context: any) {
         contentType.includes('mpegurl') ||
         contentType.includes('application/x-mpegurl') ||
         /\.m3u8(\?|$)/i.test(finalUrl);
+      const looksLikeMpd =
+        contentType.includes('dash+xml') || /\.mpd(\?|$)/i.test(finalUrl);
 
       if (looksLikeM3u8) {
         const text = await upstream.text();
@@ -530,6 +731,25 @@ export async function onRequestGet(context: any) {
           status: 200,
           headers: {
             'Content-Type': contentType || 'text/plain; charset=utf-8',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store',
+          },
+        });
+      }
+
+      if (looksLikeMpd) {
+        let xml = await upstream.text();
+        if (xml.includes('<MPD') && !/<BaseURL\b/i.test(xml)) {
+          try {
+            const baseDir = new URL('./', finalUrl).toString();
+            const safeBase = baseDir.replace(/&/g, '&amp;');
+            xml = xml.replace(/(<MPD\b[^>]*>)/i, `$1<BaseURL>${safeBase}</BaseURL>`);
+          } catch {}
+        }
+        return new Response(xml, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/dash+xml; charset=utf-8',
             'Access-Control-Allow-Origin': '*',
             'Cache-Control': 'no-store',
           },

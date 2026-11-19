@@ -1,4 +1,4 @@
-import { TvChannel, TvPlaylistData, TvResolvedStream } from '../types';
+import { TvChannel, TvPingResult, TvPlaylistData, TvResolvedStream } from '../types';
 
 export const DEFAULT_TV_PLAYLIST_URL = 'https://tinyurl.com/vmt47';
 
@@ -29,7 +29,7 @@ export async function fetchTvPlaylist(
         epgUrl: json.epgUrl || null,
         totalRaw: Number(json.totalRaw || json.channels.length),
         totalPlayable: Number(json.totalPlayable || json.channels.length),
-        totalDrmFiltered: Number(json.totalDrmFiltered || 0),
+        totalDrmCount: Number(json.totalDrmCount || 0),
         groups: Array.isArray(json.groups) ? json.groups : [],
         channels: json.channels as TvChannel[],
       },
@@ -72,7 +72,8 @@ export async function resolveTvStream(
     return {
       stream: {
         mode: json.mode === 'proxy' ? 'proxy' : 'direct',
-        streamType: json.streamType === 'audio' ? 'audio' : 'hls',
+        streamType:
+          json.streamType === 'audio' ? 'audio' : json.streamType === 'mpd' ? 'mpd' : 'hls',
         playUrl: json.playUrl,
         directUrl: json.directUrl || null,
         proxyUrl: json.proxyUrl || json.playUrl,
@@ -85,4 +86,34 @@ export async function resolveTvStream(
       error: err?.message || 'Mất kết nối tới nguồn phát kênh.',
     };
   }
+}
+
+export async function pingTvChannelsBatch(
+  channels: TvChannel[],
+  signal?: AbortSignal
+): Promise<Record<string, TvPingResult>> {
+  if (channels.length === 0) return {};
+  try {
+    const res = await fetch('/api/tv?action=ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channels: channels.slice(0, 14).map((c) => ({
+          id: c.id,
+          url: c.url,
+          ua: c.ua,
+          referer: c.referer,
+        })),
+      }),
+      signal,
+    });
+    if (!res.ok) return {};
+    const json = await res.json();
+    if (json?.success && json.results && typeof json.results === 'object') {
+      return json.results as Record<string, TvPingResult>;
+    }
+  } catch {
+    // Aborted or offline
+  }
+  return {};
 }

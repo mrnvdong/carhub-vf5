@@ -98,6 +98,9 @@ export interface TvChannel {
   referer?: string;
   isRadio: boolean;
   isVod: boolean;
+  isDrm?: boolean;
+  manifestType?: 'hls' | 'mpd';
+  clearKey?: string;
 }
 
 export interface TvGroupInfo {
@@ -111,15 +114,22 @@ export interface TvPlaylistData {
   epgUrl: string | null;
   totalRaw: number;
   totalPlayable: number;
-  totalDrmFiltered: number;
+  totalDrmCount: number;
   groups: TvGroupInfo[];
   channels: TvChannel[];
 }
 
 export interface TvResolvedStream {
   mode: 'direct' | 'proxy';
-  streamType: 'hls' | 'audio';
+  streamType: 'hls' | 'mpd' | 'audio';
   playUrl: string;
   directUrl: string | null;
   proxyUrl: string;
+}
+
+export interface TvPingResult {
+  status: 'checking' | 'live' | 'dead';
+  latencyMs?: number;
+  checkedAt?: number;
+  reason?: string;
 }

@@ -70,6 +70,7 @@ import { fetchSyncedLyrics, LyricsResult } from '../services/lyrics';
 import { fetchSponsorSegments, getSponsorCategoryLabel } from '../services/sponsorblock';
 import { useCarHardwareControls } from '../hooks/useCarHardwareControls';
 import { useCockpitTelemetry } from '../hooks/useCockpitTelemetry';
+import { useTvLive } from '../hooks/useTvLive';
 import { CockpitView, VideoSlotRect } from './CockpitView';
 import { getCarTheme } from '../utils/theme';
 
@@ -263,6 +264,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [activeNavSummary, setActiveNavSummary] = useState<ActiveNavSummary | null>(null);
   const [hasCockpitVideoSlot, setHasCockpitVideoSlot] = useState<boolean>(false);
   const [isDraggingCockpitSplit, setIsDraggingCockpitSplit] = useState<boolean>(false);
+  const [cockpitTvActive, setCockpitTvActive] = useState<boolean>(false);
 
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [dragTime, setDragTime] = useState<number | null>(null);
@@ -286,11 +288,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const isTvView = railSection === 'tv';
   const showVideoInViewport = effectiveVideoMode && isNowPlayingView;
   const showVideoInCockpit =
-    effectiveVideoMode && isCockpitView && !isFullscreen && hasCockpitVideoSlot;
+    effectiveVideoMode && isCockpitView && !cockpitTvActive && !isFullscreen && hasCockpitVideoSlot;
 
   const handleToggleCockpitViewMode = useCallback(() => {
     onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
   }, [isVideoMode, onViewModeChange]);
+
+  const handleOpenFullTv = useCallback(() => {
+    onChangeRailSection('tv');
+  }, [onChangeRailSection]);
 
   // Đồng bộ trực tiếp tọa độ <iframe> duy nhất vào khung Video 16:9 trong Cockpit (0 re-render khi kéo chia tỉ lệ!)
   const handleCockpitVideoSlotRectChange = useCallback((rect: VideoSlotRect | null) => {
@@ -367,6 +373,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setHardwareNotice((prev) => (prev === label ? null : prev));
     }, 2200);
   }, []);
+
+  // Kho TV Live & Ping dùng chung cho cả Cockpit TV lẫn trang TV Live đầy đủ (chỉ nạp khi bật TV!)
+  const tvController = useTvLive(isTvView || cockpitTvActive, showToast);
 
   // Đồng hồ xe
   useEffect(() => {
@@ -2325,6 +2334,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             mapTheme={mapTheme}
             onChangeMapTheme={onChangeMapTheme}
             isLightTheme={isLightTheme}
+            tv={tvController}
+            onPauseMusic={pauseAllMusicForTv}
+            onOpenFullTv={handleOpenFullTv}
+            onCockpitTvActiveChange={setCockpitTvActive}
           />
         )}
 
@@ -2343,6 +2356,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             }
           >
             <LazyTvLiveView
+              tv={tvController}
               onPauseMusic={pauseAllMusicForTv}
               onNotifyToast={showToast}
               isLightTheme={isLightTheme}

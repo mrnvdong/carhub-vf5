@@ -19,342 +19,157 @@ import {
   Settings2,
   ShieldAlert,
   Wifi,
-  AlertCircle,
+  Activity,
+  Square,
 } from 'lucide-react';
-import { TvChannel, TvPlaylistData, TvResolvedStream } from '../types';
-import { DEFAULT_TV_PLAYLIST_URL, fetchTvPlaylist, resolveTvStream } from '../services/tv';
+import { TvPingResult } from '../types';
+import { DEFAULT_TV_PLAYLIST_URL } from '../services/tv';
+import {
+  TvLiveController,
+  getChannelFavKey,
+  stripVietnameseTones,
+} from '../hooks/useTvLive';
+import { TvPlayerStage, TvPlayerStatus } from './TvPlayerStage';
 import { getCarTheme } from '../utils/theme';
 
 interface TvLiveViewProps {
+  tv: TvLiveController;
   onPauseMusic: () => void;
   onNotifyToast: (msg: string) => void;
   isLightTheme: boolean;
 }
 
-const POPULAR_CHANNEL_PATTERNS: RegExp[] = [
-  /^vtv\s*1\b/i,
-  /^vtv\s*3\b/i,
-  /^vtv\s*2\b/i,
-  /vov\s*giao\s*thông\s*hà\s*nội/i,
-  /vov\s*giao\s*thông\s*hồ\s*chí\s*minh/i,
-  /^vov\s*1\b/i,
-  /^vov\s*3\b/i,
-  /^voh\s*fm\s*99\.9/i,
-  /^htv\s*7\b/i,
-  /^htv\s*9\b/i,
-  /^vtv\s*5\b/i,
-  /^vtv\s*7\b/i,
-  /^vtv\s*8\b/i,
-  /^vtv\s*9\b/i,
-  /^360\s*c1/i,
-  /^360\s*bundesliga/i,
-  /^sctv\s*1\b/i,
-  /^htv\s*1\b/i,
-  /^tvb\s*việt\s*nam/i,
-];
+const PingBadge: React.FC<{
+  ping?: TvPingResult;
+  isLightTheme: boolean;
+  compact?: boolean;
+}> = ({ ping, isLightTheme, compact = false }) => {
+  if (!ping) {
+    return (
+      <span
+        title="Chưa kiểm tra tín hiệu — bấm Ping để quét"
+        className={`inline-flex items-center justify-center rounded-full border shrink-0 ${
+          compact ? 'px-1.5 py-0.5 text-[9px]' : 'px-1.5 py-0.5 text-[9.5px]'
+        } font-bold ${
+          isLightTheme
+            ? 'bg-slate-100 border-slate-300 text-slate-400'
+            : 'bg-white/5 border-white/10 text-white/35'
+        }`}
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-current" />
+      </span>
+    );
+  }
 
-function stripVietnameseTones(str: string): string {
-  return str
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'D')
-    .toLowerCase();
-}
+  if (ping.status === 'checking') {
+    return (
+      <span
+        className={`inline-flex items-center gap-1 rounded-full border shrink-0 ${
+          compact ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-0.5 text-[9.5px]'
+        } font-extrabold ${
+          isLightTheme
+            ? 'bg-blue-50 border-blue-200 text-blue-600'
+            : 'bg-sky-500/15 border-sky-400/35 text-sky-300'
+        }`}
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-current animate-ping" />
+        <span>...</span>
+      </span>
+    );
+  }
 
-function getChannelFavKey(ch: TvChannel): string {
-  return `${ch.group}::${ch.name}`.toLowerCase();
-}
+  if (ping.status === 'live') {
+    return (
+      <span
+        title={
+          ping.latencyMs
+            ? `Đang phát trực tiếp • Phản hồi ${ping.latencyMs}ms`
+            : 'Đang phát trực tiếp'
+        }
+        className={`inline-flex items-center gap-1 rounded-full border shrink-0 font-mono font-extrabold ${
+          compact ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-0.5 text-[9.5px]'
+        } ${
+          isLightTheme
+            ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+            : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300'
+        }`}
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+        <span>{ping.latencyMs ? `${ping.latencyMs}ms` : 'Live'}</span>
+      </span>
+    );
+  }
+
+  return (
+    <span
+      title={ping.reason ? `Offline: ${ping.reason}` : 'Kênh đang ngoại tuyến'}
+      className={`inline-flex items-center gap-1 rounded-full border shrink-0 font-extrabold ${
+        compact ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-0.5 text-[9.5px]'
+      } ${
+        isLightTheme
+          ? 'bg-rose-50 border-rose-300 text-rose-700'
+          : 'bg-rose-500/20 border-rose-400/45 text-rose-300'
+      }`}
+    >
+      <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+      <span>Off</span>
+    </span>
+  );
+};
 
 export const TvLiveView: React.FC<TvLiveViewProps> = ({
+  tv,
   onPauseMusic,
   onNotifyToast,
   isLightTheme,
 }) => {
   const theme = getCarTheme(isLightTheme);
-  const [playlistUrl, setPlaylistUrl] = useState<string>(() => {
-    try {
-      return localStorage.getItem('carhub_tv_playlist_url') || DEFAULT_TV_PLAYLIST_URL;
-    } catch {
-      return DEFAULT_TV_PLAYLIST_URL;
-    }
-  });
+  const {
+    playlistUrl,
+    setPlaylistUrl,
+    playlist,
+    isLoadingPlaylist,
+    playlistError,
+    reloadPlaylist,
+    activeChannel,
+    setActiveChannel,
+    favoriteKeys,
+    favoriteSet,
+    toggleFavoriteChannel,
+    popularChannels,
+    pingMap,
+    isPinging,
+    pingChannels,
+    cancelPing,
+    markChannelLiveState,
+  } = tv;
+
   const [customUrlInput, setCustomUrlInput] = useState<string>(playlistUrl);
   const [showSourceModal, setShowSourceModal] = useState<boolean>(false);
-
-  const [playlist, setPlaylist] = useState<TvPlaylistData | null>(null);
-  const [isLoadingPlaylist, setIsLoadingPlaylist] = useState<boolean>(true);
-  const [playlistError, setPlaylistError] = useState<string | null>(null);
-
   const [selectedGroup, setSelectedGroup] = useState<string>('__popular__');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [favoriteKeys, setFavoriteKeys] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('carhub_tv_favorites');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [onlyLiveFilter, setOnlyLiveFilter] = useState<boolean>(false);
 
-  const [activeChannel, setActiveChannel] = useState<TvChannel | null>(null);
-  const [resolvedStream, setResolvedStream] = useState<TvResolvedStream | null>(null);
-  const [streamMode, setStreamMode] = useState<'direct' | 'proxy'>('direct');
-  const [isResolving, setIsResolving] = useState<boolean>(false);
-  const [isBuffering, setIsBuffering] = useState<boolean>(false);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [playError, setPlayError] = useState<string | null>(null);
+  const [forceProxy, setForceProxy] = useState<boolean>(false);
+  const [reloadNonce, setReloadNonce] = useState<number>(0);
   const [isTvFullscreen, setIsTvFullscreen] = useState<boolean>(false);
   const [failedLogos, setFailedLogos] = useState<Record<string, boolean>>({});
+  const [playerStatus, setPlayerStatus] = useState<TvPlayerStatus>({
+    isPlaying: false,
+    isBuffering: false,
+    isResolving: false,
+    streamMode: 'direct',
+    canSwitchDirect: true,
+    error: null,
+  });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const hlsRef = useRef<any>(null);
-  const resolveAbortRef = useRef<AbortController | null>(null);
-  const didAutoFallbackRef = useRef<boolean>(false);
-  const onPauseMusicRef = useRef(onPauseMusic);
-  onPauseMusicRef.current = onPauseMusic;
 
+  // Reset ép Proxy mỗi khi đổi sang kênh mới
   useEffect(() => {
-    try {
-      localStorage.setItem('carhub_tv_favorites', JSON.stringify(favoriteKeys));
-    } catch {}
-  }, [favoriteKeys]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('carhub_tv_playlist_url', playlistUrl);
-    } catch {}
-  }, [playlistUrl]);
-
-  const destroyHls = useCallback(() => {
-    if (hlsRef.current) {
-      try {
-        hlsRef.current.destroy();
-      } catch {}
-      hlsRef.current = null;
-    }
-  }, []);
-
-  // Tải danh sách kênh từ /api/tv?action=playlist
-  const loadPlaylist = useCallback(async (urlToLoad: string) => {
-    setIsLoadingPlaylist(true);
-    setPlaylistError(null);
-    const controller = new AbortController();
-    const { data, error } = await fetchTvPlaylist(urlToLoad, controller.signal);
-    if (data) {
-      setPlaylist(data);
-      setPlaylistError(null);
-      // Tự chọn kênh đầu tiên dễ xem (VTV1 hoặc kênh đầu tiên) nếu chưa chọn kênh nào
-      setActiveChannel((prev) => {
-        if (prev && data.channels.some((c) => c.url === prev.url)) return prev;
-        try {
-          const lastName = localStorage.getItem('carhub_tv_last_channel');
-          if (lastName) {
-            const matched = data.channels.find((c) => c.name === lastName);
-            if (matched) return matched;
-          }
-        } catch {}
-        return (
-          data.channels.find((c) => /^vtv\s*1\b/i.test(c.name)) ||
-          data.channels[0] ||
-          null
-        );
-      });
-    } else if (error) {
-      setPlaylistError(error);
-    }
-    setIsLoadingPlaylist(false);
-  }, []);
-
-  useEffect(() => {
-    loadPlaylist(playlistUrl);
-  }, [playlistUrl, loadPlaylist]);
-
-  // Lưu kênh xem gần nhất
-  useEffect(() => {
-    if (!activeChannel) return;
-    try {
-      localStorage.setItem('carhub_tv_last_channel', activeChannel.name);
-    } catch {}
-  }, [activeChannel]);
-
-  // Gắn luồng HLS/Audio vào thẻ <video> (Native Apple HLS trên iOS CarPlay + hls.js trên Desktop Chrome/Firefox)
-  const attachMediaUrl = useCallback(
-    async (playUrl: string, streamInfo: TvResolvedStream, isFallbackAttempt: boolean) => {
-      const video = videoRef.current;
-      if (!video) return;
-
-      destroyHls();
-      setIsBuffering(true);
-      setPlayError(null);
-      video.muted = isMuted;
-
-      const tryProxyFallback = () => {
-        if (
-          !isFallbackAttempt &&
-          !didAutoFallbackRef.current &&
-          streamInfo.mode === 'direct' &&
-          streamInfo.proxyUrl &&
-          streamInfo.proxyUrl !== playUrl
-        ) {
-          didAutoFallbackRef.current = true;
-          setStreamMode('proxy');
-          attachMediaUrl(streamInfo.proxyUrl, { ...streamInfo, mode: 'proxy' }, true);
-          return true;
-        }
-        return false;
-      };
-
-      // Audio stream trực tiếp (Zeno.fm / Icecast)
-      if (streamInfo.streamType === 'audio') {
-        video.src = playUrl;
-        video.load();
-        video.play().catch(() => {});
-        return;
-      }
-
-      const canNativeHls = Boolean(
-        video.canPlayType('application/vnd.apple.mpegurl') ||
-          video.canPlayType('application/x-mpegurl')
-      );
-
-      if (canNativeHls) {
-        video.src = playUrl;
-        video.load();
-        video.play().catch(() => {});
-        return;
-      }
-
-      try {
-        const HlsModule = await import('hls.js');
-        const Hls = HlsModule.default;
-        if (!Hls || !Hls.isSupported()) {
-          video.src = playUrl;
-          video.load();
-          video.play().catch(() => {});
-          return;
-        }
-
-        const hls = new Hls({
-          enableWorker: true,
-          lowLatencyMode: false,
-          backBufferLength: 30,
-          maxBufferLength: 24,
-          manifestLoadingTimeOut: 10000,
-          levelLoadingTimeOut: 10000,
-          fragLoadingTimeOut: 12000,
-        });
-        hlsRef.current = hls;
-
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          setIsBuffering(false);
-          video.play().catch(() => {});
-        });
-
-        hls.on(Hls.Events.ERROR, (_ev: any, data: any) => {
-          if (!data?.fatal) return;
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            if (tryProxyFallback()) return;
-            setIsBuffering(false);
-            setIsPlaying(false);
-            setPlayError(
-              'Kênh này hiện không phát được qua trình duyệt (CDN chặn hoặc đang ngoại tuyến). Thử nút Proxy hoặc đổi kênh khác.'
-            );
-            destroyHls();
-          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            try {
-              hls.recoverMediaError();
-            } catch {
-              setIsBuffering(false);
-              setPlayError('Lỗi giải mã tín hiệu kênh này.');
-              destroyHls();
-            }
-          } else {
-            if (tryProxyFallback()) return;
-            setIsBuffering(false);
-            setIsPlaying(false);
-            setPlayError('Không phát được tín hiệu kênh này.');
-            destroyHls();
-          }
-        });
-
-        hls.loadSource(playUrl);
-        hls.attachMedia(video);
-      } catch {
-        video.src = playUrl;
-        video.load();
-        video.play().catch(() => {});
-      }
-    },
-    [destroyHls, isMuted]
-  );
-
-  // Phân giải và phát kênh đang chọn
-  const startChannel = useCallback(
-    async (channel: TvChannel, forceProxy = false) => {
-      resolveAbortRef.current?.abort();
-      const controller = new AbortController();
-      resolveAbortRef.current = controller;
-      didAutoFallbackRef.current = forceProxy;
-
-      onPauseMusicRef.current();
-      destroyHls();
-      if (videoRef.current) {
-        try {
-          videoRef.current.pause();
-          videoRef.current.removeAttribute('src');
-          videoRef.current.load();
-        } catch {}
-      }
-
-      setIsResolving(true);
-      setIsBuffering(true);
-      setIsPlaying(false);
-      setPlayError(null);
-      setResolvedStream(null);
-
-      const { stream, error } = await resolveTvStream(channel, controller.signal);
-      if (controller.signal.aborted) return;
-
-      setIsResolving(false);
-      if (!stream) {
-        setIsBuffering(false);
-        setPlayError(error || 'Không kết nối được tới nguồn kênh này.');
-        return;
-      }
-
-      setResolvedStream(stream);
-      const chosenMode: 'direct' | 'proxy' = forceProxy ? 'proxy' : stream.mode;
-      const chosenUrl = forceProxy ? stream.proxyUrl : stream.playUrl;
-      setStreamMode(chosenMode);
-      attachMediaUrl(chosenUrl, { ...stream, mode: chosenMode }, forceProxy);
-    },
-    [destroyHls, attachMediaUrl]
-  );
-
-  useEffect(() => {
-    if (!activeChannel) return;
-    startChannel(activeChannel, false);
-    return () => {
-      resolveAbortRef.current?.abort();
-    };
-  }, [activeChannel, startChannel]);
-
-  // Dọn dẹp luồng HLS khi rời khỏi màn hình TV (không tốn 4G ngầm!)
-  useEffect(() => {
-    return () => {
-      resolveAbortRef.current?.abort();
-      destroyHls();
-      if (videoRef.current) {
-        try {
-          videoRef.current.pause();
-          videoRef.current.removeAttribute('src');
-          videoRef.current.load();
-        } catch {}
-      }
-    };
-  }, [destroyHls]);
+    setForceProxy(false);
+  }, [activeChannel?.id]);
 
   // Hỗ trợ phím Escape thoát toàn màn hình TV
   useEffect(() => {
@@ -366,34 +181,8 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [isTvFullscreen]);
 
-  // Đồng bộ danh sách kênh phổ biến & danh sách lọc theo nhóm/từ khóa
-  const favoriteSet = useMemo(() => new Set(favoriteKeys), [favoriteKeys]);
-
-  const popularChannels = useMemo(() => {
-    if (!playlist) return [];
-    const picked: TvChannel[] = [];
-    const used = new Set<string>();
-    for (const pat of POPULAR_CHANNEL_PATTERNS) {
-      const found = playlist.channels.find((c) => !used.has(c.id) && pat.test(c.name));
-      if (found) {
-        used.add(found.id);
-        picked.push(found);
-      }
-    }
-    if (picked.length < 18) {
-      for (const ch of playlist.channels) {
-        if (used.has(ch.id)) continue;
-        if (ch.group === 'VTV' || ch.group === 'Radio' || ch.group === 'HTV') {
-          used.add(ch.id);
-          picked.push(ch);
-          if (picked.length >= 24) break;
-        }
-      }
-    }
-    return picked;
-  }, [playlist]);
-
-  const filteredChannels = useMemo(() => {
+  // Danh sách kênh gốc của nhóm / tìm kiếm (100% không ẩn kênh nào!)
+  const baseChannels = useMemo(() => {
     if (!playlist) return [];
     const q = stripVietnameseTones(searchQuery.trim());
     if (q) {
@@ -415,40 +204,65 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
     return playlist.channels.filter((c) => c.group === selectedGroup);
   }, [playlist, searchQuery, selectedGroup, favoriteSet, popularChannels]);
 
+  // Bộ đếm Live / Off cho danh sách hiện tại
+  const pingSummary = useMemo(() => {
+    let live = 0;
+    let dead = 0;
+    let checking = 0;
+    for (const ch of baseChannels) {
+      const p = pingMap[ch.id];
+      if (!p) continue;
+      if (p.status === 'live') live++;
+      else if (p.status === 'dead') dead++;
+      else if (p.status === 'checking') checking++;
+    }
+    return { live, dead, checking };
+  }, [baseChannels, pingMap]);
+
+  // Chỉ lọc theo "Chỉ Live" khi người dùng chủ động bật chip lọc (mặc định TẮT để hiện 100% kênh!)
+  const displayedChannels = useMemo(() => {
+    if (!onlyLiveFilter) return baseChannels;
+    return baseChannels.filter((ch) => pingMap[ch.id]?.status === 'live');
+  }, [baseChannels, onlyLiveFilter, pingMap]);
+
+  // Tự động Ping nhẹ nhàng nhóm kênh đang mở (có cache 5 phút, tránh lặp thừa)
+  useEffect(() => {
+    if (!playlist || baseChannels.length === 0) return;
+    const isSearching = searchQuery.trim().length > 0;
+    const delayMs = isSearching ? 450 : 120;
+    const timer = window.setTimeout(() => {
+      const limit = selectedGroup === '__all__' && !isSearching ? 30 : 40;
+      pingChannels(baseChannels.slice(0, limit), false);
+    }, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [playlist, selectedGroup, searchQuery, baseChannels, pingChannels]);
+
   const activeChannelIndex = useMemo(() => {
     if (!activeChannel) return -1;
-    return filteredChannels.findIndex((c) => c.id === activeChannel.id);
-  }, [filteredChannels, activeChannel]);
+    return displayedChannels.findIndex((c) => c.id === activeChannel.id);
+  }, [displayedChannels, activeChannel]);
 
   const handleZapChannel = useCallback(
     (delta: number) => {
-      const list = filteredChannels.length > 0 ? filteredChannels : playlist?.channels || [];
+      const list =
+        displayedChannels.length > 0
+          ? displayedChannels
+          : baseChannels.length > 0
+          ? baseChannels
+          : playlist?.channels || [];
       if (list.length === 0) return;
       const curIdx = activeChannel ? list.findIndex((c) => c.id === activeChannel.id) : -1;
-      const nextIdx =
-        curIdx < 0 ? 0 : (curIdx + delta + list.length) % list.length;
+      const nextIdx = curIdx < 0 ? 0 : (curIdx + delta + list.length) % list.length;
       setActiveChannel(list[nextIdx]);
     },
-    [filteredChannels, playlist, activeChannel]
-  );
-
-  const toggleFavoriteChannel = useCallback(
-    (ch: TvChannel) => {
-      const key = getChannelFavKey(ch);
-      setFavoriteKeys((prev) => {
-        const exists = prev.includes(key);
-        onNotifyToast(exists ? `Đã bỏ yêu thích ${ch.name}` : `⭐ Đã lưu kênh ${ch.name}`);
-        return exists ? prev.filter((k) => k !== key) : [key, ...prev];
-      });
-    },
-    [onNotifyToast]
+    [displayedChannels, baseChannels, playlist, activeChannel, setActiveChannel]
   );
 
   const handleTogglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) {
-      onPauseMusicRef.current();
+      onPauseMusic();
       v.play().catch(() => {});
     } else {
       v.pause();
@@ -456,26 +270,30 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
   };
 
   const handleToggleMute = () => {
-    const v = videoRef.current;
-    const next = !isMuted;
-    setIsMuted(next);
-    if (v) v.muted = next;
+    setIsMuted((prev) => !prev);
   };
 
   const handleSwitchStreamMode = () => {
-    if (!activeChannel || !resolvedStream) return;
-    const nextProxy = streamMode === 'direct';
-    if (!nextProxy && !resolvedStream.directUrl) {
+    if (!activeChannel) return;
+    const nextProxy = playerStatus.streamMode === 'direct';
+    if (!nextProxy && !playerStatus.canSwitchDirect) {
       onNotifyToast('Kênh này bắt buộc chạy qua Proxy do nguồn không hỗ trợ HTTPS/CORS.');
       return;
     }
     onNotifyToast(
       nextProxy ? '🔁 Đang chuyển sang chế độ Proxy ổn định...' : '⚡ Đang phát trực tiếp từ CDN...'
     );
-    startChannel(activeChannel, nextProxy);
+    setForceProxy(nextProxy);
+    setReloadNonce((n) => n + 1);
   };
 
+  const handleForceProxyRetry = useCallback(() => {
+    setForceProxy(true);
+    setReloadNonce((n) => n + 1);
+  }, []);
+
   const isCurrentFav = activeChannel ? favoriteSet.has(getChannelFavKey(activeChannel)) : false;
+  const activePing = activeChannel ? pingMap[activeChannel.id] : undefined;
 
   return (
     <div className="flex-1 min-h-0 h-full w-full max-w-[1560px] mx-auto flex flex-col car:flex-row gap-2.5 short:gap-2 overflow-y-auto car:overflow-hidden no-scrollbar animate-ios-browse-in">
@@ -486,7 +304,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
         className={`flex flex-col min-h-0 rounded-2xl sm:rounded-3xl border p-2.5 sm:p-3 short:p-2 gap-2 short:gap-1.5 ${theme.card} ${
           isTvFullscreen
             ? 'flex-1 w-full h-full'
-            : 'w-full car:w-[58%] lg:w-[61%] shrink-0 car:h-full'
+            : 'w-full car:w-[58%] lg:w-[60%] shrink-0 car:h-full'
         }`}
       >
         {/* Thanh tiêu đề kênh đang xem */}
@@ -521,7 +339,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
               </div>
             )}
 
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] font-black uppercase tracking-wider shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
@@ -530,11 +348,16 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                 <h3 className={`text-xs sm:text-sm font-black truncate ${theme.text}`}>
                   {activeChannel ? activeChannel.name : 'Truyền hình & Radio VF5'}
                 </h3>
+                {activeChannel && <PingBadge ping={activePing} isLightTheme={isLightTheme} compact />}
               </div>
               <p className={`text-[10.5px] font-semibold truncate mt-0.5 ${theme.textSub}`}>
                 {activeChannel
-                  ? `${activeChannel.group} • ${
-                      streamMode === 'proxy' ? 'Proxy chống chặn CORS' : 'CDN trực tiếp'
+                  ? `${activeChannel.group}${
+                      activeChannel.manifestType === 'mpd' ? ' • DASH ClearKey' : ''
+                    } • ${
+                      playerStatus.streamMode === 'proxy'
+                        ? 'Proxy chống chặn CORS'
+                        : 'CDN trực tiếp'
                     }`
                   : 'Chọn kênh bên phải để phát ngay'}
               </p>
@@ -564,7 +387,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                 onClick={handleSwitchStreamMode}
                 title="Đổi giữa phát CDN trực tiếp và Proxy chống chặn"
                 className={`h-8 px-2 rounded-xl border text-[10px] font-extrabold flex items-center gap-1 active:scale-95 transition ${
-                  streamMode === 'proxy'
+                  playerStatus.streamMode === 'proxy'
                     ? isLightTheme
                       ? 'bg-blue-600 border-blue-600 text-white'
                       : 'bg-sky-500/25 border-sky-400/50 text-sky-200'
@@ -573,7 +396,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
               >
                 <Wifi className="w-3 h-3" />
                 <span className="hidden xs:inline">
-                  {streamMode === 'proxy' ? 'Proxy' : 'Trực tiếp'}
+                  {playerStatus.streamMode === 'proxy' ? 'Proxy' : 'Trực tiếp'}
                 </span>
               </button>
             )}
@@ -598,151 +421,21 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
           </div>
         </div>
 
-        {/* Sân khấu phát Video 16:9 / Radio Studio */}
-        <div
-          className={`media-stage relative flex-1 min-h-[190px] car:min-h-0 w-full flex items-center justify-center rounded-2xl overflow-hidden bg-black border shadow-inner ${
-            isLightTheme ? 'border-slate-300' : 'border-white/12'
-          }`}
-        >
-          <video
-            ref={videoRef}
-            playsInline
-            autoPlay
-            controls={false}
-            onClick={handleTogglePlay}
-            onPlaying={() => {
-              setIsPlaying(true);
-              setIsBuffering(false);
-              setPlayError(null);
-            }}
-            onPause={() => setIsPlaying(false)}
-            onWaiting={() => setIsBuffering(true)}
-            onError={() => {
-              // Trên iOS Safari native HLS, nếu phát trực tiếp lỗi -> tự chuyển sang Proxy 1 lần
-              if (
-                resolvedStream &&
-                streamMode === 'direct' &&
-                !didAutoFallbackRef.current &&
-                resolvedStream.proxyUrl
-              ) {
-                didAutoFallbackRef.current = true;
-                setStreamMode('proxy');
-                attachMediaUrl(resolvedStream.proxyUrl, { ...resolvedStream, mode: 'proxy' }, true);
-                return;
-              }
-              setIsBuffering(false);
-              setIsPlaying(false);
-              setPlayError('Tín hiệu kênh bị gián đoạn — Bấm Tải lại hoặc thử Proxy.');
-            }}
-            className={`w-full h-full object-contain cursor-pointer ${
-              activeChannel?.isRadio ? 'opacity-0' : 'opacity-100'
-            }`}
+        {/* Sân khấu phát Video 16:9 / Radio Studio (Dùng chung TvPlayerStage hỗ trợ HLS + DASH ClearKey + Audio) */}
+        <div className="flex-1 min-h-[190px] car:min-h-0 w-full">
+          <TvPlayerStage
+            channel={activeChannel}
+            isLightTheme={isLightTheme}
+            isMuted={isMuted}
+            forceProxy={forceProxy}
+            reloadNonce={reloadNonce}
+            videoRef={videoRef}
+            onPauseMusic={onPauseMusic}
+            onZapNext={() => handleZapChannel(1)}
+            onForceProxyRetry={handleForceProxyRetry}
+            onStatusChange={setPlayerStatus}
+            onPingUpdate={markChannelLiveState}
           />
-
-          {/* Giao diện Studio khi nghe Radio (VOV Giao thông / VOV1 / VOH FM) */}
-          {activeChannel?.isRadio && !playError && (
-            <div
-              onClick={handleTogglePlay}
-              className={`absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 text-center cursor-pointer ${
-                isLightTheme
-                  ? 'bg-gradient-to-br from-emerald-50 via-sky-50 to-slate-100'
-                  : 'bg-gradient-to-br from-slate-900 via-[#0a1628] to-emerald-950/60'
-              }`}
-            >
-              <div className="relative">
-                {isPlaying && (
-                  <div className="absolute -inset-3 rounded-full bg-emerald-500/25 animate-ping" />
-                )}
-                <div
-                  className={`relative w-20 h-20 short:w-16 short:h-16 rounded-2xl border flex items-center justify-center overflow-hidden shadow-xl p-2 ${
-                    isLightTheme
-                      ? 'bg-slate-900 border-emerald-500/60'
-                      : 'bg-black/60 border-emerald-400/50'
-                  }`}
-                >
-                  {activeChannel.logo && !failedLogos[activeChannel.id] ? (
-                    <img
-                      src={activeChannel.logo}
-                      alt={activeChannel.name}
-                      className="w-full h-full object-contain"
-                    />
-                  ) : (
-                    <Radio className="w-9 h-9 text-emerald-400" />
-                  )}
-                </div>
-              </div>
-              <div>
-                <p className={`text-sm sm:text-base font-black ${theme.text}`}>
-                  {activeChannel.name}
-                </p>
-                <p
-                  className={`text-xs font-bold mt-0.5 ${
-                    isLightTheme ? 'text-emerald-700' : 'text-emerald-300'
-                  }`}
-                >
-                  {isPlaying
-                    ? '📻 Đang phát thanh trực tiếp...'
-                    : isBuffering || isResolving
-                    ? 'Đang bắt sóng Radio...'
-                    : 'Chạm để tiếp tục phát'}
-                </p>
-              </div>
-              <div className="flex items-end gap-1 h-5">
-                {[45, 85, 60, 100, 50, 75, 40].map((h, i) => (
-                  <span
-                    key={i}
-                    style={{
-                      height: isPlaying ? `${h}%` : '22%',
-                      animationDelay: `${i * 110}ms`,
-                    }}
-                    className={`w-1.5 rounded-full transition-all ${
-                      isLightTheme ? 'bg-emerald-600' : 'bg-emerald-400'
-                    } ${isPlaying ? 'animate-pulse' : 'opacity-40'}`}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Trạng thái đang kết nối / đệm luồng */}
-          {(isResolving || isBuffering) && !playError && !activeChannel?.isRadio && (
-            <div className="absolute inset-0 bg-black/55 backdrop-blur-xs flex flex-col items-center justify-center gap-2 pointer-events-none">
-              <Loader2 className="w-8 h-8 text-sky-400 animate-spin" />
-              <span className="text-xs font-extrabold text-white/85">
-                {isResolving ? 'Đang bắt sóng kênh...' : 'Đang tải luồng HD...'}
-              </span>
-            </div>
-          )}
-
-          {/* Thông báo lỗi kèm nút thử Proxy / chuyển kênh */}
-          {playError && (
-            <div className="absolute inset-0 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center gap-3 p-4 text-center">
-              <AlertCircle className="w-9 h-9 text-rose-400" />
-              <p className="text-xs sm:text-sm font-bold text-white max-w-sm leading-snug">
-                {playError}
-              </p>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                {activeChannel && (
-                  <button
-                    type="button"
-                    onClick={() => startChannel(activeChannel, true)}
-                    className="min-h-[36px] px-3.5 rounded-full bg-sky-400 text-slate-950 font-black text-xs flex items-center gap-1.5 active:scale-95 transition"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Thử lại qua Proxy</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => handleZapChannel(1)}
-                  className="min-h-[36px] px-3.5 rounded-full bg-white/15 hover:bg-white/25 text-white font-bold text-xs flex items-center gap-1 active:scale-95 transition"
-                >
-                  <span>Kênh tiếp theo</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Thanh điều khiển TV chuẩn cảm ứng ô tô */}
@@ -760,10 +453,10 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
             <button
               type="button"
               onClick={handleTogglePlay}
-              aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
+              aria-label={playerStatus.isPlaying ? 'Tạm dừng' : 'Phát'}
               className={`w-10 h-10 short:w-9 short:h-9 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
             >
-              {isPlaying ? (
+              {playerStatus.isPlaying ? (
                 <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
               ) : (
                 <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
@@ -799,18 +492,22 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
             {activeChannel && (
               <button
                 type="button"
-                onClick={() => startChannel(activeChannel, streamMode === 'proxy')}
+                onClick={() => setReloadNonce((n) => n + 1)}
                 aria-label="Tải lại luồng kênh"
                 title="Tải lại kênh hiện tại"
                 className={`w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
               >
-                <RefreshCw className={`w-4 h-4 ${isResolving ? 'animate-spin' : ''}`} />
+                <RefreshCw
+                  className={`w-4 h-4 ${playerStatus.isResolving ? 'animate-spin' : ''}`}
+                />
               </button>
             )}
 
             {activeChannelIndex >= 0 && (
-              <span className={`hidden sm:inline text-[11px] font-mono font-bold px-2 ${theme.textMuted}`}>
-                {activeChannelIndex + 1}/{filteredChannels.length}
+              <span
+                className={`hidden sm:inline text-[11px] font-mono font-bold px-2 ${theme.textMuted}`}
+              >
+                {activeChannelIndex + 1}/{displayedChannels.length}
               </span>
             )}
           </div>
@@ -818,11 +515,11 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
       </div>
 
       {/* =====================================================================
-          2. DANH SÁCH KÊNH TV / RADIO / PHIM & TÌM KIẾM NHANH (Ẩn khi Fullscreen)
+          2. DANH SÁCH ĐẦY ĐỦ TẤT CẢ KÊNH TV / RADIO / PHIM + PING LIVE TRỰC TIẾP
          ===================================================================== */}
       {!isTvFullscreen && (
         <div
-          className={`flex-1 min-w-0 min-h-[280px] car:min-h-0 car:h-full rounded-2xl sm:rounded-3xl border p-2.5 sm:p-3 short:p-2 flex flex-col gap-2 short:gap-1.5 overflow-hidden ${theme.card}`}
+          className={`flex-1 min-w-0 min-h-[280px] car:min-h-0 car:h-full rounded-2xl sm:rounded-3xl border p-2.5 sm:p-3 short:p-2 flex flex-col gap-1.5 overflow-hidden ${theme.card}`}
         >
           {/* Ô tìm kiếm kênh + Nút đổi nguồn M3U8 */}
           <div className="flex items-center gap-1.5 shrink-0">
@@ -834,7 +531,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Tìm kênh (vtv3, vov giao thong, htv7...)"
+                placeholder="Tìm kênh (vtv3, vov giao thong, tv360, on sports...)"
                 className={`w-full h-9 short:h-8 pl-8 pr-7 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
               />
               {searchQuery && (
@@ -886,15 +583,15 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
               }`}
             >
               <div
-                className={`flex items-center justify-between text-[11px] font-extrabold ${
+                className={`flex items-center justify-between gap-2 text-[11px] font-extrabold ${
                   isLightTheme ? 'text-blue-800' : 'text-sky-300'
                 }`}
               >
                 <span>Nguồn danh sách M3U / M3U8</span>
                 {playlist && (
                   <span className={`font-mono text-[10px] ${theme.textMuted}`}>
-                    {playlist.totalPlayable} kênh HLS
-                    {playlist.totalDrmFiltered > 0 ? ` • ẩn ${playlist.totalDrmFiltered} DRM` : ''}
+                    Đủ {playlist.totalPlayable} kênh
+                    {playlist.totalDrmCount > 0 ? ` (${playlist.totalDrmCount} MPD)` : ''}
                   </span>
                 )}
               </div>
@@ -943,7 +640,9 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                   id: g.name,
                   label: `${g.name} (${g.count})`,
                 })) || []),
-                ...(playlist ? [{ id: '__all__', label: `Tất cả (${playlist.totalPlayable})` }] : []),
+                ...(playlist
+                  ? [{ id: '__all__', label: `Tất cả (${playlist.totalPlayable})` }]
+                  : []),
               ].map((tab) => {
                 const active = selectedGroup === tab.id;
                 return (
@@ -951,7 +650,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                     key={tab.id}
                     type="button"
                     onClick={() => setSelectedGroup(tab.id)}
-                    className={`min-h-[32px] short:min-h-[28px] px-2.5 rounded-full text-[11px] font-extrabold whitespace-nowrap border active:scale-95 transition ${
+                    className={`min-h-[30px] short:min-h-[26px] px-2.5 rounded-full text-[11px] font-extrabold whitespace-nowrap border active:scale-95 transition ${
                       active
                         ? isLightTheme
                           ? 'bg-blue-600 text-white border-blue-600 shadow'
@@ -966,13 +665,96 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
             </div>
           )}
 
+          {/* Thanh trạng thái Ping Live & nút quét Ping thủ công */}
+          {playlist && baseChannels.length > 0 && (
+            <div
+              className={`flex items-center justify-between gap-2 px-2 py-1 rounded-xl border shrink-0 ${theme.well}`}
+            >
+              <div className="flex items-center gap-2 min-w-0 text-[10.5px] font-extrabold">
+                <span
+                  className={`inline-flex items-center gap-1 ${
+                    isLightTheme ? 'text-emerald-700' : 'text-emerald-300'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span>{pingSummary.live} Live</span>
+                </span>
+                <span
+                  className={`inline-flex items-center gap-1 ${
+                    isLightTheme ? 'text-rose-700' : 'text-rose-300'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-rose-500" />
+                  <span>{pingSummary.dead} Off</span>
+                </span>
+                {pingSummary.checking > 0 && (
+                  <span className={`truncate ${theme.textMuted}`}>
+                    ({pingSummary.checking} đang ping...)
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setOnlyLiveFilter((v) => !v)}
+                  title="Tùy chọn chỉ lọc kênh đang Live (mặc định tắt để hiện 100% kênh)"
+                  className={`h-6 px-2 rounded-full border text-[10px] font-extrabold active:scale-95 transition ${
+                    onlyLiveFilter
+                      ? isLightTheme
+                        ? 'bg-emerald-600 border-emerald-600 text-white'
+                        : 'bg-emerald-500 border-emerald-400 text-slate-950'
+                      : theme.chipIdle
+                  }`}
+                >
+                  Chỉ Live
+                </button>
+
+                {isPinging ? (
+                  <button
+                    type="button"
+                    onClick={cancelPing}
+                    title="Dừng quét Ping"
+                    className={`h-6 px-2 rounded-full border text-[10px] font-extrabold flex items-center gap-1 active:scale-95 transition ${
+                      isLightTheme
+                        ? 'bg-rose-100 border-rose-300 text-rose-700'
+                        : 'bg-rose-500/25 border-rose-400/50 text-rose-200'
+                    }`}
+                  >
+                    <Square className="w-2.5 h-2.5 fill-current" />
+                    <span>Dừng</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onNotifyToast(
+                        `📡 Đang kiểm tra tín hiệu ${Math.min(baseChannels.length, 120)} kênh...`
+                      );
+                      pingChannels(baseChannels, true);
+                    }}
+                    title="Quét lại tín hiệu Live / Off của danh sách hiện tại"
+                    className={`h-6 px-2 rounded-full border text-[10px] font-extrabold flex items-center gap-1 active:scale-95 transition ${
+                      isLightTheme
+                        ? 'bg-blue-50 hover:bg-blue-100 border-blue-300 text-blue-700'
+                        : 'bg-sky-500/20 hover:bg-sky-500/35 border-sky-400/45 text-sky-200'
+                    }`}
+                  >
+                    <Activity className="w-3 h-3" />
+                    <span>Ping</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Danh sách kênh cuộn mượt */}
           <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-1.5 pr-0.5">
             {isLoadingPlaylist ? (
               <div className="h-full flex flex-col items-center justify-center gap-2 py-8 text-center">
                 <Loader2 className="w-7 h-7 text-blue-500 animate-spin" />
                 <p className={`text-xs font-bold ${theme.textSub}`}>
-                  Đang tải danh sách kênh TV & Radio...
+                  Đang tải toàn bộ danh sách kênh TV & Radio...
                 </p>
               </div>
             ) : playlistError ? (
@@ -987,26 +769,40 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                 <p className={`text-xs font-bold ${theme.text}`}>{playlistError}</p>
                 <button
                   type="button"
-                  onClick={() => loadPlaylist(playlistUrl)}
+                  onClick={reloadPlaylist}
                   className={`min-h-[34px] px-4 rounded-full text-xs font-extrabold active:scale-95 ${theme.primaryCta}`}
                 >
                   Thử tải lại
                 </button>
               </div>
-            ) : filteredChannels.length === 0 ? (
-              <div className={`py-10 text-center text-xs font-bold ${theme.textMuted}`}>
-                {selectedGroup === '__favorites__'
-                  ? 'Chưa có kênh yêu thích — bấm biểu tượng ⭐ cạnh tên kênh để lưu nhanh.'
-                  : 'Không tìm thấy kênh phù hợp.'}
+            ) : displayedChannels.length === 0 ? (
+              <div className={`py-8 text-center space-y-2 text-xs font-bold ${theme.textMuted}`}>
+                <p>
+                  {onlyLiveFilter
+                    ? 'Chưa có kênh Live nào trong nhóm này (hoặc đang ping).'
+                    : selectedGroup === '__favorites__'
+                    ? 'Chưa có kênh yêu thích — bấm biểu tượng ⭐ cạnh tên kênh để lưu nhanh.'
+                    : 'Không tìm thấy kênh phù hợp.'}
+                </p>
+                {onlyLiveFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setOnlyLiveFilter(false)}
+                    className={`px-3 py-1 rounded-full text-[11px] font-extrabold ${theme.primaryCta}`}
+                  >
+                    Hiện lại tất cả kênh
+                  </button>
+                )}
               </div>
             ) : (
-              filteredChannels.map((ch) => {
+              displayedChannels.map((ch) => {
                 const isSelected = activeChannel?.id === ch.id;
                 const isFav = favoriteSet.has(getChannelFavKey(ch));
+                const ping = pingMap[ch.id];
                 return (
                   <div
                     key={ch.id}
-                    className={`w-full rounded-xl border flex items-center gap-2 p-1.5 short:p-1 transition ${
+                    className={`w-full rounded-xl border flex items-center gap-1.5 p-1.5 short:p-1 transition ${
                       isSelected
                         ? isLightTheme
                           ? 'bg-blue-50 border-blue-500 shadow-sm'
@@ -1017,7 +813,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setActiveChannel(ch)}
-                      className="flex items-center gap-2.5 min-w-0 flex-1 text-left active:scale-[0.99]"
+                      className="flex items-center gap-2 min-w-0 flex-1 text-left active:scale-[0.99]"
                     >
                       <div
                         className={`w-11 h-8 short:w-10 short:h-7 rounded-lg border flex items-center justify-center overflow-hidden p-1 shrink-0 ${
@@ -1046,11 +842,13 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <h4 className={`text-xs font-extrabold truncate leading-snug ${theme.text}`}>
+                        <h4
+                          className={`text-xs font-extrabold truncate leading-snug ${theme.text}`}
+                        >
                           {ch.name}
                         </h4>
                         <div
-                          className={`flex items-center gap-1.5 text-[10px] font-semibold mt-0.5 ${theme.textMuted}`}
+                          className={`flex items-center gap-1 text-[10px] font-semibold mt-0.5 ${theme.textMuted}`}
                         >
                           <span className="truncate">{ch.group}</span>
                           {ch.isRadio && (
@@ -1075,15 +873,29 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                               VOD
                             </span>
                           )}
+                          {ch.manifestType === 'mpd' && (
+                            <span
+                              className={`px-1 rounded font-bold shrink-0 ${
+                                isLightTheme
+                                  ? 'bg-violet-100 text-violet-800'
+                                  : 'bg-violet-500/25 text-violet-200'
+                              }`}
+                            >
+                              MPD
+                            </span>
+                          )}
                         </div>
                       </div>
                     </button>
+
+                    {/* Nhãn Ping Live / Off + độ trễ ms */}
+                    <PingBadge ping={ping} isLightTheme={isLightTheme} compact />
 
                     <button
                       type="button"
                       onClick={() => toggleFavoriteChannel(ch)}
                       aria-label={isFav ? `Bỏ yêu thích ${ch.name}` : `Lưu ${ch.name}`}
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 active:scale-90 transition ${
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 active:scale-90 transition ${
                         isFav
                           ? 'text-amber-500'
                           : isLightTheme
