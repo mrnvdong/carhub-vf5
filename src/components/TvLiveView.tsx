@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Tv,
   Radio,
@@ -29,13 +29,14 @@ import {
   getChannelFavKey,
   stripVietnameseTones,
 } from '../hooks/useTvLive';
-import { TvPlayerStage, TvPlayerStatus } from './TvPlayerStage';
+import { VideoSlotRect } from './CockpitView';
 import { getCarTheme } from '../utils/theme';
 
 interface TvLiveViewProps {
   tv: TvLiveController;
   onPauseMusic: () => void;
   onNotifyToast: (msg: string) => void;
+  onTvSlotRectChange: (rect: VideoSlotRect | null) => void;
   isLightTheme: boolean;
 }
 
@@ -121,6 +122,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
   tv,
   onPauseMusic,
   onNotifyToast,
+  onTvSlotRectChange,
   isLightTheme,
 }) => {
   const theme = getCarTheme(isLightTheme);
@@ -141,7 +143,14 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
     isPinging,
     pingChannels,
     cancelPing,
-    markChannelLiveState,
+    isMuted,
+    toggleMute,
+    reloadStream,
+    switchStreamMode,
+    playerStatus,
+    togglePlay,
+    setZapContextList,
+    zapChannel,
   } = tv;
 
   const [customUrlInput, setCustomUrlInput] = useState<string>(playlistUrl);
@@ -149,27 +158,65 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
   const [selectedGroup, setSelectedGroup] = useState<string>('__popular__');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [onlyLiveFilter, setOnlyLiveFilter] = useState<boolean>(false);
-
-  const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [forceProxy, setForceProxy] = useState<boolean>(false);
-  const [reloadNonce, setReloadNonce] = useState<number>(0);
   const [isTvFullscreen, setIsTvFullscreen] = useState<boolean>(false);
   const [failedLogos, setFailedLogos] = useState<Record<string, boolean>>({});
-  const [playerStatus, setPlayerStatus] = useState<TvPlayerStatus>({
-    isPlaying: false,
-    isBuffering: false,
-    isResolving: false,
-    streamMode: 'direct',
-    canSwitchDirect: true,
-    error: null,
-  });
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const outerScrollRef = useRef<HTMLDivElement | null>(null);
+  const tvSlotRef = useRef<HTMLDivElement | null>(null);
 
-  // Reset ép Proxy mỗi khi đổi sang kênh mới
+  // Đồng bộ tọa độ khung phát TV duy nhất (0ms reload khi chuyển TV Live <-> Cockpit!)
+  const syncTvSlotRect = useCallback(() => {
+    const el = tvSlotRef.current;
+    if (!el) {
+      onTvSlotRectChange(null);
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    if (r.width > 40 && r.height > 40) {
+      onTvSlotRectChange({
+        top: r.top,
+        left: r.left,
+        width: r.width,
+        height: r.height,
+      });
+    } else {
+      onTvSlotRectChange(null);
+    }
+  }, [onTvSlotRectChange]);
+
+  useLayoutEffect(() => {
+    syncTvSlotRect();
+    const rafId = window.requestAnimationFrame(syncTvSlotRect);
+    const t1 = window.setTimeout(syncTvSlotRect, 120);
+
+    const slotEl = tvSlotRef.current;
+    const outerEl = outerScrollRef.current;
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => syncTvSlotRect());
+      if (slotEl) ro.observe(slotEl);
+      if (outerEl) ro.observe(outerEl);
+    }
+
+    window.addEventListener('resize', syncTvSlotRect);
+    window.visualViewport?.addEventListener('resize', syncTvSlotRect);
+    outerEl?.addEventListener('scroll', syncTvSlotRect, { passive: true });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(t1);
+      ro?.disconnect();
+      window.removeEventListener('resize', syncTvSlotRect);
+      window.visualViewport?.removeEventListener('resize', syncTvSlotRect);
+      outerEl?.removeEventListener('scroll', syncTvSlotRect);
+    };
+  }, [isTvFullscreen, showSourceModal, syncTvSlotRect]);
+
   useEffect(() => {
-    setForceProxy(false);
-  }, [activeChannel?.id]);
+    return () => {
+      onTvSlotRectChange(null);
+    };
+  }, [onTvSlotRectChange]);
 
   // Hỗ trợ phím Escape thoát toàn màn hình TV
   useEffect(() => {
@@ -225,6 +272,15 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
     return baseChannels.filter((ch) => pingMap[ch.id]?.status === 'live');
   }, [baseChannels, onlyLiveFilter, pingMap]);
 
+  // Đồng bộ danh sách chuyển kênh với bộ phát TV dùng chung
+  useEffect(() => {
+    if (displayedChannels.length > 0) {
+      setZapContextList(displayedChannels);
+    } else if (baseChannels.length > 0) {
+      setZapContextList(baseChannels);
+    }
+  }, [displayedChannels, baseChannels, setZapContextList]);
+
   // Tự động Ping nhẹ nhàng nhóm kênh đang mở (có cache 5 phút, tránh lặp thừa)
   useEffect(() => {
     if (!playlist || baseChannels.length === 0) return;
@@ -244,59 +300,19 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
 
   const handleZapChannel = useCallback(
     (delta: number) => {
-      const list =
-        displayedChannels.length > 0
-          ? displayedChannels
-          : baseChannels.length > 0
-          ? baseChannels
-          : playlist?.channels || [];
-      if (list.length === 0) return;
-      const curIdx = activeChannel ? list.findIndex((c) => c.id === activeChannel.id) : -1;
-      const nextIdx = curIdx < 0 ? 0 : (curIdx + delta + list.length) % list.length;
-      setActiveChannel(list[nextIdx]);
+      zapChannel(delta, displayedChannels.length > 0 ? displayedChannels : baseChannels);
     },
-    [displayedChannels, baseChannels, playlist, activeChannel, setActiveChannel]
+    [zapChannel, displayedChannels, baseChannels]
   );
-
-  const handleTogglePlay = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (v.paused) {
-      onPauseMusic();
-      v.play().catch(() => {});
-    } else {
-      v.pause();
-    }
-  };
-
-  const handleToggleMute = () => {
-    setIsMuted((prev) => !prev);
-  };
-
-  const handleSwitchStreamMode = () => {
-    if (!activeChannel) return;
-    const nextProxy = playerStatus.streamMode === 'direct';
-    if (!nextProxy && !playerStatus.canSwitchDirect) {
-      onNotifyToast('Kênh này bắt buộc chạy qua Proxy do nguồn không hỗ trợ HTTPS/CORS.');
-      return;
-    }
-    onNotifyToast(
-      nextProxy ? '🔁 Đang chuyển sang chế độ Proxy ổn định...' : '⚡ Đang phát trực tiếp từ CDN...'
-    );
-    setForceProxy(nextProxy);
-    setReloadNonce((n) => n + 1);
-  };
-
-  const handleForceProxyRetry = useCallback(() => {
-    setForceProxy(true);
-    setReloadNonce((n) => n + 1);
-  }, []);
 
   const isCurrentFav = activeChannel ? favoriteSet.has(getChannelFavKey(activeChannel)) : false;
   const activePing = activeChannel ? pingMap[activeChannel.id] : undefined;
 
   return (
-    <div className="flex-1 min-h-0 h-full w-full max-w-[1560px] mx-auto flex flex-col car:flex-row gap-2.5 short:gap-2 overflow-y-auto car:overflow-hidden no-scrollbar animate-ios-browse-in">
+    <div
+      ref={outerScrollRef}
+      className="flex-1 min-h-0 h-full w-full max-w-[1560px] mx-auto flex flex-col car:flex-row gap-2.5 short:gap-2 overflow-y-auto car:overflow-hidden no-scrollbar"
+    >
       {/* =====================================================================
           1. KHUNG PHÁT TV / RADIO TRỰC TIẾP (60% chiều ngang hoặc 100% Toàn màn hình)
          ===================================================================== */}
@@ -348,7 +364,9 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
                 <h3 className={`text-xs sm:text-sm font-black truncate ${theme.text}`}>
                   {activeChannel ? activeChannel.name : 'Truyền hình & Radio VF5'}
                 </h3>
-                {activeChannel && <PingBadge ping={activePing} isLightTheme={isLightTheme} compact />}
+                {activeChannel && (
+                  <PingBadge ping={activePing} isLightTheme={isLightTheme} compact />
+                )}
               </div>
               <p className={`text-[10.5px] font-semibold truncate mt-0.5 ${theme.textSub}`}>
                 {activeChannel
@@ -384,7 +402,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
             {activeChannel && (
               <button
                 type="button"
-                onClick={handleSwitchStreamMode}
+                onClick={switchStreamMode}
                 title="Đổi giữa phát CDN trực tiếp và Proxy chống chặn"
                 className={`h-8 px-2 rounded-xl border text-[10px] font-extrabold flex items-center gap-1 active:scale-95 transition ${
                   playerStatus.streamMode === 'proxy'
@@ -421,22 +439,14 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
           </div>
         </div>
 
-        {/* Sân khấu phát Video 16:9 / Radio Studio (Dùng chung TvPlayerStage hỗ trợ HLS + DASH ClearKey + Audio) */}
-        <div className="flex-1 min-h-[190px] car:min-h-0 w-full">
-          <TvPlayerStage
-            channel={activeChannel}
-            isLightTheme={isLightTheme}
-            isMuted={isMuted}
-            forceProxy={forceProxy}
-            reloadNonce={reloadNonce}
-            videoRef={videoRef}
-            onPauseMusic={onPauseMusic}
-            onZapNext={() => handleZapChannel(1)}
-            onForceProxyRetry={handleForceProxyRetry}
-            onStatusChange={setPlayerStatus}
-            onPingUpdate={markChannelLiveState}
-          />
-        </div>
+        {/* Khung neo tọa độ sân khấu TV (Bộ phát TV duy nhất sẽ khớp 100% khung này — 0ms reload khi chuyển Cockpit <-> TV Live!) */}
+        <div
+          ref={tvSlotRef}
+          aria-label="Khung phát Truyền hình & Radio trực tiếp"
+          className={`relative flex-1 min-h-[190px] car:min-h-0 w-full rounded-2xl overflow-hidden bg-black border ${
+            isLightTheme ? 'border-slate-300' : 'border-white/12'
+          }`}
+        />
 
         {/* Thanh điều khiển TV chuẩn cảm ứng ô tô */}
         <div className="flex items-center justify-between gap-2 shrink-0 pt-0.5">
@@ -452,7 +462,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
 
             <button
               type="button"
-              onClick={handleTogglePlay}
+              onClick={() => togglePlay(onPauseMusic)}
               aria-label={playerStatus.isPlaying ? 'Tạm dừng' : 'Phát'}
               className={`w-10 h-10 short:w-9 short:h-9 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
             >
@@ -476,7 +486,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={handleToggleMute}
+              onClick={toggleMute}
               aria-label={isMuted ? 'Bật tiếng' : 'Tắt tiếng'}
               className={`w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${
                 isMuted
@@ -492,7 +502,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({
             {activeChannel && (
               <button
                 type="button"
-                onClick={() => setReloadNonce((n) => n + 1)}
+                onClick={reloadStream}
                 aria-label="Tải lại luồng kênh"
                 title="Tải lại kênh hiện tại"
                 className={`w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}

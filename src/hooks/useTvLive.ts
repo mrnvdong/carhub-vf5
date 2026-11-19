@@ -1,6 +1,15 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { TvChannel, TvPingResult, TvPlaylistData } from '../types';
 import { DEFAULT_TV_PLAYLIST_URL, fetchTvPlaylist, pingTvChannelsBatch } from '../services/tv';
+
+export interface TvPlayerStatus {
+  isPlaying: boolean;
+  isBuffering: boolean;
+  isResolving: boolean;
+  streamMode: 'direct' | 'proxy';
+  canSwitchDirect: boolean;
+  error: string | null;
+}
 
 const POPULAR_CHANNEL_PATTERNS: RegExp[] = [
   /^vtv\s*1\b/i,
@@ -58,6 +67,20 @@ export interface TvLiveController {
   pingChannels: (channels: TvChannel[], force?: boolean) => Promise<void>;
   cancelPing: () => void;
   markChannelLiveState: (channelId: string, status: 'live' | 'dead', reason?: string) => void;
+  // Trạng thái & điều khiển dùng chung cho 1 bộ phát TV duy nhất (0ms reload khi chuyển TV Live <-> Cockpit!)
+  videoRef: React.RefObject<HTMLVideoElement>;
+  isMuted: boolean;
+  toggleMute: () => void;
+  forceProxy: boolean;
+  reloadNonce: number;
+  reloadStream: () => void;
+  forceProxyRetry: () => void;
+  switchStreamMode: () => void;
+  playerStatus: TvPlayerStatus;
+  setPlayerStatus: (status: TvPlayerStatus) => void;
+  togglePlay: (onBeforePlay?: () => void) => void;
+  setZapContextList: (channels: TvChannel[]) => void;
+  zapChannel: (delta: number, listOverride?: TvChannel[]) => void;
 }
 
 export function useTvLive(
@@ -101,6 +124,29 @@ export function useTvLive(
   const pingAbortRef = useRef<AbortController | null>(null);
   const onNotifyToastRef = useRef(onNotifyToast);
   onNotifyToastRef.current = onNotifyToast;
+
+  // Shared singleton player controls
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [forceProxy, setForceProxy] = useState<boolean>(false);
+  const [reloadNonce, setReloadNonce] = useState<number>(0);
+  const [playerStatus, setPlayerStatus] = useState<TvPlayerStatus>({
+    isPlaying: false,
+    isBuffering: false,
+    isResolving: false,
+    streamMode: 'direct',
+    canSwitchDirect: true,
+    error: null,
+  });
+  const playerStatusRef = useRef<TvPlayerStatus>(playerStatus);
+  playerStatusRef.current = playerStatus;
+  const activeChannelRef = useRef<TvChannel | null>(activeChannel);
+  activeChannelRef.current = activeChannel;
+  const zapContextListRef = useRef<TvChannel[]>([]);
+
+  useEffect(() => {
+    setForceProxy(false);
+  }, [activeChannel?.id]);
 
   useEffect(() => {
     try {
@@ -227,7 +273,6 @@ export function useTvLive(
     pingAbortRef.current = controller;
     setIsPinging(true);
 
-    // Tối đa 60 kênh mỗi lượt tự động (nếu bấm thủ công có thể ping tới 120 kênh của nhóm)
     const queue = targets.slice(0, force ? 120 : 40);
     const BATCH_SIZE = 10;
 
@@ -282,29 +327,137 @@ export function useTvLive(
     []
   );
 
+  const toggleMute = useCallback(() => {
+    setIsMuted((prev) => !prev);
+  }, []);
+
+  const reloadStream = useCallback(() => {
+    setReloadNonce((n) => n + 1);
+  }, []);
+
+  const forceProxyRetry = useCallback(() => {
+    setForceProxy(true);
+    setReloadNonce((n) => n + 1);
+  }, []);
+
+  const switchStreamMode = useCallback(() => {
+    if (!activeChannelRef.current) return;
+    const curStatus = playerStatusRef.current;
+    const nextProxy = curStatus.streamMode === 'direct';
+    if (!nextProxy && !curStatus.canSwitchDirect) {
+      onNotifyToastRef.current?.(
+        'Kênh này bắt buộc chạy qua Proxy do nguồn không hỗ trợ HTTPS/CORS.'
+      );
+      return;
+    }
+    onNotifyToastRef.current?.(
+      nextProxy ? '🔁 Đang chuyển sang chế độ Proxy ổn định...' : '⚡ Đang phát trực tiếp từ CDN...'
+    );
+    setForceProxy(nextProxy);
+    setReloadNonce((n) => n + 1);
+  }, []);
+
+  const togglePlay = useCallback((onBeforePlay?: () => void) => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      onBeforePlay?.();
+      v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  }, []);
+
+  const setZapContextList = useCallback((channels: TvChannel[]) => {
+    zapContextListRef.current = channels;
+  }, []);
+
+  const zapChannel = useCallback(
+    (delta: number, listOverride?: TvChannel[]) => {
+      const list =
+        listOverride && listOverride.length > 0
+          ? listOverride
+          : zapContextListRef.current.length > 0
+          ? zapContextListRef.current
+          : popularChannels.length > 0
+          ? popularChannels
+          : playlist?.channels || [];
+      if (list.length === 0) return;
+      const cur = activeChannelRef.current;
+      const curIdx = cur ? list.findIndex((c) => c.id === cur.id) : -1;
+      const nextIdx = curIdx < 0 ? 0 : (curIdx + delta + list.length) % list.length;
+      setActiveChannel(list[nextIdx]);
+    },
+    [popularChannels, playlist]
+  );
+
   useEffect(() => {
     return () => {
       pingAbortRef.current?.abort();
     };
   }, []);
 
-  return {
-    playlistUrl,
-    setPlaylistUrl,
-    playlist,
-    isLoadingPlaylist,
-    playlistError,
-    reloadPlaylist,
-    activeChannel,
-    setActiveChannel,
-    favoriteKeys,
-    favoriteSet,
-    toggleFavoriteChannel,
-    popularChannels,
-    pingMap,
-    isPinging,
-    pingChannels,
-    cancelPing,
-    markChannelLiveState,
-  };
+  return useMemo(
+    () => ({
+      playlistUrl,
+      setPlaylistUrl,
+      playlist,
+      isLoadingPlaylist,
+      playlistError,
+      reloadPlaylist,
+      activeChannel,
+      setActiveChannel,
+      favoriteKeys,
+      favoriteSet,
+      toggleFavoriteChannel,
+      popularChannels,
+      pingMap,
+      isPinging,
+      pingChannels,
+      cancelPing,
+      markChannelLiveState,
+      videoRef,
+      isMuted,
+      toggleMute,
+      forceProxy,
+      reloadNonce,
+      reloadStream,
+      forceProxyRetry,
+      switchStreamMode,
+      playerStatus,
+      setPlayerStatus,
+      togglePlay,
+      setZapContextList,
+      zapChannel,
+    }),
+    [
+      playlistUrl,
+      setPlaylistUrl,
+      playlist,
+      isLoadingPlaylist,
+      playlistError,
+      reloadPlaylist,
+      activeChannel,
+      favoriteKeys,
+      favoriteSet,
+      toggleFavoriteChannel,
+      popularChannels,
+      pingMap,
+      isPinging,
+      pingChannels,
+      cancelPing,
+      markChannelLiveState,
+      isMuted,
+      toggleMute,
+      forceProxy,
+      reloadNonce,
+      reloadStream,
+      forceProxyRetry,
+      switchStreamMode,
+      playerStatus,
+      togglePlay,
+      setZapContextList,
+      zapChannel,
+    ]
+  );
 }

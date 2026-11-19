@@ -2,16 +2,10 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Radio, Loader2, AlertCircle, RefreshCw, ChevronRight } from 'lucide-react';
 import { TvChannel, TvResolvedStream } from '../types';
 import { resolveTvStream } from '../services/tv';
+import { TvPlayerStatus } from '../hooks/useTvLive';
 import { getCarTheme } from '../utils/theme';
 
-export interface TvPlayerStatus {
-  isPlaying: boolean;
-  isBuffering: boolean;
-  isResolving: boolean;
-  streamMode: 'direct' | 'proxy';
-  canSwitchDirect: boolean;
-  error: string | null;
-}
+export type { TvPlayerStatus };
 
 interface TvPlayerStageProps {
   channel: TvChannel | null;

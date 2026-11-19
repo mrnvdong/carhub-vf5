@@ -63,7 +63,6 @@ import {
   getChannelFavKey,
   stripVietnameseTones,
 } from '../hooks/useTvLive';
-import { TvPlayerStage, TvPlayerStatus } from './TvPlayerStage';
 import { MapErrorBoundary } from './MapErrorBoundary';
 import { getCarTheme } from '../utils/theme';
 
@@ -131,9 +130,11 @@ interface CockpitViewProps {
   onChangeMapTheme: (theme: MapTheme) => void;
   isLightTheme: boolean;
   tv: TvLiveController;
+  cockpitTvMode: boolean;
+  onChangeCockpitTvMode: (active: boolean) => void;
+  onTvSlotRectChange: (rect: VideoSlotRect | null) => void;
   onPauseMusic: () => void;
   onOpenFullTv: () => void;
-  onCockpitTvActiveChange?: (active: boolean) => void;
 }
 
 export const CockpitView: React.FC<CockpitViewProps> = React.memo(
@@ -189,40 +190,30 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     onChangeMapTheme,
     isLightTheme,
     tv,
+    cockpitTvMode,
+    onChangeCockpitTvMode,
+    onTvSlotRectChange,
     onPauseMusic,
     onOpenFullTv,
-    onCockpitTvActiveChange,
   }) => {
     const theme = getCarTheme(isLightTheme);
     const splitContainerRef = useRef<HTMLDivElement | null>(null);
     const telemetryCardRef = useRef<HTMLDivElement | null>(null);
     const navControlsRef = useRef<CockpitNavControls | null>(null);
     const videoSlotRef = useRef<HTMLDivElement | null>(null);
-    const tvVideoRef = useRef<HTMLVideoElement | null>(null);
+    const tvSlotRef = useRef<HTMLDivElement | null>(null);
     const badgeTextRef = useRef<HTMLSpanElement | null>(null);
     const rafDragRef = useRef<number | null>(null);
     const isScrubbingRef = useRef<boolean>(false);
 
     const [cockpitNavSummary, setCockpitNavSummary] = useState<ActiveNavSummary | null>(null);
 
-    // Chế độ Live TV ngay trong Cockpit (3 lựa chọn: Nhạc | Video | TV)
-    const [cockpitTvMode, setCockpitTvMode] = useState<boolean>(false);
+    // Bảng chọn kênh nhanh ngay trong Cockpit (bộ phát TV dùng chung toàn app -> 0ms reload!)
     const [showTvPicker, setShowTvPicker] = useState<boolean>(false);
     const [tvGroup, setTvGroup] = useState<string>('__popular__');
     const [tvSearch, setTvSearch] = useState<string>('');
     const [tvOnlyLive, setTvOnlyLive] = useState<boolean>(false);
-    const [tvMuted, setTvMuted] = useState<boolean>(false);
-    const [tvForceProxy, setTvForceProxy] = useState<boolean>(false);
-    const [tvReloadNonce, setTvReloadNonce] = useState<number>(0);
     const [tvFailedLogos, setTvFailedLogos] = useState<Record<string, boolean>>({});
-    const [tvStatus, setTvStatus] = useState<TvPlayerStatus>({
-      isPlaying: false,
-      isBuffering: false,
-      isResolving: false,
-      streamMode: 'direct',
-      canSwitchDirect: true,
-      error: null,
-    });
 
     const handleActiveNavChange = useCallback(
       (summary: ActiveNavSummary | null) => {
@@ -279,32 +270,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       }
     });
 
-    const isCockpitTvMounted = isVisible && cockpitTvMode && !isMapExpanded;
-
+    // Đóng picker nếu thoát chế độ TV
     useEffect(() => {
-      onCockpitTvActiveChange?.(isCockpitTvMounted);
-    }, [isCockpitTvMounted, onCockpitTvActiveChange]);
-
-    useEffect(() => {
-      return () => {
-        onCockpitTvActiveChange?.(false);
-      };
-    }, [onCockpitTvActiveChange]);
-
-    useEffect(() => {
-      setTvForceProxy(false);
-    }, [tv.activeChannel?.id]);
-
-    // Tự tạm dừng TV nếu nhạc nền (YouTube/SoundCloud) được phát lại từ phím vô lăng hoặc trang khác
-    const prevMusicPlayingRef = useRef<boolean>(isPlaying);
-    useEffect(() => {
-      if (!prevMusicPlayingRef.current && isPlaying && cockpitTvMode) {
-        try {
-          tvVideoRef.current?.pause();
-        } catch {}
-      }
-      prevMusicPlayingRef.current = isPlaying;
-    }, [isPlaying, cockpitTvMode]);
+      if (!cockpitTvMode) setShowTvPicker(false);
+    }, [cockpitTvMode]);
 
     // Danh sách kênh trong Quick Picker của Cockpit (100% không ẩn kênh nào!)
     const tvBaseChannels = useMemo(() => {
@@ -345,9 +314,25 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       return { live, dead };
     }, [tvBaseChannels, tv.pingMap]);
 
+    // Đồng bộ danh sách chuyển kênh khi đang ở chế độ TV trong Cockpit
+    useEffect(() => {
+      if (!isVisible || !cockpitTvMode) return;
+      const list = tvDisplayedChannels.length > 0 ? tvDisplayedChannels : tvBaseChannels;
+      if (list.length > 0) {
+        tv.setZapContextList(list);
+      }
+    }, [isVisible, cockpitTvMode, tvDisplayedChannels, tvBaseChannels, tv]);
+
     // Tự động Ping nhẹ khi mở bảng chọn kênh TV trong Cockpit
     useEffect(() => {
-      if (!isCockpitTvMounted || !showTvPicker || !tv.playlist || tvBaseChannels.length === 0) {
+      if (
+        !isVisible ||
+        !cockpitTvMode ||
+        isMapExpanded ||
+        !showTvPicker ||
+        !tv.playlist ||
+        tvBaseChannels.length === 0
+      ) {
         return;
       }
       const isSearching = tvSearch.trim().length > 0;
@@ -356,58 +341,30 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         tv.pingChannels(tvBaseChannels.slice(0, limit), false);
       }, isSearching ? 400 : 120);
       return () => window.clearTimeout(timer);
-    }, [isCockpitTvMounted, showTvPicker, tv.playlist, tvGroup, tvSearch, tvBaseChannels, tv.pingChannels]);
+    }, [
+      isVisible,
+      cockpitTvMode,
+      isMapExpanded,
+      showTvPicker,
+      tv.playlist,
+      tvGroup,
+      tvSearch,
+      tvBaseChannels,
+      tv.pingChannels,
+    ]);
 
     const handleCockpitZapTv = useCallback(
       (delta: number) => {
-        const list =
-          tvDisplayedChannels.length > 0
-            ? tvDisplayedChannels
-            : tvBaseChannels.length > 0
-            ? tvBaseChannels
-            : tv.playlist?.channels || [];
-        if (list.length === 0) return;
-        const curIdx = tv.activeChannel
-          ? list.findIndex((c) => c.id === tv.activeChannel!.id)
-          : -1;
-        const nextIdx = curIdx < 0 ? 0 : (curIdx + delta + list.length) % list.length;
-        tv.setActiveChannel(list[nextIdx]);
+        tv.zapChannel(delta, tvDisplayedChannels.length > 0 ? tvDisplayedChannels : tvBaseChannels);
       },
-      [tvDisplayedChannels, tvBaseChannels, tv]
+      [tv, tvDisplayedChannels, tvBaseChannels]
     );
-
-    const handleCockpitTvPlayToggle = () => {
-      const v = tvVideoRef.current;
-      if (!v) return;
-      if (v.paused) {
-        onPauseMusic();
-        v.play().catch(() => {});
-      } else {
-        v.pause();
-      }
-    };
-
-    const handleCockpitTvProxyToggle = () => {
-      if (!tv.activeChannel) return;
-      const nextProxy = tvStatus.streamMode === 'direct';
-      if (!nextProxy && !tvStatus.canSwitchDirect) {
-        onNotifyToast('Kênh này bắt buộc chạy qua Proxy do nguồn không hỗ trợ HTTPS/CORS.');
-        return;
-      }
-      onNotifyToast(nextProxy ? '🔁 Chuyển sang Proxy ổn định...' : '⚡ Phát trực tiếp CDN...');
-      setTvForceProxy(nextProxy);
-      setTvReloadNonce((n) => n + 1);
-    };
-
-    const handleCockpitTvForceProxyRetry = useCallback(() => {
-      setTvForceProxy(true);
-      setTvReloadNonce((n) => n + 1);
-    }, []);
 
     const effectiveVideoMode = isVideoMode && !isSoundCloudTrack;
     const showVideoSlot = isVisible && effectiveVideoMode && !cockpitTvMode && !isMapExpanded;
+    const showTvSlot = isVisible && cockpitTvMode && !showTvPicker && !isMapExpanded;
 
-    // Đo tọa độ chính xác của khung Video 16:9 và đồng bộ trực tiếp trước khi trình duyệt vẽ frame (0 giật, 0 vỡ layout!)
+    // Đo tọa độ chính xác của khung Video 16:9 YouTube và đồng bộ trước khi vẽ frame (0 giật!)
     const syncVideoSlotRect = useCallback(() => {
       if (!showVideoSlot || !videoSlotRef.current) {
         onVideoSlotRectChange(null);
@@ -425,6 +382,25 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         onVideoSlotRectChange(null);
       }
     }, [showVideoSlot, onVideoSlotRectChange]);
+
+    // Đo tọa độ chính xác của khung TV Live duy nhất trong Cockpit (0ms reload khi chuyển TV Live <-> Cockpit!)
+    const syncTvSlotRect = useCallback(() => {
+      if (!showTvSlot || !tvSlotRef.current) {
+        onTvSlotRectChange(null);
+        return;
+      }
+      const r = tvSlotRef.current.getBoundingClientRect();
+      if (r.width > 40 && r.height > 40) {
+        onTvSlotRectChange({
+          top: r.top,
+          left: r.left,
+          width: r.width,
+          height: r.height,
+        });
+      } else {
+        onTvSlotRectChange(null);
+      }
+    }, [showTvSlot, onTvSlotRectChange]);
 
     useLayoutEffect(() => {
       syncVideoSlotRect();
@@ -467,11 +443,53 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       syncVideoSlotRect,
     ]);
 
+    useLayoutEffect(() => {
+      syncTvSlotRect();
+      if (!showTvSlot) return;
+
+      const rafId = window.requestAnimationFrame(syncTvSlotRect);
+      const t1 = window.setTimeout(syncTvSlotRect, 120);
+
+      const slotEl = tvSlotRef.current;
+      const containerEl = splitContainerRef.current;
+      const telemetryEl = telemetryCardRef.current;
+      let ro: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== 'undefined') {
+        ro = new ResizeObserver(() => syncTvSlotRect());
+        if (slotEl) ro.observe(slotEl);
+        if (containerEl) ro.observe(containerEl);
+        if (telemetryEl) ro.observe(telemetryEl);
+      }
+
+      window.addEventListener('resize', syncTvSlotRect);
+      window.visualViewport?.addEventListener('resize', syncTvSlotRect);
+      containerEl?.addEventListener('scroll', syncTvSlotRect, { passive: true });
+
+      return () => {
+        window.cancelAnimationFrame(rafId);
+        window.clearTimeout(t1);
+        ro?.disconnect();
+        window.removeEventListener('resize', syncTvSlotRect);
+        window.visualViewport?.removeEventListener('resize', syncTvSlotRect);
+        containerEl?.removeEventListener('scroll', syncTvSlotRect);
+      };
+    }, [
+      showTvSlot,
+      mapSide,
+      mapWidthPct,
+      activeLimit,
+      primaryHazard?.label,
+      Boolean(cockpitNavSummary),
+      cockpitNavSummary?.isRouteOverview,
+      syncTvSlotRect,
+    ]);
+
     useEffect(() => {
       return () => {
         onVideoSlotRectChange(null);
+        onTvSlotRectChange(null);
       };
-    }, [onVideoSlotRectChange]);
+    }, [onVideoSlotRectChange, onTvSlotRectChange]);
 
     useEffect(() => {
       onDraggingSplitChange(isDraggingSplit);
@@ -507,7 +525,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       setIsMapExpanded((v) => !v);
     }, []);
 
-    // Kéo thả 60fps siêu mượt: Cập nhật biến CSS + tọa độ Video 16:9 trực tiếp trên DOM (0 lần re-render React!)
+    // Kéo thả 60fps siêu mượt: Cập nhật biến CSS + tọa độ Video/TV 16:9 trực tiếp trên DOM (0 lần re-render React!)
     const updateSplitFromClientX = useCallback(
       (clientX: number) => {
         const container = splitContainerRef.current;
@@ -534,9 +552,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             } ${100 - pct}%`;
           }
           syncVideoSlotRect();
+          syncTvSlotRect();
         });
       },
-      [mapSide, isVideoMode, cockpitTvMode, syncVideoSlotRect]
+      [mapSide, isVideoMode, cockpitTvMode, syncVideoSlotRect, syncTvSlotRect]
     );
 
     const handleDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -565,7 +584,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       }
       setIsDraggingSplit(false);
       setMapWidthPct(livePctRef.current);
-      window.requestAnimationFrame(syncVideoSlotRect);
+      window.requestAnimationFrame(() => {
+        syncVideoSlotRect();
+        syncTvSlotRect();
+      });
     };
 
     const commitScrubOnce = (val: number) => {
@@ -704,7 +726,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         {isMapExpanded ? (
           cockpitTvMode && tv.activeChannel ? (
             <div
-              className={`shrink-0 rounded-2xl border px-3 py-2 flex items-center justify-between gap-3 ${theme.cardElevated}`}
+              className={`shrink-0 rounded-2xl border px-3 py-2 flex items-center justify-between gap-2.5 ${theme.cardElevated}`}
             >
               <div className="flex items-center gap-2.5 min-w-0 flex-1">
                 <div
@@ -725,14 +747,14 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] font-black shrink-0">
-                      TV
+                      {tv.activeChannel.isRadio ? 'FM' : 'LIVE'}
                     </span>
                     <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
                       {tv.activeChannel.name}
                     </h4>
                   </div>
                   <p className={`text-[11px] font-bold truncate ${theme.textSub}`}>
-                    {tv.activeChannel.group} • Thu gọn bản đồ để xem tiếp TV
+                    {tv.activeChannel.group} • {tv.playerStatus.isPlaying ? 'Đang phát nền' : 'Đã tạm dừng'}
                   </p>
                 </div>
               </div>
@@ -740,15 +762,43 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
-                  onClick={handleToggleExpandMap}
-                  className="min-h-[36px] px-3 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold active:scale-95 transition"
+                  onClick={() => handleCockpitZapTv(-1)}
+                  aria-label="Kênh trước"
+                  className={`w-9 h-9 rounded-full border flex items-center justify-center active:scale-90 ${theme.iconBtn}`}
                 >
-                  Mở TV
+                  <ChevronLeft className="w-4 h-4" />
                 </button>
                 <button
                   type="button"
-                  onClick={() => setCockpitTvMode(false)}
-                  className={`min-h-[36px] px-3 rounded-full border text-xs font-bold active:scale-95 transition ${theme.iconBtn}`}
+                  onClick={() => tv.togglePlay(onPauseMusic)}
+                  aria-label={tv.playerStatus.isPlaying ? 'Tạm dừng TV' : 'Phát TV'}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-90 ${theme.primaryCta}`}
+                >
+                  {tv.playerStatus.isPlaying ? (
+                    <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
+                  ) : (
+                    <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCockpitZapTv(1)}
+                  aria-label="Kênh sau"
+                  className={`w-9 h-9 rounded-full border flex items-center justify-center active:scale-90 ${theme.iconBtn}`}
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleToggleExpandMap}
+                  className="min-h-[36px] px-3 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold active:scale-95 transition"
+                >
+                  Mở hình TV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeCockpitTvMode(false)}
+                  className={`hidden sm:inline-flex items-center min-h-[36px] px-3 rounded-full border text-xs font-bold active:scale-95 transition ${theme.iconBtn}`}
                 >
                   Nhạc
                 </button>
@@ -1169,7 +1219,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     <button
                       type="button"
                       onClick={() => {
-                        setCockpitTvMode(false);
+                        onChangeCockpitTvMode(false);
                         setShowTvPicker(false);
                         if (isVideoMode) onToggleViewMode();
                       }}
@@ -1184,7 +1234,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     <button
                       type="button"
                       onClick={() => {
-                        setCockpitTvMode(false);
+                        onChangeCockpitTvMode(false);
                         setShowTvPicker(false);
                         if (isSoundCloudTrack) {
                           onChangeMusicSource('youtube');
@@ -1208,7 +1258,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     <button
                       type="button"
                       onClick={() => {
-                        setCockpitTvMode(true);
+                        onChangeCockpitTvMode(true);
                         onPauseMusic();
                       }}
                       aria-label="Chế độ Xem TV & Radio trực tiếp ngay trong Cockpit"
@@ -1385,108 +1435,96 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               {/* TẦNG 2 (TRUNG TÂM CÂN ĐỐI TỈ LỆ): TV LIVE (hoặc Bảng chọn kênh TV) / VIDEO 16:9 / ALBUM + KARAOKE */}
               {cockpitTvMode ? (
                 <div className="flex-1 min-h-0 flex flex-col gap-1.5 overflow-hidden">
-                  {/* Sân khấu TV giữ mount khi mở bảng chọn kênh để tiếng Radio/VTV không bị ngắt khi lướt chọn kênh! */}
-                  <div
-                    className={`${
-                      showTvPicker ? 'hidden' : 'flex'
-                    } flex-1 min-h-0 flex-col gap-1.5`}
-                  >
-                    <div className="relative h-[180px] xs:h-[205px] car:h-auto car:flex-1 car:min-h-0 w-full">
-                      {isCockpitTvMounted && (
-                        <TvPlayerStage
-                          channel={tv.activeChannel}
-                          isLightTheme={isLightTheme}
-                          compact
-                          isMuted={tvMuted}
-                          forceProxy={tvForceProxy}
-                          reloadNonce={tvReloadNonce}
-                          videoRef={tvVideoRef}
-                          onPauseMusic={onPauseMusic}
-                          onZapNext={() => handleCockpitZapTv(1)}
-                          onForceProxyRetry={handleCockpitTvForceProxyRetry}
-                          onStatusChange={setTvStatus}
-                          onPingUpdate={tv.markChannelLiveState}
-                        />
-                      )}
-                      {tv.isLoadingPlaylist && !tv.activeChannel && (
-                        <div className="absolute inset-0 bg-black/75 rounded-2xl flex flex-col items-center justify-center gap-1.5">
-                          <Loader2 className="w-6 h-6 text-sky-400 animate-spin" />
-                          <span className="text-[11px] font-bold text-white/90">
-                            Đang nạp danh sách 524 kênh TV...
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Tên kênh + trạng thái Ping Live (chạm vào để mở danh sách kênh nhanh!) */}
-                    <button
-                      type="button"
-                      onClick={() => setShowTvPicker(true)}
-                      className={`shrink-0 w-full rounded-xl border px-2.5 py-1 flex items-center justify-between gap-2 text-left active:scale-[0.99] transition ${theme.well}`}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[8.5px] font-black uppercase shrink-0">
-                            {tv.activeChannel?.isVod
-                              ? 'PHIM'
-                              : tv.activeChannel?.isRadio
-                              ? 'FM'
-                              : 'LIVE'}
-                          </span>
-                          <span className={`text-xs font-extrabold truncate ${theme.text}`}>
-                            {tv.activeChannel?.name || 'Chạm để chọn kênh TV'}
-                          </span>
-                        </div>
-                        <p className={`text-[10px] font-semibold truncate mt-0.5 ${theme.textSub}`}>
-                          {tv.activeChannel
-                            ? `${tv.activeChannel.group}${
-                                tv.activeChannel.manifestType === 'mpd' ? ' • MPD' : ''
-                              } • ${tvStatus.streamMode === 'proxy' ? 'Proxy' : 'CDN'}`
-                            : '524 kênh TV & Radio sẵn sàng'}
-                        </p>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {activeTvPing && (
-                          <span
-                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[9.5px] font-mono font-extrabold ${
-                              activeTvPing.status === 'live'
-                                ? isLightTheme
-                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                                  : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300'
-                                : activeTvPing.status === 'dead'
-                                ? isLightTheme
-                                  ? 'bg-rose-50 border-rose-300 text-rose-700'
-                                  : 'bg-rose-500/20 border-rose-400/45 text-rose-300'
-                                : isLightTheme
-                                ? 'bg-blue-50 border-blue-200 text-blue-600'
-                                : 'bg-sky-500/20 border-sky-400/45 text-sky-300'
-                            }`}
-                          >
-                            <span
-                              className={`w-1.5 h-1.5 rounded-full ${
-                                activeTvPing.status === 'live'
-                                  ? 'bg-emerald-500'
-                                  : activeTvPing.status === 'dead'
-                                  ? 'bg-rose-500'
-                                  : 'bg-sky-400 animate-ping'
-                              }`}
-                            />
-                            <span>
-                              {activeTvPing.status === 'live'
-                                ? activeTvPing.latencyMs
-                                  ? `${activeTvPing.latencyMs}ms`
-                                  : 'Live'
-                                : activeTvPing.status === 'dead'
-                                ? 'Off'
-                                : '...'}
+                  {/* Khung neo sân khấu TV (Bộ phát TV duy nhất khớp 100% khung này — 0ms reload khi chuyển TV Live <-> Cockpit!) */}
+                  {!showTvPicker && (
+                    <div className="flex-1 min-h-0 flex flex-col gap-1.5">
+                      <div
+                        ref={tvSlotRef}
+                        aria-label="Khung phát Truyền hình & Radio trực tiếp trong Cockpit"
+                        className={`relative h-[180px] xs:h-[205px] car:h-auto car:flex-1 car:min-h-0 w-full rounded-2xl overflow-hidden bg-black border ${
+                          isLightTheme ? 'border-slate-300' : 'border-white/12'
+                        }`}
+                      >
+                        {tv.isLoadingPlaylist && !tv.activeChannel && (
+                          <div className="absolute inset-0 bg-black/75 rounded-2xl flex flex-col items-center justify-center gap-1.5">
+                            <Loader2 className="w-6 h-6 text-sky-400 animate-spin" />
+                            <span className="text-[11px] font-bold text-white/90">
+                              Đang nạp danh sách 524 kênh TV...
                             </span>
-                          </span>
+                          </div>
                         )}
-                        <span className={`text-[10px] font-extrabold ${theme.textMuted}`}>▾</span>
                       </div>
-                    </button>
-                  </div>
+
+                      {/* Tên kênh + trạng thái Ping Live (chạm vào để mở danh sách kênh nhanh!) */}
+                      <button
+                        type="button"
+                        onClick={() => setShowTvPicker(true)}
+                        className={`shrink-0 w-full rounded-xl border px-2.5 py-1 flex items-center justify-between gap-2 text-left active:scale-[0.99] transition ${theme.well}`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[8.5px] font-black uppercase shrink-0">
+                              {tv.activeChannel?.isVod
+                                ? 'PHIM'
+                                : tv.activeChannel?.isRadio
+                                ? 'FM'
+                                : 'LIVE'}
+                            </span>
+                            <span className={`text-xs font-extrabold truncate ${theme.text}`}>
+                              {tv.activeChannel?.name || 'Chạm để chọn kênh TV'}
+                            </span>
+                          </div>
+                          <p className={`text-[10px] font-semibold truncate mt-0.5 ${theme.textSub}`}>
+                            {tv.activeChannel
+                              ? `${tv.activeChannel.group}${
+                                  tv.activeChannel.manifestType === 'mpd' ? ' • MPD' : ''
+                                } • ${tv.playerStatus.streamMode === 'proxy' ? 'Proxy' : 'CDN'}`
+                              : '524 kênh TV & Radio sẵn sàng'}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {activeTvPing && (
+                            <span
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[9.5px] font-mono font-extrabold ${
+                                activeTvPing.status === 'live'
+                                  ? isLightTheme
+                                    ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                                    : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300'
+                                  : activeTvPing.status === 'dead'
+                                  ? isLightTheme
+                                    ? 'bg-rose-50 border-rose-300 text-rose-700'
+                                    : 'bg-rose-500/20 border-rose-400/45 text-rose-300'
+                                  : isLightTheme
+                                  ? 'bg-blue-50 border-blue-200 text-blue-600'
+                                  : 'bg-sky-500/20 border-sky-400/45 text-sky-300'
+                              }`}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  activeTvPing.status === 'live'
+                                    ? 'bg-emerald-500'
+                                    : activeTvPing.status === 'dead'
+                                    ? 'bg-rose-500'
+                                    : 'bg-sky-400 animate-ping'
+                                }`}
+                              />
+                              <span>
+                                {activeTvPing.status === 'live'
+                                  ? activeTvPing.latencyMs
+                                    ? `${activeTvPing.latencyMs}ms`
+                                    : 'Live'
+                                  : activeTvPing.status === 'dead'
+                                  ? 'Off'
+                                  : '...'}
+                              </span>
+                            </span>
+                          )}
+                          <span className={`text-[10px] font-extrabold ${theme.textMuted}`}>▾</span>
+                        </div>
+                      </button>
+                    </div>
+                  )}
 
                   {/* Bảng chọn kênh nhanh ngay trong Cockpit (đủ 100% kênh + đèn Ping Live/Off!) */}
                   {showTvPicker && (
@@ -1842,10 +1880,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 <div className="shrink-0 flex items-center justify-between gap-1.5 pt-0.5">
                   <button
                     type="button"
-                    onClick={handleCockpitTvProxyToggle}
+                    onClick={tv.switchStreamMode}
                     title="Đổi giữa phát CDN trực tiếp và Proxy chống chặn"
                     className={`h-9 short:h-8 px-2.5 rounded-xl border text-[10.5px] font-extrabold flex items-center gap-1 active:scale-95 transition ${
-                      tvStatus.streamMode === 'proxy'
+                      tv.playerStatus.streamMode === 'proxy'
                         ? isLightTheme
                           ? 'bg-blue-600 border-blue-600 text-white'
                           : 'bg-sky-500/25 border-sky-400/50 text-sky-200'
@@ -1854,7 +1892,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   >
                     <Wifi className="w-3.5 h-3.5 shrink-0" />
                     <span className="cq-hide-xs">
-                      {tvStatus.streamMode === 'proxy' ? 'Proxy' : 'CDN'}
+                      {tv.playerStatus.streamMode === 'proxy' ? 'Proxy' : 'CDN'}
                     </span>
                   </button>
 
@@ -1870,13 +1908,13 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
 
                     <button
                       type="button"
-                      onClick={handleCockpitTvPlayToggle}
-                      aria-label={tvStatus.isPlaying ? 'Tạm dừng TV' : 'Phát TV'}
+                      onClick={() => tv.togglePlay(onPauseMusic)}
+                      aria-label={tv.playerStatus.isPlaying ? 'Tạm dừng TV' : 'Phát TV'}
                       className={`w-11 h-11 short:w-9 short:h-9 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
                     >
-                      {tvStatus.isBuffering || tvStatus.isResolving ? (
+                      {tv.playerStatus.isBuffering || tv.playerStatus.isResolving ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : tvStatus.isPlaying ? (
+                      ) : tv.playerStatus.isPlaying ? (
                         <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
                       ) : (
                         <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
@@ -1896,28 +1934,28 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      onClick={() => setTvMuted((m) => !m)}
-                      aria-label={tvMuted ? 'Bật tiếng TV' : 'Tắt tiếng TV'}
+                      onClick={tv.toggleMute}
+                      aria-label={tv.isMuted ? 'Bật tiếng TV' : 'Tắt tiếng TV'}
                       className={`w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${
-                        tvMuted
+                        tv.isMuted
                           ? isLightTheme
                             ? 'bg-rose-50 border-rose-300 text-rose-600'
                             : 'bg-rose-500/25 border-rose-400/50 text-rose-300'
                           : theme.iconBtn
                       }`}
                     >
-                      {tvMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                      {tv.isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                     </button>
 
                     <button
                       type="button"
-                      onClick={() => setTvReloadNonce((n) => n + 1)}
+                      onClick={tv.reloadStream}
                       aria-label="Tải lại luồng kênh TV"
                       title="Tải lại kênh"
                       className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
                     >
                       <RefreshCw
-                        className={`w-3.5 h-3.5 ${tvStatus.isResolving ? 'animate-spin' : ''}`}
+                        className={`w-3.5 h-3.5 ${tv.playerStatus.isResolving ? 'animate-spin' : ''}`}
                       />
                     </button>
                   </div>

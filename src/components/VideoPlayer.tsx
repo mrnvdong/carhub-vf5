@@ -5,7 +5,6 @@ import React, {
   useRef,
   useMemo,
   useCallback,
-  Suspense,
 } from 'react';
 import {
   Play,
@@ -72,9 +71,9 @@ import { useCarHardwareControls } from '../hooks/useCarHardwareControls';
 import { useCockpitTelemetry } from '../hooks/useCockpitTelemetry';
 import { useTvLive } from '../hooks/useTvLive';
 import { CockpitView, VideoSlotRect } from './CockpitView';
+import { TvLiveView } from './TvLiveView';
+import { TvPlayerStage } from './TvPlayerStage';
 import { getCarTheme } from '../utils/theme';
-
-const LazyTvLiveView = React.lazy(() => import('./TvLiveView'));
 
 interface VideoPlayerProps {
   streamData: StreamData;
@@ -213,6 +212,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const activeLyricRef = useRef<HTMLButtonElement | null>(null);
   const lyricsContainerRef = useRef<HTMLDivElement | null>(null);
   const cockpitVideoRectRef = useRef<VideoSlotRect | null>(null);
+  const tvStageWrapperRef = useRef<HTMLDivElement>(null);
+  const tvPageRectRef = useRef<VideoSlotRect | null>(null);
+  const cockpitTvRectRef = useRef<VideoSlotRect | null>(null);
 
   const isSoundCloudTrack =
     streamData.source === 'soundcloud' || streamData.id.startsWith('sc_');
@@ -264,7 +266,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [activeNavSummary, setActiveNavSummary] = useState<ActiveNavSummary | null>(null);
   const [hasCockpitVideoSlot, setHasCockpitVideoSlot] = useState<boolean>(false);
   const [isDraggingCockpitSplit, setIsDraggingCockpitSplit] = useState<boolean>(false);
-  const [cockpitTvActive, setCockpitTvActive] = useState<boolean>(false);
+  const [isTvSessionActive, setIsTvSessionActive] = useState<boolean>(() => railSection === 'tv');
+  const [cockpitTvMode, setCockpitTvMode] = useState<boolean>(() => railSection === 'tv');
+  const [hasTvPageSlot, setHasTvPageSlot] = useState<boolean>(false);
+  const [hasCockpitTvSlot, setHasCockpitTvSlot] = useState<boolean>(false);
 
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [dragTime, setDragTime] = useState<number | null>(null);
@@ -286,17 +291,113 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const isNowPlayingView = railSection === 'nowPlaying';
   const isCockpitView = railSection === 'cockpit';
   const isTvView = railSection === 'tv';
+
+  const isTvViewRef = useRef<boolean>(isTvView);
+  isTvViewRef.current = isTvView;
+  const isCockpitViewRef = useRef<boolean>(isCockpitView);
+  isCockpitViewRef.current = isCockpitView;
+  const cockpitTvModeRef = useRef<boolean>(cockpitTvMode);
+  cockpitTvModeRef.current = cockpitTvMode;
+
   const showVideoInViewport = effectiveVideoMode && isNowPlayingView;
   const showVideoInCockpit =
-    effectiveVideoMode && isCockpitView && !cockpitTvActive && !isFullscreen && hasCockpitVideoSlot;
+    effectiveVideoMode && isCockpitView && !cockpitTvMode && !isFullscreen && hasCockpitVideoSlot;
+
+  const showTvInPage = isTvSessionActive && isTvView && !isFullscreen && hasTvPageSlot;
+  const showTvInCockpit =
+    isTvSessionActive && isCockpitView && cockpitTvMode && !isFullscreen && hasCockpitTvSlot;
+  const showTvVisible = showTvInPage || showTvInCockpit;
+
+  // Chuyển tab TV Live <-> Cockpit: tự kích hoạt session & tự bật chế độ TV trong Cockpit để giữ nguyên 1 bộ phát (0ms reload!)
+  useEffect(() => {
+    if (isTvView) {
+      setIsTvSessionActive(true);
+      setCockpitTvMode(true);
+    } else if (isNowPlayingView) {
+      setIsTvSessionActive(false);
+      setCockpitTvMode(false);
+    }
+  }, [isTvView, isNowPlayingView]);
+
+  // Nếu người dùng chọn bài nhạc mới từ Tìm kiếm / Khám phá / Playlist -> tắt TV để không chồng tiếng & không tốn 4G
+  const prevStreamIdForTvRef = useRef<string>(streamData.id);
+  useEffect(() => {
+    if (prevStreamIdForTvRef.current !== streamData.id) {
+      prevStreamIdForTvRef.current = streamData.id;
+      setIsTvSessionActive(false);
+      setCockpitTvMode(false);
+    }
+  }, [streamData.id]);
 
   const handleToggleCockpitViewMode = useCallback(() => {
     onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
   }, [isVideoMode, onViewModeChange]);
 
   const handleOpenFullTv = useCallback(() => {
+    setIsTvSessionActive(true);
+    setCockpitTvMode(true);
     onChangeRailSection('tv');
   }, [onChangeRailSection]);
+
+  const handleChangeCockpitTvMode = useCallback((active: boolean) => {
+    setCockpitTvMode(active);
+    setIsTvSessionActive(active);
+  }, []);
+
+  const applyTvStageWrapperPosition = useCallback((rect: VideoSlotRect | null) => {
+    const wrapper = tvStageWrapperRef.current;
+    if (!wrapper) return;
+    if (rect && rect.width > 40 && rect.height > 40) {
+      wrapper.style.top = `${rect.top}px`;
+      wrapper.style.left = `${rect.left}px`;
+      wrapper.style.bottom = 'auto';
+      wrapper.style.right = 'auto';
+      wrapper.style.width = `${rect.width}px`;
+      wrapper.style.height = `${rect.height}px`;
+    } else {
+      wrapper.style.top = '';
+      wrapper.style.left = '';
+      wrapper.style.bottom = '';
+      wrapper.style.right = '';
+      wrapper.style.width = '';
+      wrapper.style.height = '';
+    }
+  }, []);
+
+  // Đồng bộ tọa độ bộ phát TV duy nhất vào khung trang TV Live (0 re-render khi resize!)
+  const handleTvPageSlotRectChange = useCallback(
+    (rect: VideoSlotRect | null) => {
+      tvPageRectRef.current = rect;
+      const valid = Boolean(rect && rect.width > 40 && rect.height > 40);
+      if (isTvViewRef.current) {
+        applyTvStageWrapperPosition(valid ? rect : null);
+      }
+      setHasTvPageSlot((prev) => (prev === valid ? prev : valid));
+    },
+    [applyTvStageWrapperPosition]
+  );
+
+  // Đồng bộ tọa độ bộ phát TV duy nhất vào khung Cockpit TV (60fps khi kéo chia tỉ lệ, 0ms reload!)
+  const handleCockpitTvSlotRectChange = useCallback(
+    (rect: VideoSlotRect | null) => {
+      cockpitTvRectRef.current = rect;
+      const valid = Boolean(rect && rect.width > 40 && rect.height > 40);
+      if (isCockpitViewRef.current && cockpitTvModeRef.current) {
+        applyTvStageWrapperPosition(valid ? rect : null);
+      }
+      setHasCockpitTvSlot((prev) => (prev === valid ? prev : valid));
+    },
+    [applyTvStageWrapperPosition]
+  );
+
+  useLayoutEffect(() => {
+    const activeRect = showTvInPage
+      ? tvPageRectRef.current
+      : showTvInCockpit
+      ? cockpitTvRectRef.current
+      : null;
+    applyTvStageWrapperPosition(activeRect);
+  }, [showTvInPage, showTvInCockpit, isFullscreen, isTvSessionActive, applyTvStageWrapperPosition]);
 
   // Đồng bộ trực tiếp tọa độ <iframe> duy nhất vào khung Video 16:9 trong Cockpit (0 re-render khi kéo chia tỉ lệ!)
   const handleCockpitVideoSlotRectChange = useCallback((rect: VideoSlotRect | null) => {
@@ -375,7 +476,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   // Kho TV Live & Ping dùng chung cho cả Cockpit TV lẫn trang TV Live đầy đủ (chỉ nạp khi bật TV!)
-  const tvController = useTvLive(isTvView || cockpitTvActive, showToast);
+  const tvController = useTvLive(isTvSessionActive || isTvView, showToast);
+  const handleTvZapNext = useCallback(() => {
+    tvController.zapChannel(1);
+  }, [tvController]);
 
   // Đồng hồ xe
   useEffect(() => {
@@ -892,6 +996,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const handlePlayExplicit = useCallback(() => {
+    setIsTvSessionActive(false);
+    setCockpitTvMode(false);
     if (isSoundCloudTrackRef.current) {
       const audio = audioRef.current;
       if (audio) {
@@ -1167,6 +1273,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
         }}
       />
+
+      {/* BỘ PHÁT TV LIVE & RADIO DUY NHẤT (Dùng chung cho cả trang TV Live lẫn Cockpit -> chuyển qua lại 0ms reload!) */}
+      {isTvSessionActive && (
+        <div
+          ref={tvStageWrapperRef}
+          className={
+            showTvVisible
+              ? `fixed z-20 overflow-hidden rounded-2xl shadow-xl ${
+                  isDraggingCockpitSplit ? 'pointer-events-none' : 'pointer-events-auto'
+                }`
+              : 'fixed bottom-0 right-0 w-[2px] h-[2px] opacity-[0.01] pointer-events-none overflow-hidden'
+          }
+        >
+          <TvPlayerStage
+            channel={tvController.activeChannel}
+            isLightTheme={isLightTheme}
+            compact={showTvInCockpit}
+            isMuted={tvController.isMuted}
+            forceProxy={tvController.forceProxy}
+            reloadNonce={tvController.reloadNonce}
+            videoRef={tvController.videoRef}
+            onPauseMusic={pauseAllMusicForTv}
+            onZapNext={handleTvZapNext}
+            onForceProxyRetry={tvController.forceProxyRetry}
+            onStatusChange={tvController.setPlayerStatus}
+            onPingUpdate={tvController.markChannelLiveState}
+          />
+        </div>
+      )}
+
       {/* NỀN ÁNH SÁNG ĐỘNG (Tự đồng bộ Sáng / Tối theo lớp bản đồ & chế độ Ngày/Đêm!) */}
       {!isFullscreen && (
         <>
@@ -1238,7 +1374,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Nút 1-chạm chuyển đổi Music <-> Video */}
           <button
             type="button"
-            onClick={() => onViewModeChange(isVideoMode ? 'ytmusic' : 'classic')}
+            onClick={() => {
+              if (isCockpitView && cockpitTvMode) {
+                setCockpitTvMode(false);
+                setIsTvSessionActive(false);
+              }
+              onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
+            }}
             aria-label={isVideoMode ? 'Chuyển sang chế độ Nghe Nhạc' : 'Chuyển sang chế độ Xem Video'}
             className={`flex car:flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] px-2.5 car:px-1 car:w-full py-1 rounded-xl border shadow-sm ios-spring-fast active:scale-95 shrink-0 ${
               isVideoMode
@@ -2335,9 +2477,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onChangeMapTheme={onChangeMapTheme}
             isLightTheme={isLightTheme}
             tv={tvController}
+            cockpitTvMode={cockpitTvMode}
+            onChangeCockpitTvMode={handleChangeCockpitTvMode}
+            onTvSlotRectChange={handleCockpitTvSlotRectChange}
             onPauseMusic={pauseAllMusicForTv}
             onOpenFullTv={handleOpenFullTv}
-            onCockpitTvActiveChange={setCockpitTvActive}
           />
         )}
 
@@ -2345,23 +2489,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             B2. MÀN HÌNH TRUYỀN HÌNH & RADIO TRỰC TIẾP M3U8 (VTV, VOV Giao thông, HTV, Thể thao...)
            ------------------------------------------------------------------- */}
         {isTvView && (
-          <Suspense
-            fallback={
-              <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center">
-                <Loader2 className="w-9 h-9 text-blue-500 animate-spin" />
-                <p className={`text-sm font-extrabold ${theme.textSub}`}>
-                  Đang mở Truyền hình & Radio trực tiếp...
-                </p>
-              </div>
-            }
-          >
-            <LazyTvLiveView
-              tv={tvController}
-              onPauseMusic={pauseAllMusicForTv}
-              onNotifyToast={showToast}
-              isLightTheme={isLightTheme}
-            />
-          </Suspense>
+          <TvLiveView
+            tv={tvController}
+            onPauseMusic={pauseAllMusicForTv}
+            onNotifyToast={showToast}
+            onTvSlotRectChange={handleTvPageSlotRectChange}
+            isLightTheme={isLightTheme}
+          />
         )}
 
         {/* -------------------------------------------------------------------
