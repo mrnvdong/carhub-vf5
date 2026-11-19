@@ -68,6 +68,15 @@ export interface ActiveNavSummary {
   nextInstruction: string;
   nextArrow: string;
   nextDistM: number;
+  isRerouting?: boolean;
+  isRouteOverview?: boolean;
+  voiceNavEnabled?: boolean;
+}
+
+export interface CockpitNavControls {
+  cancelRoute: () => void;
+  startGuidanceFollow: () => void;
+  toggleVoiceNav: () => void;
 }
 
 export type UiScale = 'normal' | 'large' | 'xlarge';

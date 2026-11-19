@@ -20,9 +20,14 @@ import {
   MapPin,
   Video as CameraIcon,
   AlertTriangle,
+  Flag,
+  Volume2,
+  VolumeX,
+  X,
 } from 'lucide-react';
 import {
   ActiveNavSummary,
+  CockpitNavControls,
   MusicSource,
   PendingNavTarget,
   RepeatMode,
@@ -148,10 +153,21 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
   }) => {
     const splitContainerRef = useRef<HTMLDivElement | null>(null);
     const telemetryCardRef = useRef<HTMLDivElement | null>(null);
+    const navControlsRef = useRef<CockpitNavControls | null>(null);
     const videoSlotRef = useRef<HTMLDivElement | null>(null);
     const badgeTextRef = useRef<HTMLSpanElement | null>(null);
     const rafDragRef = useRef<number | null>(null);
     const isScrubbingRef = useRef<boolean>(false);
+
+    const [cockpitNavSummary, setCockpitNavSummary] = useState<ActiveNavSummary | null>(null);
+
+    const handleActiveNavChange = useCallback(
+      (summary: ActiveNavSummary | null) => {
+        setCockpitNavSummary(summary);
+        onActiveNavChange(summary);
+      },
+      [onActiveNavChange]
+    );
 
     const {
       speedKmh,
@@ -258,6 +274,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       mapWidthPct,
       activeLimit,
       primaryHazard?.label,
+      Boolean(cockpitNavSummary),
+      cockpitNavSummary?.isRouteOverview,
       syncVideoSlotRect,
     ]);
 
@@ -442,7 +460,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 syncCode={syncCode}
                 incomingNavTarget={incomingNavTarget}
                 onConsumeIncomingNav={onConsumeIncomingNav}
-                onActiveNavChange={onActiveNavChange}
+                onActiveNavChange={handleActiveNavChange}
+                navControlsRef={navControlsRef}
                 onNotifyToast={onNotifyToast}
               />
             </Suspense>
@@ -752,6 +771,85 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   </span>
                 )}
               </div>
+
+              {/* Hàng 3 (Chỉ hiện khi đang Dẫn đường): Thẻ hướng dẫn rẽ, đích đến & nút điều khiển chỉ đường */}
+              {cockpitNavSummary && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="mt-1.5 short:mt-1 rounded-xl bg-sky-600/35 border border-sky-400/55 px-2.5 py-1.5 short:px-2 short:py-1 flex flex-col gap-1.5 shadow-inner"
+                >
+                  <div className="flex items-center justify-between gap-2 min-w-0">
+                    <div className="min-w-0 flex-1">
+                      {cockpitNavSummary.isRerouting ? (
+                        <p className="text-xs short:text-[11px] font-black text-amber-300 flex items-center gap-1.5">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                          <span className="truncate">Đang tính lại đường đi mới...</span>
+                        </p>
+                      ) : (
+                        <p className="text-xs short:text-[11px] font-black text-white leading-snug line-clamp-1">
+                          {cockpitNavSummary.nextArrow} {cockpitNavSummary.nextInstruction}
+                          {cockpitNavSummary.nextDistM > 0
+                            ? ` (${cockpitNavSummary.nextDistM}m)`
+                            : ''}
+                        </p>
+                      )}
+                      <div className="flex items-center gap-1 text-[10.5px] short:text-[10px] font-bold text-sky-200 truncate mt-0.5">
+                        <Flag className="w-3 h-3 shrink-0 text-sky-300" />
+                        <span className="truncate">
+                          {cockpitNavSummary.destinationName} • {cockpitNavSummary.remainingKm} km (
+                          {cockpitNavSummary.remainingMin}p)
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {cockpitNavSummary.isRouteOverview && (
+                        <button
+                          type="button"
+                          onClick={() => navControlsRef.current?.startGuidanceFollow()}
+                          title="Bắt đầu dẫn đường (Bám mũi xe 3D)"
+                          className="h-7 px-2 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-slate-950 text-[10.5px] font-black flex items-center gap-1 shadow active:scale-95 transition"
+                        >
+                          <Play className="w-3 h-3 fill-slate-950 shrink-0" />
+                          <span className="cq-hide-sm">Bắt đầu</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => navControlsRef.current?.toggleVoiceNav()}
+                        aria-label="Bật hoặc tắt giọng nói chỉ đường"
+                        title={
+                          cockpitNavSummary.voiceNavEnabled
+                            ? 'Đang bật giọng nói chỉ đường'
+                            : 'Đang tắt giọng nói chỉ đường'
+                        }
+                        className={`w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition ${
+                          cockpitNavSummary.voiceNavEnabled
+                            ? 'bg-emerald-400 text-slate-950'
+                            : 'bg-white/15 text-white/75 hover:bg-white/25'
+                        }`}
+                      >
+                        {cockpitNavSummary.voiceNavEnabled ? (
+                          <Volume2 className="w-3.5 h-3.5" />
+                        ) : (
+                          <VolumeX className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => navControlsRef.current?.cancelRoute()}
+                        aria-label="Hủy lộ trình dẫn đường"
+                        title="Hủy lộ trình"
+                        className="w-7 h-7 rounded-full bg-white/15 hover:bg-rose-500 text-white flex items-center justify-center active:scale-90 transition"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* =================================================================

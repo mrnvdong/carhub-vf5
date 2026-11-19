@@ -38,7 +38,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
-import { ActiveNavSummary, PendingNavTarget, SavedPlace } from '../types';
+import { ActiveNavSummary, CockpitNavControls, PendingNavTarget, SavedPlace } from '../types';
 import { sendNavToCar } from '../services/sync';
 import { playTurnChime, speakVietnamese, unlockCarAudio } from '../services/voiceAudio';
 
@@ -322,6 +322,7 @@ export interface CarCockpitMapProps {
   incomingNavTarget: PendingNavTarget | null;
   onConsumeIncomingNav: () => void;
   onActiveNavChange?: (summary: ActiveNavSummary | null) => void;
+  navControlsRef?: React.MutableRefObject<CockpitNavControls | null>;
   onNotifyToast?: (msg: string) => void;
 }
 
@@ -392,6 +393,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
   incomingNavTarget,
   onConsumeIncomingNav,
   onActiveNavChange,
+  navControlsRef,
   onNotifyToast,
 }) => {
   const {
@@ -1253,22 +1255,58 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
     }
   }, [activeRoute, nextTurn, voiceNavEnabled, gpsStatus]);
 
-  // Đồng bộ tóm tắt lộ trình lên VideoPlayer cho thanh Mini Turn & Speed Pill khi chuyển tab
+  // Đồng bộ điều khiển dẫn đường (Hủy / Bắt đầu bám mũi xe / Bật tắt giọng nói) sang cột Cockpit
+  useEffect(() => {
+    if (!navControlsRef) return;
+    navControlsRef.current = {
+      cancelRoute: () => setActiveRoute(null),
+      startGuidanceFollow: () => {
+        setIsRouteOverview(false);
+        setIsFollowing(true);
+      },
+      toggleVoiceNav: () => {
+        unlockCarAudio();
+        setVoiceNavEnabled((v) => {
+          const next = !v;
+          onNotifyToast?.(
+            next ? '🔊 Đã bật giọng nói chỉ đường tiếng Việt' : '🔇 Đã tắt giọng nói chỉ đường'
+          );
+          return next;
+        });
+      },
+    };
+    return () => {
+      if (navControlsRef) navControlsRef.current = null;
+    };
+  }, [navControlsRef, onNotifyToast]);
+
+  // Đồng bộ tóm tắt lộ trình lên Cockpit (cột Tốc độ-Thời tiết-Giờ) & VideoPlayer Mini Pill
   useEffect(() => {
     if (!onActiveNavChange) return;
-    if (!activeRoute || !routeProgress) {
+    if (!activeRoute) {
       onActiveNavChange(null);
       return;
     }
     onActiveNavChange({
       destinationName: activeRoute.destinationName,
-      remainingKm: routeProgress.remainingKm,
-      remainingMin: routeProgress.remainingMin,
+      remainingKm: routeProgress ? routeProgress.remainingKm : activeRoute.distanceKm,
+      remainingMin: routeProgress ? routeProgress.remainingMin : activeRoute.durationMin,
       nextInstruction: nextTurn?.step.instruction || 'Tiếp tục theo lộ trình',
       nextArrow: nextTurn?.step.arrow || '⬆️',
       nextDistM: nextTurn?.distM || 0,
+      isRerouting,
+      isRouteOverview,
+      voiceNavEnabled,
     });
-  }, [activeRoute, routeProgress, nextTurn, onActiveNavChange]);
+  }, [
+    activeRoute,
+    routeProgress,
+    nextTurn,
+    isRerouting,
+    isRouteOverview,
+    voiceNavEnabled,
+    onActiveNavChange,
+  ]);
 
   const handleSendPlaceToCar = async (pl: PlaceItem, idx: number) => {
     if (syncCode.length < 4) {
@@ -1854,15 +1892,12 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       )}
 
       {/* =====================================================================
-          3. THẺ HƯỚNG DẪN RẼ TIẾP THEO (Đặt dưới cụm ODO bên trái -> KHÔNG BAO GIỜ đè nhau khi map hẹp!)
+          3. THẺ HƯỚNG DẪN RẼ TIẾP THEO (Chỉ hiện trên mặt bản đồ khi Mở rộng toàn màn hình;
+             ở chế độ chia đôi Cockpit đã gom gọn sang cột Tốc độ • Thời tiết • Giờ!)
          ===================================================================== */}
-      {activeRoute && !navDrawerOpen && !layoutMenuOpen && (
+      {isMapExpanded && activeRoute && !navDrawerOpen && !layoutMenuOpen && (
         <div
-          className={`absolute ${
-            isMapExpanded
-              ? 'top-[4.65rem] short:top-[4.1rem]'
-              : 'top-13 short:top-11'
-          } left-2 z-20 max-w-[min(285px,calc(100%-16px))] backdrop-blur-xl border rounded-2xl p-2.5 flex flex-col gap-1.5 shadow-2xl ${
+          className={`absolute top-[4.65rem] short:top-[4.1rem] left-2 z-20 max-w-[min(285px,calc(100%-16px))] backdrop-blur-xl border rounded-2xl p-2.5 flex flex-col gap-1.5 shadow-2xl ${
             isLightMap
               ? 'bg-blue-700 text-white border-blue-500'
               : 'bg-sky-950/96 text-white border-sky-400/70'
