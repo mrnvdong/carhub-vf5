@@ -297,7 +297,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [episode?.linkM3u8, episode?.slug, playerMode, reloadNonce]);
+  }, [episode?.linkM3u8, episode?.linkEmbed, episode?.slug, playerMode, reloadNonce]);
 
   // Đếm ngược 8 giây tự sang tập kế tiếp
   useEffect(() => {
@@ -448,8 +448,9 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     >
       {/* TRÌNH PHÁT EMBED DỰ PHÒNG */}
       {playerMode === 'embed' && episode.linkEmbed ? (
-        <div className="relative w-full h-full">
+        <div className="absolute inset-0 w-full h-full">
           <iframe
+            key={episode.linkEmbed}
             src={episode.linkEmbed}
             title={`${movieTitle} - ${episode.name}`}
             allow="autoplay; fullscreen; picture-in-picture"
@@ -475,7 +476,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
             poster={posterUrl || undefined}
             playsInline
             muted={isMuted}
-            className="w-full h-full object-contain bg-black"
+            className="absolute inset-0 w-full h-full object-contain bg-black"
             onLoadedMetadata={() => {
               const v = videoRef.current;
               if (!v) return;

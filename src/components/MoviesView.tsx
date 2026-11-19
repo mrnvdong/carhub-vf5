@@ -131,6 +131,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     () => new Set(favorites.map((x) => getMovieKey(x.source, x.slug))),
     [favorites]
   );
+  const activeSourceTabs = useMemo(() => getMovieTabsForSource(movieSource), [movieSource]);
 
   // Trạng thái Phòng Chiếu Phim (Detail + Watch)
   const [activeTarget, setActiveTarget] = useState<{ slug: string; source: MovieSource } | null>(
@@ -874,8 +875,6 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
       : libraryMode === 'browse'
       ? items
       : [];
-
-  const activeSourceTabs = useMemo(() => getMovieTabsForSource(movieSource), [movieSource]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-2 max-w-[1920px] mx-auto w-full animate-ios-browse-in">
