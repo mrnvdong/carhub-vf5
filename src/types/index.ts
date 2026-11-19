@@ -84,7 +84,15 @@ export type ViewMode = 'classic' | 'ytmusic';
 export type RepeatMode = 'off' | 'all' | 'one';
 export type NightMode = 'auto' | 'on' | 'off';
 export type MapTheme = 'vector3d' | 'dark3d' | 'osm' | 'satellite';
-export type RailSection = 'nowPlaying' | 'cockpit' | 'tv' | 'news' | 'browse' | 'favorites' | 'history';
+export type RailSection =
+  | 'nowPlaying'
+  | 'cockpit'
+  | 'tv'
+  | 'news'
+  | 'movies'
+  | 'browse'
+  | 'favorites'
+  | 'history';
 export type QueueSource = 'explore' | 'mix' | 'favorites' | 'playlist' | 'history';
 export type CockpitMediaTab = 'music' | 'video' | 'tv' | 'news';
 
@@ -208,4 +216,99 @@ export interface NewsFeedResponse {
   total: number;
   items: NewsItem[];
   error?: string;
+}
+
+export type MovieListType =
+  | 'moi-cap-nhat'
+  | 'phim-thuyet-minh'
+  | 'phim-long-tieng'
+  | 'phim-le'
+  | 'phim-bo'
+  | 'hoat-hinh'
+  | 'tv-shows'
+  | 'phim-vietsub';
+
+export interface MovieTaxon {
+  name: string;
+  slug: string;
+}
+
+export interface MovieItem {
+  id: string;
+  name: string;
+  originName: string;
+  slug: string;
+  type: string;
+  posterUrl: string;
+  thumbUrl: string;
+  year: number;
+  quality: string;
+  lang: string;
+  time: string;
+  episodeCurrent: string;
+  episodeTotal: string;
+  chieurap: boolean;
+  subDocQuyen: boolean;
+  rating: number;
+  categories: MovieTaxon[];
+  countries: MovieTaxon[];
+}
+
+export interface MovieEpisode {
+  name: string;
+  slug: string;
+  filename: string;
+  linkEmbed: string;
+  linkM3u8: string;
+}
+
+export interface MovieServer {
+  serverName: string;
+  episodes: MovieEpisode[];
+}
+
+export interface MovieDetail extends MovieItem {
+  content: string;
+  status: string;
+  trailerUrl: string;
+  notify: string;
+  showtimes: string;
+  view: number;
+  actors: string[];
+  directors: string[];
+  servers: MovieServer[];
+}
+
+export interface MovieListResponse {
+  title: string;
+  keyword?: string;
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  updateToday?: number;
+  items: MovieItem[];
+  error?: string;
+}
+
+export interface MovieMetaResponse {
+  genres: MovieTaxon[];
+  countries: MovieTaxon[];
+}
+
+export interface MovieWatchHistoryItem {
+  slug: string;
+  name: string;
+  originName: string;
+  posterUrl: string;
+  thumbUrl: string;
+  quality: string;
+  lang: string;
+  year: number;
+  serverIndex: number;
+  serverName: string;
+  episodeSlug: string;
+  episodeName: string;
+  currentTime: number;
+  duration: number;
+  updatedAt: number;
 }

@@ -46,6 +46,7 @@ import {
   FastForward,
   Navigation,
   Newspaper,
+  Clapperboard,
 } from 'lucide-react';
 import {
   StreamData,
@@ -76,6 +77,7 @@ import { CockpitView, VideoSlotRect } from './CockpitView';
 import { TvLiveView } from './TvLiveView';
 import { TvPlayerStage } from './TvPlayerStage';
 import { NewsAudioView } from './NewsAudioView';
+import { MoviesView } from './MoviesView';
 import { getCarTheme } from '../utils/theme';
 
 interface VideoPlayerProps {
@@ -298,6 +300,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const isCockpitView = railSection === 'cockpit';
   const isTvView = railSection === 'tv';
   const isNewsView = railSection === 'news';
+  const isMoviesView = railSection === 'movies';
 
   const isTvViewRef = useRef<boolean>(isTvView);
   isTvViewRef.current = isTvView;
@@ -1104,6 +1107,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setCockpitNewsMode(true);
   }, [postEmbedCommand]);
 
+  const pauseAllOtherAudioForMovies = useCallback(() => {
+    try {
+      audioRef.current?.pause();
+    } catch {}
+    postEmbedCommand('pauseVideo');
+    setIsPlaying(false);
+    setIsTvSessionActive(false);
+    setCockpitTvMode(false);
+    setCockpitNewsMode(false);
+    newsControllerRef.current?.pauseNews();
+  }, [postEmbedCommand]);
+
   // Bộ phát Báo Audio Báo Mới dùng chung toàn app (1 thẻ <audio> duy nhất -> chuyển Báo Audio <-> Cockpit 0ms reload!)
   const newsController = useNewsAudio(
     isNewsView || cockpitNewsMode,
@@ -1492,6 +1507,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 railSection !== 'news' && (
                   <span className="absolute top-1.5 right-2 w-2 h-2 rounded-full bg-amber-400 animate-ping" />
                 )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onChangeRailSection('movies')}
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+                railSection === 'movies' ? theme.railMovieActive : theme.railNavIdle
+              }`}
+            >
+              <Clapperboard className="w-5 h-5 shrink-0" />
+              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
+                Phim
+              </span>
             </button>
 
             <button
@@ -2663,9 +2691,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
 
         {/* -------------------------------------------------------------------
+            B4. RẠP PHIM KKPHIM (30.000+ Phim Lẻ / Phim Bộ / Thuyết Minh / Lồng Tiếng • HLS 1080p Sạch QC!)
+           ------------------------------------------------------------------- */}
+        {isMoviesView && (
+          <MoviesView
+            isLightTheme={isLightTheme}
+            onPauseOtherAudio={pauseAllOtherAudioForMovies}
+            onNotifyToast={showToast}
+          />
+        )}
+
+        {/* -------------------------------------------------------------------
             C. MÀN HÌNH KHÁM PHÁ / PLAYLIST ĐỒNG BỘ / LỊCH SỬ + MINI PLAYER
            ------------------------------------------------------------------- */}
-        {!isNowPlayingView && !isCockpitView && !isTvView && !isNewsView && (
+        {!isNowPlayingView && !isCockpitView && !isTvView && !isNewsView && !isMoviesView && (
           <div
             key={`browse-${railSection}-${viewMode}-${selectedPlaylistId}`}
             className="flex-1 flex flex-col min-h-0 max-w-[1920px] mx-auto w-full animate-ios-browse-in"
