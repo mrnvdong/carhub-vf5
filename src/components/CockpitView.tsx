@@ -14,7 +14,7 @@ import {
   ArrowLeftRight,
   GripVertical,
   Tv,
-  Quote,
+  Music,
 } from 'lucide-react';
 import {
   ActiveNavSummary,
@@ -172,19 +172,19 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
 
     const showVideoSlot = isVisible && isVideoMode && !isMapExpanded;
 
-    // Đo tọa độ khung phát Video trong Cockpit và đồng bộ trực tiếp tới <iframe> YouTube duy nhất (0ms ngắt tiếng!)
+    // Đo tọa độ chính xác của khung Video 16:9 và đồng bộ trực tiếp trước khi trình duyệt vẽ frame (0 giật, 0 vỡ layout!)
     const syncVideoSlotRect = useCallback(() => {
       if (!showVideoSlot || !videoSlotRef.current) {
         onVideoSlotRectChange(null);
         return;
       }
       const r = videoSlotRef.current.getBoundingClientRect();
-      if (r.width > 24 && r.height > 24) {
+      if (r.width > 40 && r.height > 40) {
         onVideoSlotRectChange({
-          top: Math.round(r.top * 10) / 10,
-          left: Math.round(r.left * 10) / 10,
-          width: Math.round(r.width * 10) / 10,
-          height: Math.round(r.height * 10) / 10,
+          top: r.top,
+          left: r.left,
+          width: r.width,
+          height: r.height,
         });
       } else {
         onVideoSlotRectChange(null);
@@ -196,8 +196,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       if (!showVideoSlot) return;
 
       const rafId = window.requestAnimationFrame(syncVideoSlotRect);
-      const t1 = window.setTimeout(syncVideoSlotRect, 140);
-      const t2 = window.setTimeout(syncVideoSlotRect, 360);
+      const t1 = window.setTimeout(syncVideoSlotRect, 120);
 
       const slotEl = videoSlotRef.current;
       const containerEl = splitContainerRef.current;
@@ -215,7 +214,6 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       return () => {
         window.cancelAnimationFrame(rafId);
         window.clearTimeout(t1);
-        window.clearTimeout(t2);
         ro?.disconnect();
         window.removeEventListener('resize', syncVideoSlotRect);
         window.visualViewport?.removeEventListener('resize', syncVideoSlotRect);
@@ -263,7 +261,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       setIsMapExpanded((v) => !v);
     }, []);
 
-    // Kéo thả 60fps siêu mượt: Cập nhật biến CSS + tọa độ Video trực tiếp trên DOM (0 lần re-render React!)
+    // Kéo thả 60fps siêu mượt: Cập nhật biến CSS + tọa độ Video 16:9 trực tiếp trên DOM (0 lần re-render React!)
     const updateSplitFromClientX = useCallback(
       (clientX: number) => {
         const container = splitContainerRef.current;
@@ -345,11 +343,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     return (
       <div
         ref={splitContainerRef}
-        onAnimationEnd={syncVideoSlotRect}
         style={{ '--map-pct': `${mapWidthPct}%` } as React.CSSProperties}
         className={`${
           isVisible ? 'flex' : 'hidden'
-        } relative flex-1 min-h-0 h-full w-full max-w-[1560px] mx-auto animate-ios-browse-in overflow-y-auto car:overflow-hidden no-scrollbar ${
+        } relative flex-1 min-h-0 h-full w-full max-w-[1560px] mx-auto overflow-y-auto car:overflow-hidden no-scrollbar ${
           isMapExpanded
             ? 'flex-col gap-2'
             : `flex-col ${
@@ -357,7 +354,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               } gap-2.5 car:gap-0 items-stretch`
         }`}
       >
-        {/* Hiển thị nhãn % trực quan giữa màn hình khi đang kéo */}
+        {/* Nhãn % trực quan giữa màn hình khi đang kéo */}
         {isDraggingSplit && (
           <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-1.5 rounded-full bg-emerald-500 text-black text-xs font-black shadow-2xl pointer-events-none">
             <span ref={badgeTextRef}>
@@ -368,7 +365,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         )}
 
         {/* =====================================================================
-            1. KHUNG BẢN ĐỒ 3D DẪN ĐƯỜNG & HUD TỐC ĐỘ (Bọc ErrorBoundary + React.memo)
+            1. KHUNG BẢN ĐỒ 3D DẪN ĐƯỜNG & HUD TỐC ĐỘ
            ===================================================================== */}
         <div
           className={`relative ${isDraggingSplit ? 'pointer-events-none select-none' : ''} ${
@@ -413,7 +410,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         </div>
 
         {/* =====================================================================
-            2. TAY NẮM KÉO TỈ LỆ CẢM ỨNG RỘNG (44px vùng chạm thực tế, 60fps không giật!)
+            2. TAY NẮM KÉO TỈ LỆ CẢM ỨNG RỘNG (44px hit-zone, 60fps không giật!)
            ===================================================================== */}
         {!isMapExpanded && (
           <div className="hidden car:flex relative z-30 items-center justify-center w-3 shrink-0 select-none">
@@ -443,7 +440,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         )}
 
         {/* =====================================================================
-            3. KHUNG GIẢI TRÍ: LỜI BÀI HÁT (MUSIC) HOẶC PHÁT VIDEO YOUTUBE TRỰC TIẾP (VIDEO)
+            3. KHUNG GIẢI TRÍ COCKPIT (Cấu trúc 3 tầng cố định cân đối chuẩn CarPlay — đổi Nhạc ↔ Video 0 giật!)
            ===================================================================== */}
         {isMapExpanded ? (
           <div
@@ -502,7 +499,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         ) : (
           <div
             {...gestureHandlers}
-            className={`cockpit-pane-cq flex-1 min-w-0 min-h-0 h-full bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-2.5 sm:p-3 short:p-2 flex flex-col justify-between gap-2 short:gap-1.5 relative overflow-hidden shadow-2xl ${
+            className={`cockpit-pane-cq flex-1 min-w-0 min-h-0 h-full bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-3 sm:p-3.5 short:p-2.5 flex flex-col justify-between gap-2.5 short:gap-2 relative overflow-hidden shadow-2xl ${
               isDraggingSplit ? 'pointer-events-none select-none' : ''
             }`}
           >
@@ -512,66 +509,44 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               </div>
             )}
 
-            {/* HEADER BÀI HÁT / VIDEO */}
-            <div className="flex items-center gap-2 shrink-0">
-              {!isVideoMode && (
-                <div
-                  onClick={onTogglePlay}
-                  className="relative w-12 h-12 sm:w-14 sm:h-14 short:w-11 short:h-11 rounded-2xl overflow-hidden shrink-0 border border-white/15 shadow-lg cursor-pointer bg-black"
-                >
-                  <img
-                    src={streamData.thumbnailUrl}
-                    alt={streamData.title}
-                    className="w-full h-full object-cover"
-                  />
-                  {isBuffering && (
-                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                      <Loader2 className="w-5 h-5 text-white animate-spin" />
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="min-w-0 flex-1">
-                {!isVideoMode && (
-                  <span className="cq-hide-sm inline-block text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/10 text-white/65 mb-0.5">
-                    Vuốt ⇄ qua bài • Đúp ❤️
-                  </span>
-                )}
-                <h3 className="text-xs sm:text-sm font-extrabold text-white line-clamp-1">
-                  {streamData.title}
-                </h3>
-                <p className="text-[11px] text-white/65 font-semibold truncate">
-                  {streamData.uploader}
-                </p>
-              </div>
-
-              <div className="flex items-center gap-1 shrink-0">
-                {/* Nút 1 chạm đổi nhanh chế độ Lời nhạc <-> Video ngay trong Cockpit */}
+            {/* TẦNG 1 (CỐ ĐỊNH): THANH CHUYỂN NHẠC / VIDEO & NÚT TIỆN ÍCH GỌN SẠCH — KHÔNG CHEN TÊN BÀI HÁT! */}
+            <div className="flex items-center justify-between gap-2 shrink-0">
+              {/* Segmented Switch iOS: Nhạc (Lyrics) | Video */}
+              <div className="inline-flex items-center p-0.5 rounded-full bg-black/45 border border-white/15 shrink-0">
                 <button
                   type="button"
-                  onClick={onToggleViewMode}
-                  aria-label={isVideoMode ? 'Chuyển sang Lời nhạc' : 'Chuyển sang xem Video'}
-                  title={isVideoMode ? 'Đang xem Video • Bấm để hiện Lời nhạc' : 'Đang hiện Lời nhạc • Bấm để phát Video'}
-                  className={`h-8 px-2 rounded-full border text-[10px] font-extrabold flex items-center gap-1 active:scale-90 transition ${
-                    isVideoMode
-                      ? 'bg-sky-500/25 border-sky-400/60 text-sky-200 hover:bg-sky-500/35'
-                      : 'bg-rose-500/20 border-rose-400/50 text-rose-200 hover:bg-rose-500/30'
+                  onClick={() => {
+                    if (isVideoMode) onToggleViewMode();
+                  }}
+                  aria-label="Chế độ Nghe nhạc và Lời bài hát"
+                  className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
+                    !isVideoMode
+                      ? 'bg-white text-slate-950 shadow-sm'
+                      : 'text-white/65 hover:text-white'
                   }`}
                 >
-                  {isVideoMode ? (
-                    <>
-                      <Tv className="w-3.5 h-3.5 shrink-0" />
-                      <span className="cq-hide-md">Video</span>
-                    </>
-                  ) : (
-                    <>
-                      <Quote className="w-3.5 h-3.5 shrink-0" />
-                      <span className="cq-hide-md">Lời</span>
-                    </>
-                  )}
+                  <Music className="w-3 h-3 shrink-0" />
+                  <span>Nhạc</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isVideoMode) onToggleViewMode();
+                  }}
+                  aria-label="Chế độ Phát Video YouTube"
+                  className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
+                    isVideoMode
+                      ? 'bg-sky-400 text-slate-950 shadow-sm'
+                      : 'text-white/65 hover:text-white'
+                  }`}
+                >
+                  <Tv className="w-3 h-3 shrink-0" />
+                  <span>Video</span>
+                </button>
+              </div>
 
+              {/* Nhóm icon hành động bên phải (thoáng, không bao giờ đè chữ!) */}
+              <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
                   onClick={toggleMapSide}
@@ -587,7 +562,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   onClick={onStartAutoMix}
                   disabled={isLoadingMix}
                   aria-label="Phát đài nhạc tương tự bài này"
-                  className={`cq-hide-sm h-8 px-2 rounded-full border text-[11px] font-extrabold flex items-center gap-1 active:scale-90 transition ${
+                  title="Phát liên hoàn bài tương tự (Auto-Mix)"
+                  className={`cq-hide-xs w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
                     isMixActive
                       ? 'bg-amber-400 text-black border-amber-300 shadow'
                       : 'bg-white/10 hover:bg-white/20 border-white/15 text-amber-200'
@@ -604,7 +580,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   type="button"
                   onClick={onOpenAddPlaylist}
                   aria-label="Lưu vào Playlist"
-                  className="cq-hide-md w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-white/80 flex items-center justify-center active:scale-90 transition"
+                  title="Lưu vào Playlist"
+                  className="cq-hide-sm w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-white/80 flex items-center justify-center active:scale-90 transition"
                 >
                   <FolderPlus className="w-3.5 h-3.5" />
                 </button>
@@ -613,6 +590,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   type="button"
                   onClick={onToggleFavorite}
                   aria-label={isFavorite ? 'Bỏ lưu yêu thích' : 'Lưu yêu thích'}
+                  title={isFavorite ? 'Bỏ yêu thích' : 'Yêu thích'}
                   className={`w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
                     isFavorite
                       ? 'bg-rose-500/25 border-rose-400/50 text-rose-400'
@@ -624,40 +602,91 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               </div>
             </div>
 
-            {/* Ô TRUNG TÂM: HIỆN VIDEO YOUTUBE KHI CHỌN VIDEO • HIỆN LYRICS KARAOKE KHI CHỌN MUSIC */}
+            {/* TẦNG 2 (TRUNG TÂM CÂN ĐỐI TỈ LỆ): VIDEO 16:9 CHUẨN HOẶC ALBUM + KARAOKE */}
             {isVideoMode ? (
-              <div
-                ref={videoSlotRef}
-                aria-label="Khung phát Video YouTube trong Cockpit"
-                className="relative flex-1 min-h-[160px] car:min-h-0 w-full rounded-2xl overflow-hidden bg-black border border-white/15 shadow-inner flex items-center justify-center"
-              >
-                <div className="flex flex-col items-center gap-1.5 text-white/40 pointer-events-none">
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                  <span className="text-[11px] font-bold">Đang đồng bộ khung Video...</span>
+              <div className="flex-1 min-h-0 flex flex-col gap-2 short:gap-1.5">
+                {/* Sân khấu 16:9 chuẩn container-type: size -> Video KHÔNG BAO GIỜ bị kéo dọc méo hay đẩy vỡ layout! */}
+                <div className="media-stage relative h-[185px] xs:h-[210px] car:h-auto car:flex-1 car:min-h-0 w-full flex items-center justify-center">
+                  <div
+                    ref={videoSlotRef}
+                    aria-label="Khung phát Video YouTube trong Cockpit"
+                    className="car-video-fit relative rounded-2xl overflow-hidden bg-black border border-white/15 shadow-[0_12px_32px_rgba(0,0,0,0.65)]"
+                  >
+                    {/* Ảnh bìa tối nhẹ làm nền chờ mượt khi chuyển sang Video (không hiện text nhấp nháy!) */}
+                    <img
+                      src={streamData.thumbnailUrl}
+                      alt=""
+                      aria-hidden="true"
+                      className="w-full h-full object-cover opacity-25 blur-sm scale-105 pointer-events-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Thông tin Video căn giữa thoáng rộng 100% bề ngang */}
+                <div className="shrink-0 text-center px-1">
+                  <h3 className="text-xs sm:text-sm font-extrabold text-white truncate leading-snug">
+                    {streamData.title}
+                  </h3>
+                  <p className="text-[11px] text-white/60 font-semibold truncate">
+                    {streamData.uploader}
+                  </p>
                 </div>
               </div>
             ) : (
-              <div className="flex-1 min-h-[46px] bg-black/35 rounded-2xl border border-white/10 px-3 py-2 short:py-1.5 flex flex-col justify-center text-center">
-                {currentLyricText ? (
-                  <>
-                    <p className="text-xs sm:text-base short:text-xs font-extrabold text-white line-clamp-2 leading-snug">
-                      “{currentLyricText}”
-                    </p>
-                    {nextLyricText && (
-                      <p className="text-[11px] sm:text-xs text-white/45 font-semibold truncate mt-1 vshort:hidden">
-                        {nextLyricText}
-                      </p>
+              <div className="flex-1 min-h-0 flex flex-col justify-center gap-2.5 short:gap-2">
+                {/* Thông tin Bài hát + Ảnh bìa rộng rãi 100% bề ngang (không bị nút nào đè ép!) */}
+                <div className="flex items-center gap-3 short:gap-2.5 shrink-0 px-0.5">
+                  <div
+                    onClick={onTogglePlay}
+                    className={`relative w-14 h-14 sm:w-16 sm:h-16 short:w-12 short:h-12 rounded-2xl overflow-hidden shrink-0 border border-white/20 shadow-xl cursor-pointer bg-black transition-transform duration-300 ${
+                      isPlaying && !isBuffering ? 'scale-100' : 'scale-95'
+                    }`}
+                  >
+                    <img
+                      src={streamData.thumbnailUrl}
+                      alt={streamData.title}
+                      className="w-full h-full object-cover"
+                    />
+                    {isBuffering && (
+                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                        <Loader2 className="w-5 h-5 text-white animate-spin" />
+                      </div>
                     )}
-                  </>
-                ) : (
-                  <p className="text-xs font-bold text-white/45 line-clamp-2">
-                    🎵 Kéo tay nắm ở giữa để chỉnh độ rộng • Bấm ⇄ để đổi bên
-                  </p>
-                )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm sm:text-base short:text-xs font-extrabold text-white line-clamp-2 leading-snug">
+                      {streamData.title}
+                    </h3>
+                    <p className="text-[11px] sm:text-xs text-white/65 font-semibold truncate mt-0.5">
+                      {streamData.uploader}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Khung lời bài hát Karaoke 2 dòng cân đối */}
+                <div className="flex-1 min-h-[60px] max-h-[168px] bg-black/40 rounded-2xl border border-white/12 px-3.5 py-2.5 short:py-2 flex flex-col justify-center text-center shadow-inner">
+                  {currentLyricText ? (
+                    <>
+                      <p className="text-sm sm:text-base short:text-xs font-extrabold text-white line-clamp-2 leading-snug">
+                        “{currentLyricText}”
+                      </p>
+                      {nextLyricText && (
+                        <p className="text-[11px] sm:text-xs text-white/45 font-semibold truncate mt-1.5 vshort:hidden">
+                          {nextLyricText}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs font-bold text-white/45 line-clamp-2">
+                      🎵 Vuốt ⇄ để qua bài • Chạm đúp thả tim ❤️
+                    </p>
+                  )}
+                </div>
               </div>
             )}
 
-            {/* THANH TUA & CỤM NÚT ĐIỀU KHIỂN PHÍA DƯỚI */}
+            {/* TẦNG 3 (CỐ ĐỊNH ĐÁY): THANH TUA & CỤM NÚT ĐIỀU KHIỂN ĐỐI XỨNG */}
             <div className="shrink-0 space-y-1">
               <div>
                 <input
@@ -691,10 +720,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   type="button"
                   onClick={onToggleShuffle}
                   aria-label="Phát ngẫu nhiên"
-                  className={`cq-hide-sm w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
+                  className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
                     isShuffle
                       ? 'bg-rose-500/30 border border-rose-400/50 text-rose-200'
-                      : 'text-white/55'
+                      : 'text-white/55 hover:text-white'
                   }`}
                 >
                   <Shuffle className="w-4 h-4" />
@@ -739,10 +768,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   type="button"
                   onClick={onToggleRepeat}
                   aria-label="Chế độ lặp"
-                  className={`cq-hide-sm w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
+                  className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
                     repeatMode !== 'off'
                       ? 'bg-white/20 border border-white/25 text-white'
-                      : 'text-white/55'
+                      : 'text-white/55 hover:text-white'
                   }`}
                 >
                   {repeatMode === 'one' ? (

@@ -254,15 +254,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
   }, [isVideoMode, onViewModeChange]);
 
-  // Đồng bộ trực tiếp tọa độ <iframe> duy nhất vào ô Video trong Cockpit (0 lần React re-render khi kéo chia tỉ lệ!)
+  // Đồng bộ trực tiếp tọa độ <iframe> duy nhất vào khung Video 16:9 trong Cockpit (0 re-render khi kéo chia tỉ lệ!)
   const handleCockpitVideoSlotRectChange = useCallback((rect: VideoSlotRect | null) => {
     cockpitVideoRectRef.current = rect;
     const wrapper = iframeWrapperRef.current;
 
-    if (rect && rect.width > 24 && rect.height > 24) {
+    if (rect && rect.width > 40 && rect.height > 40) {
       if (wrapper) {
         wrapper.style.top = `${rect.top}px`;
         wrapper.style.left = `${rect.left}px`;
+        wrapper.style.bottom = 'auto';
+        wrapper.style.right = 'auto';
         wrapper.style.width = `${rect.width}px`;
         wrapper.style.height = `${rect.height}px`;
       }
@@ -271,6 +273,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (wrapper) {
         wrapper.style.top = '';
         wrapper.style.left = '';
+        wrapper.style.bottom = '';
+        wrapper.style.right = '';
         wrapper.style.width = '';
         wrapper.style.height = '';
       }
@@ -286,11 +290,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const r = cockpitVideoRectRef.current;
       wrapper.style.top = `${r.top}px`;
       wrapper.style.left = `${r.left}px`;
+      wrapper.style.bottom = 'auto';
+      wrapper.style.right = 'auto';
       wrapper.style.width = `${r.width}px`;
       wrapper.style.height = `${r.height}px`;
     } else {
       wrapper.style.top = '';
       wrapper.style.left = '';
+      wrapper.style.bottom = '';
+      wrapper.style.right = '';
       wrapper.style.width = '';
       wrapper.style.height = '';
     }

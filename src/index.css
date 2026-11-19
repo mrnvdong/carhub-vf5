@@ -58,6 +58,12 @@
   }
 }
 
+@container (max-width: 255px) {
+  .cq-hide-xs {
+    display: none !important;
+  }
+}
+
 .car-art-fit {
   width: min(100cqi, 100cqb, 17.5rem);
   height: min(100cqi, 100cqb, 17.5rem);
