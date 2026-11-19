@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, Suspense, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, Suspense, useCallback } from 'react';
 import {
   Play,
   Pause,
@@ -13,6 +13,8 @@ import {
   FolderPlus,
   ArrowLeftRight,
   GripVertical,
+  Tv,
+  Quote,
 } from 'lucide-react';
 import {
   ActiveNavSummary,
@@ -28,8 +30,19 @@ import { MapErrorBoundary } from './MapErrorBoundary';
 
 const LazyCarCockpitMap = React.lazy(() => import('./CarCockpitMap'));
 
+export interface VideoSlotRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
 interface CockpitViewProps {
   isVisible: boolean;
+  isVideoMode: boolean;
+  onToggleViewMode: () => void;
+  onVideoSlotRectChange: (rect: VideoSlotRect | null) => void;
+  onDraggingSplitChange: (dragging: boolean) => void;
   streamData: StreamData;
   isPlaying: boolean;
   isBuffering: boolean;
@@ -77,6 +90,10 @@ interface CockpitViewProps {
 export const CockpitView: React.FC<CockpitViewProps> = React.memo(
   ({
     isVisible,
+    isVideoMode,
+    onToggleViewMode,
+    onVideoSlotRectChange,
+    onDraggingSplitChange,
     streamData,
     isPlaying,
     isBuffering,
@@ -118,6 +135,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     onNotifyToast,
   }) => {
     const splitContainerRef = useRef<HTMLDivElement | null>(null);
+    const videoSlotRef = useRef<HTMLDivElement | null>(null);
     const badgeTextRef = useRef<HTMLSpanElement | null>(null);
     const rafDragRef = useRef<number | null>(null);
     const isScrubbingRef = useRef<boolean>(false);
@@ -152,6 +170,69 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       }
     });
 
+    const showVideoSlot = isVisible && isVideoMode && !isMapExpanded;
+
+    // Đo tọa độ khung phát Video trong Cockpit và đồng bộ trực tiếp tới <iframe> YouTube duy nhất (0ms ngắt tiếng!)
+    const syncVideoSlotRect = useCallback(() => {
+      if (!showVideoSlot || !videoSlotRef.current) {
+        onVideoSlotRectChange(null);
+        return;
+      }
+      const r = videoSlotRef.current.getBoundingClientRect();
+      if (r.width > 24 && r.height > 24) {
+        onVideoSlotRectChange({
+          top: Math.round(r.top * 10) / 10,
+          left: Math.round(r.left * 10) / 10,
+          width: Math.round(r.width * 10) / 10,
+          height: Math.round(r.height * 10) / 10,
+        });
+      } else {
+        onVideoSlotRectChange(null);
+      }
+    }, [showVideoSlot, onVideoSlotRectChange]);
+
+    useLayoutEffect(() => {
+      syncVideoSlotRect();
+      if (!showVideoSlot) return;
+
+      const rafId = window.requestAnimationFrame(syncVideoSlotRect);
+      const t1 = window.setTimeout(syncVideoSlotRect, 140);
+      const t2 = window.setTimeout(syncVideoSlotRect, 360);
+
+      const slotEl = videoSlotRef.current;
+      const containerEl = splitContainerRef.current;
+      let ro: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== 'undefined') {
+        ro = new ResizeObserver(() => syncVideoSlotRect());
+        if (slotEl) ro.observe(slotEl);
+        if (containerEl) ro.observe(containerEl);
+      }
+
+      window.addEventListener('resize', syncVideoSlotRect);
+      window.visualViewport?.addEventListener('resize', syncVideoSlotRect);
+      containerEl?.addEventListener('scroll', syncVideoSlotRect, { passive: true });
+
+      return () => {
+        window.cancelAnimationFrame(rafId);
+        window.clearTimeout(t1);
+        window.clearTimeout(t2);
+        ro?.disconnect();
+        window.removeEventListener('resize', syncVideoSlotRect);
+        window.visualViewport?.removeEventListener('resize', syncVideoSlotRect);
+        containerEl?.removeEventListener('scroll', syncVideoSlotRect);
+      };
+    }, [showVideoSlot, mapSide, mapWidthPct, syncVideoSlotRect]);
+
+    useEffect(() => {
+      return () => {
+        onVideoSlotRectChange(null);
+      };
+    }, [onVideoSlotRectChange]);
+
+    useEffect(() => {
+      onDraggingSplitChange(isDraggingSplit);
+    }, [isDraggingSplit, onDraggingSplitChange]);
+
     useEffect(() => {
       livePctRef.current = mapWidthPct;
       if (splitContainerRef.current) {
@@ -182,7 +263,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       setIsMapExpanded((v) => !v);
     }, []);
 
-    // Kéo thả 60fps siêu mượt: Cập nhật biến CSS trực tiếp trên DOM (0 lần re-render React khi đang kéo!)
+    // Kéo thả 60fps siêu mượt: Cập nhật biến CSS + tọa độ Video trực tiếp trên DOM (0 lần re-render React!)
     const updateSplitFromClientX = useCallback(
       (clientX: number) => {
         const container = splitContainerRef.current;
@@ -204,11 +285,14 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
           const pct = livePctRef.current;
           container.style.setProperty('--map-pct', `${pct}%`);
           if (badgeTextRef.current) {
-            badgeTextRef.current.textContent = `Bản đồ ${pct}% • Nhạc ${100 - pct}%`;
+            badgeTextRef.current.textContent = `Bản đồ ${pct}% • ${
+              isVideoMode ? 'Video' : 'Nhạc'
+            } ${100 - pct}%`;
           }
+          syncVideoSlotRect();
         });
       },
-      [mapSide]
+      [mapSide, isVideoMode, syncVideoSlotRect]
     );
 
     const handleDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -237,6 +321,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       }
       setIsDraggingSplit(false);
       setMapWidthPct(livePctRef.current);
+      window.requestAnimationFrame(syncVideoSlotRect);
     };
 
     const commitScrubOnce = (val: number) => {
@@ -260,6 +345,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     return (
       <div
         ref={splitContainerRef}
+        onAnimationEnd={syncVideoSlotRect}
         style={{ '--map-pct': `${mapWidthPct}%` } as React.CSSProperties}
         className={`${
           isVisible ? 'flex' : 'hidden'
@@ -275,7 +361,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         {isDraggingSplit && (
           <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-1.5 rounded-full bg-emerald-500 text-black text-xs font-black shadow-2xl pointer-events-none">
             <span ref={badgeTextRef}>
-              Bản đồ {livePctRef.current}% • Nhạc {100 - livePctRef.current}%
+              Bản đồ {livePctRef.current}% • {isVideoMode ? 'Video' : 'Nhạc'}{' '}
+              {100 - livePctRef.current}%
             </span>
           </div>
         )}
@@ -356,7 +443,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         )}
 
         {/* =====================================================================
-            3. KHUNG NHẠC + KARAOKE
+            3. KHUNG GIẢI TRÍ: LỜI BÀI HÁT (MUSIC) HOẶC PHÁT VIDEO YOUTUBE TRỰC TIẾP (VIDEO)
            ===================================================================== */}
         {isMapExpanded ? (
           <div
@@ -415,7 +502,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         ) : (
           <div
             {...gestureHandlers}
-            className={`cockpit-pane-cq flex-1 min-w-0 min-h-0 h-full bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-3 sm:p-3.5 short:p-2.5 flex flex-col justify-between gap-2 short:gap-1.5 relative overflow-hidden shadow-2xl ${
+            className={`cockpit-pane-cq flex-1 min-w-0 min-h-0 h-full bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-2.5 sm:p-3 short:p-2 flex flex-col justify-between gap-2 short:gap-1.5 relative overflow-hidden shadow-2xl ${
               isDraggingSplit ? 'pointer-events-none select-none' : ''
             }`}
           >
@@ -425,28 +512,33 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               </div>
             )}
 
-            <div className="flex items-center gap-2.5 short:gap-2 shrink-0">
-              <div
-                onClick={onTogglePlay}
-                className="relative w-13 h-13 sm:w-15 sm:h-15 short:w-11 short:h-11 rounded-2xl overflow-hidden shrink-0 border border-white/15 shadow-lg cursor-pointer bg-black"
-              >
-                <img
-                  src={streamData.thumbnailUrl}
-                  alt={streamData.title}
-                  className="w-full h-full object-cover"
-                />
-                {isBuffering && (
-                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                    <Loader2 className="w-5 h-5 text-white animate-spin" />
-                  </div>
-                )}
-              </div>
+            {/* HEADER BÀI HÁT / VIDEO */}
+            <div className="flex items-center gap-2 shrink-0">
+              {!isVideoMode && (
+                <div
+                  onClick={onTogglePlay}
+                  className="relative w-12 h-12 sm:w-14 sm:h-14 short:w-11 short:h-11 rounded-2xl overflow-hidden shrink-0 border border-white/15 shadow-lg cursor-pointer bg-black"
+                >
+                  <img
+                    src={streamData.thumbnailUrl}
+                    alt={streamData.title}
+                    className="w-full h-full object-cover"
+                  />
+                  {isBuffering && (
+                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                      <Loader2 className="w-5 h-5 text-white animate-spin" />
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="min-w-0 flex-1">
-                <span className="cq-hide-sm inline-block text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/10 text-white/65 mb-0.5">
-                  Vuốt ⇄ qua bài • Đúp ❤️
-                </span>
-                <h3 className="text-sm sm:text-base short:text-xs font-extrabold text-white line-clamp-1">
+                {!isVideoMode && (
+                  <span className="cq-hide-sm inline-block text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/10 text-white/65 mb-0.5">
+                    Vuốt ⇄ qua bài • Đúp ❤️
+                  </span>
+                )}
+                <h3 className="text-xs sm:text-sm font-extrabold text-white line-clamp-1">
                   {streamData.title}
                 </h3>
                 <p className="text-[11px] text-white/65 font-semibold truncate">
@@ -455,6 +547,31 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               </div>
 
               <div className="flex items-center gap-1 shrink-0">
+                {/* Nút 1 chạm đổi nhanh chế độ Lời nhạc <-> Video ngay trong Cockpit */}
+                <button
+                  type="button"
+                  onClick={onToggleViewMode}
+                  aria-label={isVideoMode ? 'Chuyển sang Lời nhạc' : 'Chuyển sang xem Video'}
+                  title={isVideoMode ? 'Đang xem Video • Bấm để hiện Lời nhạc' : 'Đang hiện Lời nhạc • Bấm để phát Video'}
+                  className={`h-8 px-2 rounded-full border text-[10px] font-extrabold flex items-center gap-1 active:scale-90 transition ${
+                    isVideoMode
+                      ? 'bg-sky-500/25 border-sky-400/60 text-sky-200 hover:bg-sky-500/35'
+                      : 'bg-rose-500/20 border-rose-400/50 text-rose-200 hover:bg-rose-500/30'
+                  }`}
+                >
+                  {isVideoMode ? (
+                    <>
+                      <Tv className="w-3.5 h-3.5 shrink-0" />
+                      <span className="cq-hide-md">Video</span>
+                    </>
+                  ) : (
+                    <>
+                      <Quote className="w-3.5 h-3.5 shrink-0" />
+                      <span className="cq-hide-md">Lời</span>
+                    </>
+                  )}
+                </button>
+
                 <button
                   type="button"
                   onClick={toggleMapSide}
@@ -507,25 +624,40 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               </div>
             </div>
 
-            <div className="flex-1 min-h-[46px] bg-black/35 rounded-2xl border border-white/10 px-3 py-2 short:py-1.5 flex flex-col justify-center text-center">
-              {currentLyricText ? (
-                <>
-                  <p className="text-xs sm:text-base short:text-xs font-extrabold text-white line-clamp-2 leading-snug">
-                    “{currentLyricText}”
-                  </p>
-                  {nextLyricText && (
-                    <p className="text-[11px] sm:text-xs text-white/45 font-semibold truncate mt-1 vshort:hidden">
-                      {nextLyricText}
+            {/* Ô TRUNG TÂM: HIỆN VIDEO YOUTUBE KHI CHỌN VIDEO • HIỆN LYRICS KARAOKE KHI CHỌN MUSIC */}
+            {isVideoMode ? (
+              <div
+                ref={videoSlotRef}
+                aria-label="Khung phát Video YouTube trong Cockpit"
+                className="relative flex-1 min-h-[160px] car:min-h-0 w-full rounded-2xl overflow-hidden bg-black border border-white/15 shadow-inner flex items-center justify-center"
+              >
+                <div className="flex flex-col items-center gap-1.5 text-white/40 pointer-events-none">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span className="text-[11px] font-bold">Đang đồng bộ khung Video...</span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 min-h-[46px] bg-black/35 rounded-2xl border border-white/10 px-3 py-2 short:py-1.5 flex flex-col justify-center text-center">
+                {currentLyricText ? (
+                  <>
+                    <p className="text-xs sm:text-base short:text-xs font-extrabold text-white line-clamp-2 leading-snug">
+                      “{currentLyricText}”
                     </p>
-                  )}
-                </>
-              ) : (
-                <p className="text-xs font-bold text-white/45 line-clamp-2">
-                  🎵 Kéo tay nắm ở giữa để chỉnh độ rộng • Bấm ⇄ để đổi bên
-                </p>
-              )}
-            </div>
+                    {nextLyricText && (
+                      <p className="text-[11px] sm:text-xs text-white/45 font-semibold truncate mt-1 vshort:hidden">
+                        {nextLyricText}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs font-bold text-white/45 line-clamp-2">
+                    🎵 Kéo tay nắm ở giữa để chỉnh độ rộng • Bấm ⇄ để đổi bên
+                  </p>
+                )}
+              </div>
+            )}
 
+            {/* THANH TUA & CỤM NÚT ĐIỀU KHIỂN PHÍA DƯỚI */}
             <div className="shrink-0 space-y-1">
               <div>
                 <input

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Play,
   Pause,
@@ -60,7 +60,7 @@ import { fetchSyncedLyrics, LyricsResult } from '../services/lyrics';
 import { fetchSponsorSegments, getSponsorCategoryLabel } from '../services/sponsorblock';
 import { useCarHardwareControls } from '../hooks/useCarHardwareControls';
 import { useCockpitTelemetry } from '../hooks/useCockpitTelemetry';
-import { CockpitView } from './CockpitView';
+import { CockpitView, VideoSlotRect } from './CockpitView';
 
 interface VideoPlayerProps {
   streamData: StreamData;
@@ -181,9 +181,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onConsumeIncomingNav,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const iframeWrapperRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const activeLyricRef = useRef<HTMLButtonElement | null>(null);
   const lyricsContainerRef = useRef<HTMLDivElement | null>(null);
+  const cockpitVideoRectRef = useRef<VideoSlotRect | null>(null);
 
   const initialVideoIdRef = useRef<string>(streamData.id);
   const loadedVideoIdRef = useRef<string>(streamData.id);
@@ -224,6 +226,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [embedError, setEmbedError] = useState<string | null>(null);
   const [hasMountedCockpit, setHasMountedCockpit] = useState<boolean>(false);
   const [activeNavSummary, setActiveNavSummary] = useState<ActiveNavSummary | null>(null);
+  const [hasCockpitVideoSlot, setHasCockpitVideoSlot] = useState<boolean>(false);
+  const [isDraggingCockpitSplit, setIsDraggingCockpitSplit] = useState<boolean>(false);
 
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [dragTime, setDragTime] = useState<number | null>(null);
@@ -244,6 +248,53 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const isNowPlayingView = railSection === 'nowPlaying';
   const isCockpitView = railSection === 'cockpit';
   const showVideoInViewport = isVideoMode && isNowPlayingView;
+  const showVideoInCockpit = isVideoMode && isCockpitView && !isFullscreen && hasCockpitVideoSlot;
+
+  const handleToggleCockpitViewMode = useCallback(() => {
+    onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
+  }, [isVideoMode, onViewModeChange]);
+
+  // Đồng bộ trực tiếp tọa độ <iframe> duy nhất vào ô Video trong Cockpit (0 lần React re-render khi kéo chia tỉ lệ!)
+  const handleCockpitVideoSlotRectChange = useCallback((rect: VideoSlotRect | null) => {
+    cockpitVideoRectRef.current = rect;
+    const wrapper = iframeWrapperRef.current;
+
+    if (rect && rect.width > 24 && rect.height > 24) {
+      if (wrapper) {
+        wrapper.style.top = `${rect.top}px`;
+        wrapper.style.left = `${rect.left}px`;
+        wrapper.style.width = `${rect.width}px`;
+        wrapper.style.height = `${rect.height}px`;
+      }
+      setHasCockpitVideoSlot((prev) => (prev ? prev : true));
+    } else {
+      if (wrapper) {
+        wrapper.style.top = '';
+        wrapper.style.left = '';
+        wrapper.style.width = '';
+        wrapper.style.height = '';
+      }
+      setHasCockpitVideoSlot((prev) => (prev ? false : prev));
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const wrapper = iframeWrapperRef.current;
+    if (!wrapper) return;
+
+    if (showVideoInCockpit && cockpitVideoRectRef.current) {
+      const r = cockpitVideoRectRef.current;
+      wrapper.style.top = `${r.top}px`;
+      wrapper.style.left = `${r.left}px`;
+      wrapper.style.width = `${r.width}px`;
+      wrapper.style.height = `${r.height}px`;
+    } else {
+      wrapper.style.top = '';
+      wrapper.style.left = '';
+      wrapper.style.width = '';
+      wrapper.style.height = '';
+    }
+  }, [showVideoInCockpit, showVideoInViewport, isFullscreen]);
 
   // Giữ sống CockpitView ngay sau lần mở đầu tiên (hoặc khi nhận điểm đến từ điện thoại Send-to-Car!)
   useEffect(() => {
@@ -1185,13 +1236,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </div>
               )}
 
-              {/* 2. IFRAME YOUTUBE DUY NHẤT */}
+              {/* 2. IFRAME YOUTUBE DUY NHẤT (Dùng chung cho cả Đang phát Video lẫn ô Video trong Cockpit — 0ms ngắt tiếng!) */}
               <div
+                ref={iframeWrapperRef}
                 className={
                   showVideoInViewport
                     ? isFullscreen
                       ? 'relative w-full h-full bg-black overflow-hidden'
                       : 'car-video-fit relative overflow-hidden rounded-2xl sm:rounded-3xl bg-black border border-white/15 shadow-[0_18px_50px_rgba(0,0,0,0.75)] animate-artwork-enter'
+                    : showVideoInCockpit
+                    ? `fixed z-20 overflow-hidden rounded-2xl bg-black border border-white/15 shadow-xl ${
+                        isDraggingCockpitSplit ? 'pointer-events-none' : 'pointer-events-auto'
+                      }`
                     : overlayIframeOnArtForFirstUnlock
                     ? 'car-art-fit absolute z-20 opacity-[0.01] overflow-hidden cursor-pointer pointer-events-auto'
                     : 'fixed bottom-0 right-0 w-[2px] h-[2px] opacity-[0.01] pointer-events-none overflow-hidden'
@@ -1206,9 +1262,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                   onLoad={handleIframeLoad}
                 />
-                {showVideoInViewport && (isLoading || isBuffering) && (
+                {(showVideoInViewport || showVideoInCockpit) && (isLoading || isBuffering) && (
                   <div className="absolute inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center pointer-events-none">
                     <Loader2 className="w-10 h-10 text-white animate-spin" />
+                  </div>
+                )}
+                {showVideoInCockpit && embedError && (
+                  <div className="absolute inset-x-2 bottom-2 z-30 bg-amber-950/95 border border-amber-400/50 text-amber-100 px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center justify-between gap-2 shadow-xl">
+                    <span className="truncate">{embedError}</span>
+                    {hasNext && (
+                      <button
+                        type="button"
+                        onClick={onNext}
+                        className="px-2 py-1 rounded-lg bg-amber-400 text-black font-extrabold shrink-0 active:scale-95"
+                      >
+                        Bài kế
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1790,6 +1860,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {hasMountedCockpit && (
           <CockpitView
             isVisible={isCockpitView}
+            isVideoMode={isVideoMode}
+            onToggleViewMode={handleToggleCockpitViewMode}
+            onVideoSlotRectChange={handleCockpitVideoSlotRectChange}
+            onDraggingSplitChange={setIsDraggingCockpitSplit}
             streamData={streamData}
             isPlaying={isPlaying}
             isBuffering={isBuffering}
