@@ -15,6 +15,7 @@ import {
   NightMode,
   SavedPlace,
   PendingNavTarget,
+  MusicSource,
 } from './types';
 import { getCategoryQuery } from './constants/categories';
 import { searchVideos, fetchRadioMix } from './services/api';
@@ -34,14 +35,19 @@ const DEFAULT_PLAYLISTS: UserPlaylist[] = [
 ];
 
 function buildEmbedStreamData(video: VideoItem): StreamData {
+  const isSc = video.source === 'soundcloud' || video.id.startsWith('sc_');
   return {
     id: video.id,
     title: video.title,
     uploader: video.uploaderName,
-    thumbnailUrl: video.thumbnail || `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
+    thumbnailUrl:
+      video.thumbnail ||
+      (isSc
+        ? 'https://a-v2.sndcdn.com/assets/images/sc-icons/ios-a62dfc8fe7.png'
+        : `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`),
     duration: video.duration || 0,
-    playbackType: 'embed',
-    source: 'youtube-embed',
+    playbackType: isSc ? 'hls' : 'embed',
+    source: isSc ? 'soundcloud' : 'youtube-embed',
   };
 }
 
@@ -57,8 +63,21 @@ function mergeUniqueTracks(incoming: VideoItem[], existing: VideoItem[]): VideoI
 }
 
 export const App: React.FC = () => {
-  const [railSection, setRailSection] = useState<RailSection>('nowPlaying');
+  // Mặc định mở thẳng màn hình Cockpit 3D + Nhạc khi lên xe VF5!
+  const [railSection, setRailSection] = useState<RailSection>('cockpit');
   const [queueSource, setQueueSource] = useState<QueueSource>('explore');
+
+  // Nguồn phát nhạc: YouTube hoặc SoundCloud (lưu vào localStorage)
+  const [musicSource, setMusicSource] = useState<MusicSource>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_music_source');
+      return saved === 'soundcloud' ? 'soundcloud' : 'youtube';
+    } catch {
+      return 'youtube';
+    }
+  });
+  const musicSourceRef = useRef<MusicSource>(musicSource);
+  musicSourceRef.current = musicSource;
 
   const [selectedCategory, setSelectedCategory] = useState<string>(() => {
     try {
@@ -419,6 +438,12 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     try {
+      localStorage.setItem('carhub_music_source', musicSource);
+    } catch {}
+  }, [musicSource]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem('carhub_recent_searches', JSON.stringify(recentSearches));
     } catch {}
   }, [recentSearches]);
@@ -586,7 +611,13 @@ export const App: React.FC = () => {
   );
 
   const loadCategory = useCallback(
-    async (catId: string, query: string, isInitialStartup = false) => {
+    async (
+      catId: string,
+      query: string,
+      isInitialStartup = false,
+      sourceOverride?: MusicSource
+    ) => {
+      const activeSource = sourceOverride || musicSourceRef.current;
       searchAbortRef.current?.abort();
       const controller = new AbortController();
       searchAbortRef.current = controller;
@@ -605,7 +636,7 @@ export const App: React.FC = () => {
       }
 
       try {
-        const result = await searchVideos(query, null, controller.signal);
+        const result = await searchVideos(query, null, controller.signal, activeSource);
         if (controller.signal.aborted) return;
         if (result.items.length > 0) {
           setVideos(result.items);
@@ -629,7 +660,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     const startCat = selectedCategory || 'remix';
-    loadCategory(startCat, getCategoryQuery(startCat), true);
+    loadCategory(startCat, getCategoryQuery(startCat), true, musicSourceRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -637,7 +668,7 @@ export const App: React.FC = () => {
     const onOnline = () => {
       if (videos.length === 0) {
         const cat = selectedCategory || 'remix';
-        loadCategory(cat, getCategoryQuery(cat), true);
+        loadCategory(cat, getCategoryQuery(cat), true, musicSourceRef.current);
       }
     };
     window.addEventListener('online', onOnline);
@@ -645,9 +676,14 @@ export const App: React.FC = () => {
   }, [videos.length, selectedCategory, loadCategory]);
 
   const handleSearch = useCallback(
-    async (query: string) => {
+    async (query: string, sourceOverride?: MusicSource) => {
       const cleanQuery = query.trim();
       if (!cleanQuery) return;
+      const activeSource = sourceOverride || musicSourceRef.current;
+      if (activeSource !== musicSourceRef.current) {
+        musicSourceRef.current = activeSource;
+        setMusicSource(activeSource);
+      }
 
       searchAbortRef.current?.abort();
       const controller = new AbortController();
@@ -660,7 +696,7 @@ export const App: React.FC = () => {
       setNextContinuation(null);
 
       setRailSection((prev) =>
-        prev === 'favorites' || prev === 'history' ? 'nowPlaying' : prev
+        prev === 'favorites' || prev === 'history' ? 'cockpit' : prev
       );
 
       setRecentSearches((prev) => {
@@ -669,7 +705,7 @@ export const App: React.FC = () => {
       });
 
       try {
-        const result = await searchVideos(cleanQuery, null, controller.signal);
+        const result = await searchVideos(cleanQuery, null, controller.signal, activeSource);
         if (controller.signal.aborted) return;
         setVideos(result.items);
         setNextContinuation(result.nextContinuation);
@@ -691,7 +727,24 @@ export const App: React.FC = () => {
     [playVideo]
   );
 
-  // Upgrade #5: Bật Đài phát thông minh (Auto-Mix) theo bài đang phát
+  // Chuyển đổi 1 chạm nguồn phát nhạc YouTube <-> SoundCloud và nạp ngay danh sách của nguồn mới
+  const handleChangeMusicSource = useCallback(
+    (nextSource: MusicSource) => {
+      if (nextSource === musicSourceRef.current) return;
+      musicSourceRef.current = nextSource;
+      setMusicSource(nextSource);
+
+      if (searchQuery.trim() && !selectedCategory) {
+        handleSearch(searchQuery.trim(), nextSource);
+      } else {
+        const cat = selectedCategory || 'remix';
+        loadCategory(cat, getCategoryQuery(cat), false, nextSource);
+      }
+    },
+    [searchQuery, selectedCategory, handleSearch, loadCategory]
+  );
+
+  // Upgrade #5: Bật Đài phát thông minh (Auto-Mix) cho cả YouTube lẫn SoundCloud
   const handleStartAutoMix = useCallback(async () => {
     if (!currentVideo || isLoadingMix) return;
     setIsLoadingMix(true);
@@ -699,7 +752,8 @@ export const App: React.FC = () => {
       const related = await fetchRadioMix(
         currentVideo.id,
         currentVideo.title,
-        currentVideo.uploaderName
+        currentVideo.uploaderName,
+        currentVideo.source
       );
       if (related.length > 0) {
         const newMix = [currentVideo, ...related.filter((r) => r.id !== currentVideo.id)];
@@ -721,7 +775,12 @@ export const App: React.FC = () => {
       : searchQuery || 'nhạc hay trên ô tô';
 
     try {
-      const result = await searchVideos(activeQuery, nextContinuation);
+      const result = await searchVideos(
+        activeQuery,
+        nextContinuation,
+        undefined,
+        musicSourceRef.current
+      );
       let appended: VideoItem[] = [];
       setVideos((prev) => {
         const existingIds = new Set(prev.map((v) => v.id));
@@ -775,7 +834,12 @@ export const App: React.FC = () => {
     ) {
       // Nối tiếp vô tận Đài phát Auto-Mix dựa trên bài cuối cùng!
       setIsLoadingMix(true);
-      fetchRadioMix(currentVideo.id, currentVideo.title, currentVideo.uploaderName)
+      fetchRadioMix(
+        currentVideo.id,
+        currentVideo.title,
+        currentVideo.uploaderName,
+        currentVideo.source
+      )
         .then((more) => {
           if (more.length > 0) {
             setMixVideos((prev) => mergeUniqueTracks(prev, more).slice(0, 120));
@@ -1008,6 +1072,8 @@ export const App: React.FC = () => {
             onRemoveSavedPlace={handleRemoveSavedPlace}
             incomingNavTarget={incomingNavTarget}
             onConsumeIncomingNav={handleConsumeIncomingNav}
+            musicSource={musicSource}
+            onChangeMusicSource={handleChangeMusicSource}
           />
         ) : isLoadingVideos ? (
           <div className="w-full h-full bg-[#050507] flex flex-col items-center justify-center gap-3 text-center p-6">
@@ -1073,6 +1139,8 @@ export const App: React.FC = () => {
         }}
         onSearch={handleSearch}
         initialQuery={searchQuery}
+        musicSource={musicSource}
+        onChangeMusicSource={handleChangeMusicSource}
         recentSearches={recentSearches}
         onClearRecentSearches={() => setRecentSearches([])}
         onRemoveRecentSearch={(itemToRemove) =>

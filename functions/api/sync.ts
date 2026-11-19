@@ -30,12 +30,18 @@ const CORS_HEADERS = {
 };
 
 function sanitizeTrack(v: any) {
-  if (!v || typeof v.id !== 'string' || !/^[a-zA-Z0-9_-]{11}$/.test(v.id)) return null;
+  if (!v || typeof v.id !== 'string' || !/^([a-zA-Z0-9_-]{11}|sc_\d{4,16})$/.test(v.id)) {
+    return null;
+  }
+  const isSc = v.id.startsWith('sc_') || v.source === 'soundcloud';
   return {
     id: v.id,
+    source: isSc ? 'soundcloud' : 'youtube',
     title: String(v.title || '').slice(0, 200),
     uploaderName: String(v.uploaderName || '').slice(0, 100),
-    thumbnail: String(v.thumbnail || `https://i.ytimg.com/vi/${v.id}/mqdefault.jpg`).slice(0, 300),
+    thumbnail: String(
+      v.thumbnail || (isSc ? '' : `https://i.ytimg.com/vi/${v.id}/mqdefault.jpg`)
+    ).slice(0, 300),
     duration: typeof v.duration === 'number' ? v.duration : 0,
     durationText: String(v.durationText || '').slice(0, 20),
   };

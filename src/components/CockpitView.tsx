@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import {
   ActiveNavSummary,
+  MusicSource,
   PendingNavTarget,
   RepeatMode,
   SavedPlace,
@@ -40,6 +41,9 @@ export interface VideoSlotRect {
 interface CockpitViewProps {
   isVisible: boolean;
   isVideoMode: boolean;
+  isSoundCloudTrack: boolean;
+  musicSource: MusicSource;
+  onChangeMusicSource: (source: MusicSource) => void;
   onToggleViewMode: () => void;
   onVideoSlotRectChange: (rect: VideoSlotRect | null) => void;
   onDraggingSplitChange: (dragging: boolean) => void;
@@ -91,6 +95,9 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
   ({
     isVisible,
     isVideoMode,
+    isSoundCloudTrack,
+    musicSource,
+    onChangeMusicSource,
     onToggleViewMode,
     onVideoSlotRectChange,
     onDraggingSplitChange,
@@ -170,7 +177,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
       }
     });
 
-    const showVideoSlot = isVisible && isVideoMode && !isMapExpanded;
+    const effectiveVideoMode = isVideoMode && !isSoundCloudTrack;
+    const showVideoSlot = isVisible && effectiveVideoMode && !isMapExpanded;
 
     // Đo tọa độ chính xác của khung Video 16:9 và đồng bộ trực tiếp trước khi trình duyệt vẽ frame (0 giật, 0 vỡ layout!)
     const syncVideoSlotRect = useCallback(() => {
@@ -509,39 +517,66 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               </div>
             )}
 
-            {/* TẦNG 1 (CỐ ĐỊNH): THANH CHUYỂN NHẠC / VIDEO & NÚT TIỆN ÍCH GỌN SẠCH — KHÔNG CHEN TÊN BÀI HÁT! */}
-            <div className="flex items-center justify-between gap-2 shrink-0">
-              {/* Segmented Switch iOS: Nhạc (Lyrics) | Video */}
-              <div className="inline-flex items-center p-0.5 rounded-full bg-black/45 border border-white/15 shrink-0">
+            {/* TẦNG 1 (CỐ ĐỊNH): THANH CHUYỂN NHẠC / VIDEO + NGUỒN SOUNDCLOUD/YOUTUBE GỌN SẠCH */}
+            <div className="flex items-center justify-between gap-1.5 shrink-0">
+              <div className="flex items-center gap-1.5 min-w-0">
+                {/* Segmented Switch iOS: Nhạc (Lyrics) | Video */}
+                <div className="inline-flex items-center p-0.5 rounded-full bg-black/45 border border-white/15 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isVideoMode) onToggleViewMode();
+                    }}
+                    aria-label="Chế độ Nghe nhạc và Lời bài hát"
+                    className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
+                      !effectiveVideoMode
+                        ? 'bg-white text-slate-950 shadow-sm'
+                        : 'text-white/65 hover:text-white'
+                    }`}
+                  >
+                    <Music className="w-3 h-3 shrink-0" />
+                    <span>Nhạc</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isSoundCloudTrack) {
+                        onChangeMusicSource('youtube');
+                        if (!isVideoMode) onToggleViewMode();
+                      } else if (!isVideoMode) {
+                        onToggleViewMode();
+                      }
+                    }}
+                    aria-label="Chế độ Phát Video YouTube"
+                    className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
+                      effectiveVideoMode
+                        ? 'bg-sky-400 text-slate-950 shadow-sm'
+                        : 'text-white/65 hover:text-white'
+                    }`}
+                  >
+                    <Tv className="w-3 h-3 shrink-0" />
+                    <span>Video</span>
+                  </button>
+                </div>
+
+                {/* Nút 1 chạm đổi nhanh nguồn YouTube <-> SoundCloud ngay trong Cockpit */}
                 <button
                   type="button"
-                  onClick={() => {
-                    if (isVideoMode) onToggleViewMode();
-                  }}
-                  aria-label="Chế độ Nghe nhạc và Lời bài hát"
-                  className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
-                    !isVideoMode
-                      ? 'bg-white text-slate-950 shadow-sm'
-                      : 'text-white/65 hover:text-white'
+                  onClick={() =>
+                    onChangeMusicSource(musicSource === 'soundcloud' ? 'youtube' : 'soundcloud')
+                  }
+                  title={
+                    musicSource === 'soundcloud'
+                      ? 'Đang dùng nguồn SoundCloud • Bấm để đổi sang YouTube'
+                      : 'Đang dùng nguồn YouTube • Bấm để đổi sang SoundCloud'
+                  }
+                  className={`h-7 px-2 rounded-full border text-[10px] font-black flex items-center gap-1 shrink-0 active:scale-95 transition ${
+                    musicSource === 'soundcloud' || isSoundCloudTrack
+                      ? 'bg-[#ff5500] border-orange-300/70 text-white shadow-sm'
+                      : 'bg-white/10 hover:bg-white/20 border-white/15 text-white/80'
                   }`}
                 >
-                  <Music className="w-3 h-3 shrink-0" />
-                  <span>Nhạc</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isVideoMode) onToggleViewMode();
-                  }}
-                  aria-label="Chế độ Phát Video YouTube"
-                  className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
-                    isVideoMode
-                      ? 'bg-sky-400 text-slate-950 shadow-sm'
-                      : 'text-white/65 hover:text-white'
-                  }`}
-                >
-                  <Tv className="w-3 h-3 shrink-0" />
-                  <span>Video</span>
+                  <span>{musicSource === 'soundcloud' || isSoundCloudTrack ? '☁️ SC' : '▶ YT'}</span>
                 </button>
               </div>
 
@@ -603,7 +638,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             </div>
 
             {/* TẦNG 2 (TRUNG TÂM CÂN ĐỐI TỈ LỆ): VIDEO 16:9 CHUẨN HOẶC ALBUM + KARAOKE */}
-            {isVideoMode ? (
+            {effectiveVideoMode ? (
               <div className="flex-1 min-h-0 flex flex-col gap-2 short:gap-1.5">
                 {/* Sân khấu 16:9 chuẩn container-type: size -> Video KHÔNG BAO GIỜ bị kéo dọc méo hay đẩy vỡ layout! */}
                 <div className="media-stage relative h-[185px] xs:h-[210px] car:h-auto car:flex-1 car:min-h-0 w-full flex items-center justify-center">

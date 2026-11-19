@@ -53,9 +53,10 @@ import {
   SavedPlace,
   PendingNavTarget,
   ActiveNavSummary,
+  MusicSource,
 } from '../types';
 import { MEDIA_CATEGORIES } from '../constants/categories';
-import { formatSeconds } from '../services/api';
+import { formatSeconds, resolveSoundCloudStream } from '../services/api';
 import { fetchSyncedLyrics, LyricsResult } from '../services/lyrics';
 import { fetchSponsorSegments, getSponsorCategoryLabel } from '../services/sponsorblock';
 import { useCarHardwareControls } from '../hooks/useCarHardwareControls';
@@ -122,6 +123,9 @@ interface VideoPlayerProps {
   onRemoveSavedPlace: (id: string) => void;
   incomingNavTarget: PendingNavTarget | null;
   onConsumeIncomingNav: () => void;
+  // Upgrade #7: Multi-Source (YouTube + SoundCloud)
+  musicSource: MusicSource;
+  onChangeMusicSource: (source: MusicSource) => void;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -179,17 +183,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onRemoveSavedPlace,
   incomingNavTarget,
   onConsumeIncomingNav,
+  musicSource,
+  onChangeMusicSource,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeWrapperRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const hlsRef = useRef<any>(null);
   const activeLyricRef = useRef<HTMLButtonElement | null>(null);
   const lyricsContainerRef = useRef<HTMLDivElement | null>(null);
   const cockpitVideoRectRef = useRef<VideoSlotRect | null>(null);
 
-  const initialVideoIdRef = useRef<string>(streamData.id);
-  const loadedVideoIdRef = useRef<string>(streamData.id);
-  const latestVideoIdRef = useRef<string>(streamData.id);
+  const isSoundCloudTrack =
+    streamData.source === 'soundcloud' || streamData.id.startsWith('sc_');
+  const isSoundCloudTrackRef = useRef<boolean>(isSoundCloudTrack);
+  isSoundCloudTrackRef.current = isSoundCloudTrack;
+
+  const [ytBootVideoId, setYtBootVideoId] = useState<string | null>(() =>
+    isSoundCloudTrack ? null : streamData.id
+  );
+  const loadedVideoIdRef = useRef<string>(isSoundCloudTrack ? '' : streamData.id);
+  const latestVideoIdRef = useRef<string>(isSoundCloudTrack ? '' : streamData.id);
   const iframeReadyRef = useRef<boolean>(false);
   const consecutiveErrorsRef = useRef<number>(0);
   const errorSkipTimerRef = useRef<number | null>(null);
@@ -224,7 +239,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const [needsIframeTapHint, setNeedsIframeTapHint] = useState<boolean>(false);
   const [embedError, setEmbedError] = useState<string | null>(null);
-  const [hasMountedCockpit, setHasMountedCockpit] = useState<boolean>(false);
+  const [hasMountedCockpit, setHasMountedCockpit] = useState<boolean>(
+    () => railSection === 'cockpit'
+  );
   const [activeNavSummary, setActiveNavSummary] = useState<ActiveNavSummary | null>(null);
   const [hasCockpitVideoSlot, setHasCockpitVideoSlot] = useState<boolean>(false);
   const [isDraggingCockpitSplit, setIsDraggingCockpitSplit] = useState<boolean>(false);
@@ -245,10 +262,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [clockTime, setClockTime] = useState<string>('');
 
   const isVideoMode = viewMode === 'classic';
+  const effectiveVideoMode = isVideoMode && !isSoundCloudTrack;
   const isNowPlayingView = railSection === 'nowPlaying';
   const isCockpitView = railSection === 'cockpit';
-  const showVideoInViewport = isVideoMode && isNowPlayingView;
-  const showVideoInCockpit = isVideoMode && isCockpitView && !isFullscreen && hasCockpitVideoSlot;
+  const showVideoInViewport = effectiveVideoMode && isNowPlayingView;
+  const showVideoInCockpit =
+    effectiveVideoMode && isCockpitView && !isFullscreen && hasCockpitVideoSlot;
 
   const handleToggleCockpitViewMode = useCallback(() => {
     onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
@@ -350,14 +369,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setConfirmClearHistory(false);
   }, [railSection]);
 
-  // Tải lời bài hát đồng bộ
+  // Tải lời bài hát đồng bộ (hỗ trợ cả YouTube lẫn SoundCloud qua LRCLIB)
   useEffect(() => {
     if (!streamData.id) return;
     let cancelled = false;
     setIsLoadingLyrics(true);
     setLyricsData(null);
 
-    fetchSyncedLyrics(streamData.id, streamData.title, streamData.uploader)
+    const lyricsLookupId = isSoundCloudTrack ? '' : streamData.id;
+    fetchSyncedLyrics(lyricsLookupId, streamData.title, streamData.uploader)
       .then((res) => {
         if (!cancelled) {
           setLyricsData(res);
@@ -371,11 +391,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [streamData.id, streamData.title, streamData.uploader]);
+  }, [streamData.id, streamData.title, streamData.uploader, isSoundCloudTrack]);
 
-  // Upgrade #1: Tải phân đoạn SponsorBlock & Non-Music Intro/Outro cho mỗi bài
+  // Upgrade #1: Tải phân đoạn SponsorBlock & Non-Music Intro/Outro (chỉ cho YouTube)
   useEffect(() => {
-    if (!streamData.id) return;
+    if (!streamData.id || isSoundCloudTrack) {
+      setSponsorSegments([]);
+      return;
+    }
     let cancelled = false;
     skippedKeysRef.current = new Set();
     setSponsorSegments([]);
@@ -389,7 +412,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [streamData.id]);
+  }, [streamData.id, isSoundCloudTrack]);
 
   // Xác định câu hát đang phát
   const effectiveTime = dragTime !== null ? dragTime : currentTime;
@@ -458,6 +481,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   const initialEmbedUrl = useMemo(() => {
+    if (!ytBootVideoId) return '';
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
     const params = new URLSearchParams({
       enablejsapi: '1',
@@ -473,12 +497,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       params.set('origin', origin);
       params.set('widget_referrer', origin);
     }
-    return `https://www.youtube.com/embed/${initialVideoIdRef.current}?${params.toString()}`;
+    return `https://www.youtube.com/embed/${ytBootVideoId}?${params.toString()}`;
+  }, [ytBootVideoId]);
+
+  // Helper dừng sạch SoundCloud <audio> + Hls.js khi chuyển sang YouTube hoặc đổi bài
+  const teardownSoundCloudAudio = useCallback(() => {
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.destroy();
+      } catch {}
+      hlsRef.current = null;
+    }
+    const audio = audioRef.current;
+    if (audio) {
+      try {
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+      } catch {}
+    }
   }, []);
 
-  // Đổi bài 0ms qua loadVideoById
+  // Dual-Engine Playback Switch: SoundCloud Native <audio>/HLS <-> YouTube <iframe> 0ms loadVideoById
   useEffect(() => {
-    latestVideoIdRef.current = streamData.id;
     setCurrentTime(0);
     setDragTime(null);
     setDuration(streamData.duration || 0);
@@ -490,7 +531,114 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       errorSkipTimerRef.current = null;
     }
 
-    if (iframeReadyRef.current && loadedVideoIdRef.current !== streamData.id) {
+    // 1. NGUỒN SOUNDCLOUD (Native <audio> MP3 / iOS Native HLS / Lazy hls.js trên Chrome)
+    if (isSoundCloudTrack) {
+      postEmbedCommand('pauseVideo');
+      teardownSoundCloudAudio();
+      const controller = new AbortController();
+
+      const failSoundCloud = (msg: string) => {
+        if (controller.signal.aborted) return;
+        consecutiveErrorsRef.current += 1;
+        setIsPlaying(false);
+        setIsBuffering(false);
+        if (consecutiveErrorsRef.current <= 4 && hasNext) {
+          setEmbedError(`${msg} — Tự chuyển bài tiếp theo...`);
+          errorSkipTimerRef.current = window.setTimeout(() => {
+            onNextRef.current();
+          }, 1500);
+        } else {
+          setEmbedError(`${msg}. Hãy chọn bài khác.`);
+        }
+      };
+
+      (async () => {
+        const info = await resolveSoundCloudStream(streamData.id, controller.signal);
+        if (controller.signal.aborted) return;
+        if (!info?.streamUrl) {
+          failSoundCloud('Không tải được luồng nhạc SoundCloud');
+          return;
+        }
+        if (info.duration > 0) setDuration(info.duration);
+
+        const audio = audioRef.current;
+        if (!audio) return;
+
+        const canPlayNativeHls =
+          audio.canPlayType('application/vnd.apple.mpegurl') !== '' ||
+          audio.canPlayType('application/x-mpegURL') !== '';
+
+        if (info.protocol === 'progressive' || canPlayNativeHls) {
+          audio.src = info.streamUrl;
+          audio.load();
+          audio
+            .play()
+            .then(() => {
+              if (!controller.signal.aborted) {
+                consecutiveErrorsRef.current = 0;
+                setHasUnlockedAudio(true);
+                setNeedsIframeTapHint(false);
+                setIsPlaying(true);
+                setIsBuffering(false);
+              }
+            })
+            .catch(() => {
+              if (!controller.signal.aborted) {
+                setIsPlaying(false);
+                setIsBuffering(false);
+              }
+            });
+        } else {
+          try {
+            const { default: Hls } = await import('hls.js');
+            if (controller.signal.aborted) return;
+            if (Hls.isSupported()) {
+              const hls = new Hls({ maxBufferLength: 20, maxMaxBufferLength: 40 });
+              hlsRef.current = hls;
+              hls.loadSource(info.streamUrl);
+              hls.attachMedia(audio);
+              hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (controller.signal.aborted) return;
+                audio
+                  .play()
+                  .then(() => {
+                    consecutiveErrorsRef.current = 0;
+                    setHasUnlockedAudio(true);
+                    setIsPlaying(true);
+                    setIsBuffering(false);
+                  })
+                  .catch(() => {
+                    setIsPlaying(false);
+                    setIsBuffering(false);
+                  });
+              });
+              hls.on(Hls.Events.ERROR, (_ev: any, data: any) => {
+                if (data?.fatal) {
+                  failSoundCloud('Luồng SoundCloud HLS gián đoạn');
+                }
+              });
+            } else {
+              failSoundCloud('Trình duyệt không hỗ trợ luồng HLS SoundCloud');
+            }
+          } catch {
+            failSoundCloud('Không khởi tạo được bộ phát SoundCloud');
+          }
+        }
+      })();
+
+      return () => {
+        controller.abort();
+      };
+    }
+
+    // 2. NGUỒN YOUTUBE (0ms qua loadVideoById)
+    teardownSoundCloudAudio();
+    latestVideoIdRef.current = streamData.id;
+
+    if (!ytBootVideoId) {
+      loadedVideoIdRef.current = streamData.id;
+      setYtBootVideoId(streamData.id);
+    } else if (iframeReadyRef.current && loadedVideoIdRef.current !== streamData.id) {
       loadedVideoIdRef.current = streamData.id;
       postEmbedCommand('loadVideoById', [streamData.id]);
       window.setTimeout(sendWidgetHandshake, 350);
@@ -503,7 +651,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       window.clearTimeout(autoplayGuard);
     };
-  }, [streamData.id, streamData.duration, postEmbedCommand, sendWidgetHandshake]);
+  }, [
+    streamData.id,
+    streamData.duration,
+    isSoundCloudTrack,
+    ytBootVideoId,
+    hasNext,
+    postEmbedCommand,
+    sendWidgetHandshake,
+    teardownSoundCloudAudio,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      teardownSoundCloudAudio();
+    };
+  }, [teardownSoundCloudAudio]);
 
   const handleSeekTo = useCallback(
     (val: number) => {
@@ -511,7 +674,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const clamped = Math.max(0, Math.min(val, maxDur));
       lastManualSeekAtRef.current = Date.now();
       setCurrentTime(clamped);
-      postEmbedCommand('seekTo', [clamped, true]);
+      if (isSoundCloudTrackRef.current) {
+        const audio = audioRef.current;
+        if (audio && isFinite(clamped)) {
+          try {
+            audio.currentTime = clamped;
+          } catch {}
+        }
+      } else {
+        postEmbedCommand('seekTo', [clamped, true]);
+      }
     },
     [duration, postEmbedCommand]
   );
@@ -619,6 +791,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const handleWindowMessage = (e: MessageEvent) => {
+      if (isSoundCloudTrackRef.current) return;
       if (
         typeof e.origin === 'string' &&
         e.origin &&
@@ -680,13 +853,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     window.setTimeout(sendWidgetHandshake, 500);
     window.setTimeout(sendWidgetHandshake, 1400);
 
-    if (latestVideoIdRef.current !== loadedVideoIdRef.current) {
+    if (
+      !isSoundCloudTrackRef.current &&
+      latestVideoIdRef.current &&
+      latestVideoIdRef.current !== loadedVideoIdRef.current
+    ) {
       loadedVideoIdRef.current = latestVideoIdRef.current;
       postEmbedCommand('loadVideoById', [latestVideoIdRef.current]);
     }
   };
 
   const handlePlayExplicit = useCallback(() => {
+    if (isSoundCloudTrackRef.current) {
+      const audio = audioRef.current;
+      if (audio) {
+        audio
+          .play()
+          .then(() => {
+            setHasUnlockedAudio(true);
+            setIsPlaying(true);
+            setIsBuffering(false);
+          })
+          .catch(() => {});
+      }
+      return;
+    }
+
     postEmbedCommand('playVideo');
     if (!hasUnlockedAudioRef.current && !isVideoMode) {
       window.setTimeout(() => {
@@ -698,6 +890,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [isVideoMode, postEmbedCommand]);
 
   const handlePauseExplicit = useCallback(() => {
+    if (isSoundCloudTrackRef.current) {
+      audioRef.current?.pause();
+      setIsPlaying(false);
+      return;
+    }
     postEmbedCommand('pauseVideo');
     setIsPlaying(false);
   }, [postEmbedCommand]);
@@ -871,7 +1068,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
 
   const overlayIframeOnArtForFirstUnlock =
-    !isVideoMode && isNowPlayingView && !hasUnlockedAudio && !isPlaying;
+    !isSoundCloudTrack && !isVideoMode && isNowPlayingView && !hasUnlockedAudio && !isPlaying;
 
   return (
     <div
@@ -880,6 +1077,55 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         isFullscreen ? 'fixed inset-0 z-50' : ''
       }`}
     >
+      {/* AUDIO NATIVE DUY NHẤT CHO SOUNDCLOUD (MP3 Progressive + iOS Native HLS + Lazy hls.js) */}
+      <audio
+        ref={audioRef}
+        playsInline
+        preload="auto"
+        className="hidden"
+        onPlaying={() => {
+          if (!isSoundCloudTrackRef.current) return;
+          consecutiveErrorsRef.current = 0;
+          setHasUnlockedAudio(true);
+          setNeedsIframeTapHint(false);
+          setEmbedError(null);
+          setIsPlaying(true);
+          setIsBuffering(false);
+        }}
+        onPause={() => {
+          if (!isSoundCloudTrackRef.current) return;
+          setIsPlaying(false);
+        }}
+        onWaiting={() => {
+          if (!isSoundCloudTrackRef.current) return;
+          setIsBuffering(true);
+        }}
+        onTimeUpdate={() => {
+          if (!isSoundCloudTrackRef.current) return;
+          const a = audioRef.current;
+          if (a && Date.now() - lastManualSeekAtRef.current > 650) {
+            setCurrentTime(a.currentTime || 0);
+          }
+        }}
+        onLoadedMetadata={() => {
+          if (!isSoundCloudTrackRef.current) return;
+          const a = audioRef.current;
+          if (a && isFinite(a.duration) && a.duration > 0) {
+            setDuration(a.duration);
+          }
+        }}
+        onEnded={() => {
+          if (!isSoundCloudTrackRef.current) return;
+          setIsPlaying(false);
+          setIsBuffering(false);
+          if (repeatModeRef.current === 'one' && audioRef.current) {
+            audioRef.current.currentTime = 0;
+            audioRef.current.play().catch(() => {});
+          } else {
+            onNextRef.current();
+          }
+        }}
+      />
       {/* NỀN ÁNH SÁNG ĐỘNG (Tự hạ độ chói khi bật Chế độ Ban Đêm trên VF5!) */}
       {!isFullscreen && (
         <>
@@ -978,26 +1224,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </button>
 
-          {/* Cụm điều hướng chính */}
+          {/* Cụm điều hướng chính (Cockpit nằm vị trí #1 mặc định khi mở xe!) */}
           <nav
             aria-label="Điều hướng chính"
             className="flex car:flex-col items-center gap-1 car:gap-0.5 car:w-full shrink-0"
           >
-            <button
-              type="button"
-              onClick={() => onChangeRailSection('nowPlaying')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'nowPlaying'
-                  ? 'bg-white/20 text-white border border-white/25 shadow-inner'
-                  : 'text-white/65 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              {isVideoMode ? <Tv className="w-4 h-4" /> : <Headphones className="w-4 h-4" />}
-              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
-                Đang phát
-              </span>
-            </button>
-
             <button
               type="button"
               onClick={() => onChangeRailSection('cockpit')}
@@ -1010,6 +1241,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <Gauge className="w-4 h-4" />
               <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
                 Cockpit
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onChangeRailSection('nowPlaying')}
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
+                railSection === 'nowPlaying'
+                  ? 'bg-white/20 text-white border border-white/25 shadow-inner'
+                  : 'text-white/65 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              {effectiveVideoMode ? <Tv className="w-4 h-4" /> : <Headphones className="w-4 h-4" />}
+              <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
+                Đang phát
               </span>
             </button>
 
@@ -1156,7 +1402,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 ? isFullscreen
                   ? 'relative w-full h-full flex flex-col bg-black'
                   : `flex flex-col justify-between min-h-0 h-full w-full mx-auto gap-2 short:gap-1.5 vshort:gap-1 ${
-                      isVideoMode
+                      effectiveVideoMode
                         ? 'car:col-span-7 lg:col-span-8'
                         : 'car:col-span-5 md:col-span-5 max-w-md'
                     }`
@@ -1173,8 +1419,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   : 'w-0 h-0 overflow-visible'
               }
             >
-              {/* 1. ẢNH BÌA ALBUM VUÔNG + CỬ CHỈ VUỐT MÙ & CHẠM ĐÚP ❤️ */}
-              {isNowPlayingView && !isVideoMode && (
+              {/* 1. ẢNH BÌA ALBUM VUÔNG + CỬ CHỈ VUỐT MÙ & CHẠM ĐÚP ❤️ (hiện cho Music & mọi bài SoundCloud) */}
+              {isNowPlayingView && !effectiveVideoMode && (
                 <div
                   onTouchStart={handleArtOrCardTouchStart}
                   onTouchEnd={(e) => handleArtTouchEnd(e, true)}
@@ -1235,10 +1481,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     <span className="px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-[9px] font-bold text-white/75 truncate">
                       Vuốt ⇄ • Đúp ❤️
                     </span>
-                    {sponsorSegments.length > 0 && autoSkipEnabled && (
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/80 text-black text-[9px] font-extrabold shrink-0">
-                        Skip Intro ({sponsorSegments.length})
+                    {isSoundCloudTrack ? (
+                      <span className="px-2 py-0.5 rounded-full bg-[#ff5500] text-white text-[9px] font-black shrink-0 shadow">
+                        ☁️ SoundCloud
                       </span>
+                    ) : (
+                      sponsorSegments.length > 0 &&
+                      autoSkipEnabled && (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/80 text-black text-[9px] font-extrabold shrink-0">
+                          Skip Intro ({sponsorSegments.length})
+                        </span>
+                      )
                     )}
                   </div>
                 </div>
@@ -1261,15 +1514,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     : 'fixed bottom-0 right-0 w-[2px] h-[2px] opacity-[0.01] pointer-events-none overflow-hidden'
                 }
               >
-                <iframe
-                  ref={iframeRef}
-                  src={initialEmbedUrl}
-                  title={streamData.title || 'CarHub Player'}
-                  referrerPolicy="strict-origin-when-cross-origin"
-                  className="w-full h-full border-0"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                  onLoad={handleIframeLoad}
-                />
+                {initialEmbedUrl && (
+                  <iframe
+                    ref={iframeRef}
+                    src={initialEmbedUrl}
+                    title={streamData.title || 'CarHub Player'}
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    className="w-full h-full border-0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    onLoad={handleIframeLoad}
+                  />
+                )}
                 {(showVideoInViewport || showVideoInCockpit) && (isLoading || isBuffering) && (
                   <div className="absolute inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center pointer-events-none">
                     <Loader2 className="w-10 h-10 text-white animate-spin" />
@@ -1592,11 +1847,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {isNowPlayingView && !isFullscreen && (
             <div
               className={`flex flex-col min-h-[260px] car:min-h-0 car:h-full max-h-full bg-white/[0.05] backdrop-blur-xl rounded-2xl sm:rounded-3xl border border-white/12 overflow-hidden shadow-xl ${
-                isVideoMode ? 'car:col-span-5 lg:col-span-4' : 'car:col-span-7 md:col-span-7'
+                effectiveVideoMode ? 'car:col-span-5 lg:col-span-4' : 'car:col-span-7 md:col-span-7'
               }`}
             >
               <div className="flex items-center justify-between gap-2 px-3 py-2 short:py-1.5 border-b border-white/10 shrink-0">
-                {!isVideoMode ? (
+                {!effectiveVideoMode ? (
                   <div className="grid grid-cols-3 bg-black/40 p-1 rounded-full border border-white/10 w-full">
                     <button
                       type="button"
@@ -1671,7 +1926,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 )}
               </div>
 
-              {!isVideoMode && musicRightTab === 'lyrics' ? (
+              {!effectiveVideoMode && musicRightTab === 'lyrics' ? (
                 <div
                   ref={lyricsContainerRef}
                   key={`lyrics-${streamData.id}`}
@@ -1748,9 +2003,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     </div>
                   )}
                 </div>
-              ) : (!isVideoMode && musicRightTab === 'categories') ||
-                (isVideoMode && videoRightTab === 'categories') ? (
+              ) : (!effectiveVideoMode && musicRightTab === 'categories') ||
+                (effectiveVideoMode && videoRightTab === 'categories') ? (
                 <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 no-scrollbar animate-ios-browse-in">
+                  {/* Bộ chọn nguồn nhạc YouTube <-> SoundCloud ngay đầu tab Chủ đề */}
+                  <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-black/45 border border-white/12">
+                    <button
+                      type="button"
+                      onClick={() => onChangeMusicSource('youtube')}
+                      className={`min-h-[36px] rounded-xl text-xs font-extrabold transition ${
+                        musicSource === 'youtube'
+                          ? 'bg-rose-600 text-white shadow'
+                          : 'text-white/65 hover:text-white'
+                      }`}
+                    >
+                      ▶ YouTube
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onChangeMusicSource('soundcloud')}
+                      className={`min-h-[36px] rounded-xl text-xs font-extrabold transition ${
+                        musicSource === 'soundcloud'
+                          ? 'bg-[#ff5500] text-white shadow'
+                          : 'text-white/65 hover:text-white'
+                      }`}
+                    >
+                      ☁️ SoundCloud
+                    </button>
+                  </div>
                   {MEDIA_CATEGORIES.map((cat) => {
                     const isSelected = selectedCategory === cat.id && queueSource === 'explore';
                     return (
@@ -1869,6 +2149,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <CockpitView
             isVisible={isCockpitView}
             isVideoMode={isVideoMode}
+            isSoundCloudTrack={isSoundCloudTrack}
+            musicSource={musicSource}
+            onChangeMusicSource={onChangeMusicSource}
             onToggleViewMode={handleToggleCockpitViewMode}
             onVideoSlotRectChange={handleCockpitVideoSlotRectChange}
             onDraggingSplitChange={setIsDraggingCockpitSplit}
@@ -1939,6 +2222,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
+                {railSection === 'browse' && (
+                  <div className="inline-flex items-center p-0.5 rounded-full bg-white/10 border border-white/15">
+                    <button
+                      type="button"
+                      onClick={() => onChangeMusicSource('youtube')}
+                      className={`min-h-[32px] px-3 rounded-full text-xs font-extrabold transition ${
+                        musicSource === 'youtube'
+                          ? 'bg-rose-600 text-white shadow'
+                          : 'text-white/70 hover:text-white'
+                      }`}
+                    >
+                      ▶ YouTube
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onChangeMusicSource('soundcloud')}
+                      className={`min-h-[32px] px-3 rounded-full text-xs font-extrabold transition ${
+                        musicSource === 'soundcloud'
+                          ? 'bg-[#ff5500] text-white shadow'
+                          : 'text-white/70 hover:text-white'
+                      }`}
+                    >
+                      ☁️ SoundCloud
+                    </button>
+                  </div>
+                )}
+
                 {railSection === 'favorites' && (
                   <button
                     type="button"
@@ -2132,11 +2442,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           alt={item.title}
                           loading="lazy"
                           className={`${
-                            isVideoMode
+                            isVideoMode && !item.id.startsWith('sc_')
                               ? 'w-28 short:w-24 aspect-video'
                               : 'w-14 h-14 short:w-12 short:h-12'
                           } rounded-xl object-cover shadow bg-black`}
                         />
+                        {(item.source === 'soundcloud' || item.id.startsWith('sc_')) && (
+                          <span className="absolute top-1 left-1 bg-[#ff5500] text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow">
+                            ☁️ SC
+                          </span>
+                        )}
                         {item.durationText && (
                           <span className="absolute bottom-1 right-1 bg-black/80 text-white text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border border-white/10">
                             {item.durationText}

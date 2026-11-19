@@ -11,13 +11,15 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
-import { ViewMode } from '../types';
+import { MusicSource, ViewMode } from '../types';
 
 interface CarSearchModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSearch: (query: string) => void;
+  onSearch: (query: string, sourceOverride?: MusicSource) => void;
   initialQuery?: string;
+  musicSource: MusicSource;
+  onChangeMusicSource: (source: MusicSource) => void;
   recentSearches: string[];
   onClearRecentSearches: () => void;
   onRemoveRecentSearch: (query: string) => void;
@@ -56,6 +58,8 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
   onClose,
   onSearch,
   initialQuery = '',
+  musicSource,
+  onChangeMusicSource: _onChangeMusicSource,
   recentSearches,
   onClearRecentSearches,
   onRemoveRecentSearch,
@@ -63,6 +67,9 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
   startVoice = false,
 }) => {
   const [query, setQuery] = useState(initialQuery);
+  const [modalSource, setModalSource] = useState<MusicSource>(musicSource);
+  const modalSourceRef = useRef<MusicSource>(modalSource);
+  modalSourceRef.current = modalSource;
   const [isListening, setIsListening] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState('');
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
@@ -98,7 +105,7 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
         recognitionRef.current.abort();
       } catch {}
     }
-    onSearchRef.current(clean);
+    onSearchRef.current(clean, modalSourceRef.current);
     onCloseRef.current();
   }, []);
 
@@ -201,6 +208,7 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
     if (isOpen) {
       submittedRef.current = false;
       setQuery(initialQuery);
+      setModalSource(musicSource);
       setInterimTranscript('');
       setVoiceNotice(null);
       setIsListening(false);
@@ -359,6 +367,39 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
           >
             <X className="w-6 h-6" />
           </button>
+        </div>
+
+        {/* THANH CHỌN NGUỒN TÌM KIẾM: YOUTUBE <-> SOUNDCLOUD (1 chạm cực nhanh trên màn xe!) */}
+        <div className="flex items-center justify-between gap-2 shrink-0">
+          <div className="inline-flex items-center p-1 rounded-full bg-white/10 border border-white/15">
+            <button
+              type="button"
+              onClick={() => setModalSource('youtube')}
+              className={`min-h-[34px] px-3.5 rounded-full text-xs font-extrabold flex items-center gap-1.5 transition ${
+                modalSource === 'youtube'
+                  ? 'bg-rose-600 text-white shadow'
+                  : 'text-white/70 hover:text-white'
+              }`}
+            >
+              <span>▶ YouTube</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setModalSource('soundcloud')}
+              className={`min-h-[34px] px-3.5 rounded-full text-xs font-extrabold flex items-center gap-1.5 transition ${
+                modalSource === 'soundcloud'
+                  ? 'bg-[#ff5500] text-white shadow'
+                  : 'text-white/70 hover:text-white'
+              }`}
+            >
+              <span>☁️ SoundCloud</span>
+            </button>
+          </div>
+          <span className="text-[11px] font-bold text-white/55 truncate hidden xs:inline">
+            {modalSource === 'soundcloud'
+              ? 'Âm thanh Hi-Fi không quảng cáo • Vinahouse / Remix / Set DJ'
+              : 'Kho Video & Nhạc YouTube đầy đủ nhất'}
+          </span>
         </div>
 
         {/* SCROLLABLE BODY (tối ưu chiều cao cho màn hình ngang VF5 8 inch) */}

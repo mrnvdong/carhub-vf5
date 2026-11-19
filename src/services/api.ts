@@ -1,4 +1,4 @@
-import { VideoItem } from '../types';
+import { MusicSource, VideoItem } from '../types';
 
 const PIPED_FALLBACK_INSTANCES = [
   'https://api.piped.private.coffee',
@@ -8,6 +8,13 @@ const PIPED_FALLBACK_INSTANCES = [
 export interface SearchResult {
   items: VideoItem[];
   nextContinuation: string | null;
+}
+
+export interface SoundCloudStreamInfo {
+  streamUrl: string;
+  protocol: 'progressive' | 'hls';
+  mimeType: string;
+  duration: number;
 }
 
 function dedupeVideos(items: VideoItem[]): VideoItem[] {
@@ -47,11 +54,86 @@ function createTimedSignal(timeoutMs: number, externalSignal?: AbortSignal): {
   };
 }
 
-export async function searchVideos(
+export async function searchSoundCloud(
   query: string,
   continuation?: string | null,
   externalSignal?: AbortSignal
 ): Promise<SearchResult> {
+  if (externalSignal?.aborted) {
+    return { items: [], nextContinuation: null };
+  }
+
+  let offset = 0;
+  if (continuation && continuation.startsWith('sc_offset:')) {
+    offset = parseInt(continuation.replace('sc_offset:', ''), 10) || 0;
+  }
+
+  const { signal, cleanup } = createTimedSignal(7000, externalSignal);
+  try {
+    const url = `/api/soundcloud?action=search&q=${encodeURIComponent(query)}&offset=${offset}`;
+    const res = await fetch(url, { signal });
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
+      const data = await res.json();
+      if (Array.isArray(data.items) && data.items.length > 0) {
+        return {
+          items: dedupeVideos(data.items),
+          nextContinuation: data.nextContinuation || null,
+        };
+      }
+    }
+  } catch (err) {
+    if (!externalSignal?.aborted) {
+      console.warn('SoundCloud search error:', err);
+    }
+  } finally {
+    cleanup();
+  }
+
+  return { items: [], nextContinuation: null };
+}
+
+export async function resolveSoundCloudStream(
+  trackId: string,
+  externalSignal?: AbortSignal
+): Promise<SoundCloudStreamInfo | null> {
+  if (externalSignal?.aborted) return null;
+  const { signal, cleanup } = createTimedSignal(7500, externalSignal);
+  try {
+    const res = await fetch(
+      `/api/soundcloud?action=stream&id=${encodeURIComponent(trackId)}`,
+      { signal, cache: 'no-store' }
+    );
+    const ct = res.headers.get('content-type') || '';
+    if (res.ok && ct.includes('application/json')) {
+      const data = await res.json();
+      if (data?.success && data?.streamUrl) {
+        return {
+          streamUrl: data.streamUrl,
+          protocol: data.protocol === 'progressive' ? 'progressive' : 'hls',
+          mimeType: data.mimeType || '',
+          duration: Number(data.duration || 0),
+        };
+      }
+    }
+  } catch {
+    // Handled by caller
+  } finally {
+    cleanup();
+  }
+  return null;
+}
+
+export async function searchVideos(
+  query: string,
+  continuation?: string | null,
+  externalSignal?: AbortSignal,
+  source: MusicSource = 'youtube'
+): Promise<SearchResult> {
+  if (source === 'soundcloud') {
+    return searchSoundCloud(query, continuation, externalSignal);
+  }
+
   if (externalSignal?.aborted) {
     return { items: [], nextContinuation: null };
   }
@@ -71,7 +153,9 @@ export async function searchVideos(
         const data = await res.json();
         if (Array.isArray(data.items) && data.items.length > 0) {
           return {
-            items: dedupeVideos(data.items),
+            items: dedupeVideos(
+              data.items.map((it: any) => ({ ...it, source: 'youtube' as const }))
+            ),
             nextContinuation: data.nextContinuation || null,
           };
         }
@@ -107,6 +191,7 @@ export async function searchVideos(
             const id = (item.url || '').replace('/watch?v=', '') || item.id || '';
             return {
               id,
+              source: 'youtube' as const,
               title: item.title || '',
               uploaderName: item.uploaderName || '',
               thumbnail:
@@ -142,13 +227,35 @@ export async function searchVideos(
 }
 
 /**
- * Lấy danh sách Đài phát thông minh (Auto-Mix / Radio) tương tự bài đang nghe
+ * Lấy danh sách Đài phát thông minh (Auto-Mix / Radio) cho cả YouTube & SoundCloud
  */
 export async function fetchRadioMix(
   videoId: string,
   title: string,
-  artist: string
+  artist: string,
+  source?: MusicSource
 ): Promise<VideoItem[]> {
+  const isSc = source === 'soundcloud' || videoId.startsWith('sc_');
+
+  if (isSc) {
+    try {
+      const res = await fetch(
+        `/api/soundcloud?action=related&id=${encodeURIComponent(videoId)}`,
+        { signal: AbortSignal.timeout(6500) }
+      );
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
+        const data = await res.json();
+        if (Array.isArray(data.items) && data.items.length > 0) {
+          return dedupeVideos(data.items);
+        }
+      }
+    } catch {}
+
+    const fallback = await searchSoundCloud(artist || title.slice(0, 35));
+    return fallback.items.filter((v) => v.id !== videoId);
+  }
+
   try {
     const res = await fetch(
       `/api/mix?id=${encodeURIComponent(videoId)}&title=${encodeURIComponent(
@@ -160,7 +267,9 @@ export async function fetchRadioMix(
     if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
       if (Array.isArray(data.items) && data.items.length > 0) {
-        return dedupeVideos(data.items);
+        return dedupeVideos(
+          data.items.map((it: any) => ({ ...it, source: 'youtube' as const }))
+        );
       }
     }
   } catch {
@@ -172,7 +281,7 @@ export async function fetchRadioMix(
   const fallbackQuery = cleanArtist
     ? `nhạc ${cleanArtist} hay nhất tuyển chọn`
     : `${title.slice(0, 40)} mix`;
-  const searchRes = await searchVideos(fallbackQuery);
+  const searchRes = await searchVideos(fallbackQuery, null, undefined, 'youtube');
   return searchRes.items.filter((v) => v.id !== videoId);
 }
 

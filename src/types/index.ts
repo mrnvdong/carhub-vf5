@@ -1,5 +1,8 @@
+export type MusicSource = 'youtube' | 'soundcloud';
+
 export interface VideoItem {
   id: string;
+  source?: MusicSource;
   title: string;
   uploaderName: string;
   thumbnail: string;
