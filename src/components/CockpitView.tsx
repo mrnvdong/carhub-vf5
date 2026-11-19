@@ -28,6 +28,7 @@ import {
 import {
   ActiveNavSummary,
   CockpitNavControls,
+  MapTheme,
   MusicSource,
   PendingNavTarget,
   RepeatMode,
@@ -38,6 +39,7 @@ import { formatSeconds } from '../services/api';
 import { LyricsResult } from '../services/lyrics';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
 import { MapErrorBoundary } from './MapErrorBoundary';
+import { getCarTheme } from '../utils/theme';
 
 const LazyCarCockpitMap = React.lazy(() => import('./CarCockpitMap'));
 
@@ -99,6 +101,9 @@ interface CockpitViewProps {
   onConsumeIncomingNav: () => void;
   onActiveNavChange: (summary: ActiveNavSummary | null) => void;
   onNotifyToast: (msg: string) => void;
+  mapTheme: MapTheme;
+  onChangeMapTheme: (theme: MapTheme) => void;
+  isLightTheme: boolean;
 }
 
 export const CockpitView: React.FC<CockpitViewProps> = React.memo(
@@ -150,7 +155,11 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     onConsumeIncomingNav,
     onActiveNavChange,
     onNotifyToast,
+    mapTheme,
+    onChangeMapTheme,
+    isLightTheme,
   }) => {
+    const theme = getCarTheme(isLightTheme);
     const splitContainerRef = useRef<HTMLDivElement | null>(null);
     const telemetryCardRef = useRef<HTMLDivElement | null>(null);
     const navControlsRef = useRef<CockpitNavControls | null>(null);
@@ -432,12 +441,14 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               : 'w-full car:w-[var(--map-pct)] shrink-0 min-h-[320px] car:min-h-0 h-full'
           }`}
         >
-          <MapErrorBoundary>
+          <MapErrorBoundary isLightTheme={isLightTheme}>
             <Suspense
               fallback={
-                <div className="w-full h-full min-h-[220px] rounded-3xl bg-black/60 border border-white/15 flex flex-col items-center justify-center gap-2">
-                  <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
-                  <span className="text-xs font-bold text-white/70">
+                <div
+                  className={`w-full h-full min-h-[220px] rounded-3xl border flex flex-col items-center justify-center gap-2 ${theme.card}`}
+                >
+                  <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+                  <span className={`text-xs font-bold ${theme.textSub}`}>
                     Đang khởi tạo Bản đồ 3D Cockpit VF5...
                   </span>
                 </div>
@@ -453,6 +464,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 onToggleMapSide={toggleMapSide}
                 mapWidthPct={mapWidthPct}
                 onChangeMapWidthPct={setMapWidthPct}
+                mapTheme={mapTheme}
+                onChangeMapTheme={onChangeMapTheme}
                 suppressResizeObserver={isDraggingSplit}
                 savedPlaces={savedPlaces}
                 onSavePlace={onSavePlace}
@@ -488,7 +501,9 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               <div
                 className={`w-5 h-14 shrink-0 rounded-full border flex items-center justify-center shadow-xl transition-transform ${
                   isDraggingSplit
-                    ? 'bg-emerald-400 border-white text-black scale-110'
+                    ? 'bg-emerald-500 border-white text-white scale-110'
+                    : isLightTheme
+                    ? 'bg-white/95 group-hover:bg-slate-100 border-slate-300 text-slate-600'
                     : 'bg-black/85 group-hover:bg-white/20 border-white/30 text-white/80'
                 }`}
               >
@@ -504,7 +519,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         {isMapExpanded ? (
           <div
             {...gestureHandlers}
-            className="shrink-0 bg-white/[0.08] backdrop-blur-2xl rounded-2xl border border-white/15 px-3 py-2 flex items-center justify-between gap-3 shadow-2xl"
+            className={`shrink-0 rounded-2xl border px-3 py-2 flex items-center justify-between gap-3 ${theme.cardElevated}`}
           >
             <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <img
@@ -513,10 +528,14 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 className="w-10 h-10 rounded-xl object-cover shrink-0 bg-black"
               />
               <div className="min-w-0">
-                <h4 className="text-xs sm:text-sm font-extrabold text-white truncate">
+                <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
                   {streamData.title}
                 </h4>
-                <p className="text-[11px] text-emerald-300 font-bold truncate">
+                <p
+                  className={`text-[11px] font-bold truncate ${
+                    isLightTheme ? 'text-emerald-700' : 'text-emerald-300'
+                  }`}
+                >
                   {currentLyricText ? `♪ ${currentLyricText}` : streamData.uploader}
                 </p>
               </div>
@@ -528,7 +547,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 onClick={onPrev}
                 disabled={!hasPrev}
                 aria-label="Bài trước"
-                className="w-9 h-9 rounded-full bg-white/15 text-white flex items-center justify-center disabled:opacity-30 active:scale-90"
+                className={`w-9 h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 ${theme.iconBtn}`}
               >
                 <SkipBack className="w-4 h-4 fill-current" />
               </button>
@@ -536,12 +555,12 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 type="button"
                 onClick={onTogglePlay}
                 aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-                className="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center shadow active:scale-90"
+                className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-90 ${theme.primaryCta}`}
               >
                 {isPlaying ? (
-                  <Pause className="w-4 h-4 fill-black" />
+                  <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
                 ) : (
-                  <Play className="w-4 h-4 fill-black ml-0.5" />
+                  <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
                 )}
               </button>
               <button
@@ -549,7 +568,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 onClick={onNext}
                 disabled={!hasNext}
                 aria-label="Bài tiếp theo"
-                className="w-9 h-9 rounded-full bg-white/15 text-white flex items-center justify-center disabled:opacity-30 active:scale-90"
+                className={`w-9 h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 ${theme.iconBtn}`}
               >
                 <SkipForward className="w-4 h-4 fill-current" />
               </button>
@@ -562,16 +581,22 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             }`}
           >
             {/* =================================================================
-                3A. THẺ THÔNG SỐ LÁI XE (TỐC ĐỘ • CẢNH BÁO P.127 • ĐỊA ĐIỂM • THỜI TIẾT • GIỜ)
+                3A. THẺ THÔNG SỐ LÁI XE (TỐC ĐỘ • CẢNH BÁO P.127 • ĐỊA ĐIỂM • THỜI TIẾT • GIỜ • DẪN ĐƯỜNG)
                ================================================================= */}
             <div
               ref={telemetryCardRef}
               onClick={gpsStatus !== 'active' ? requestGps : undefined}
-              className={`shrink-0 rounded-2xl sm:rounded-3xl border backdrop-blur-2xl px-3 py-2 short:px-2.5 short:py-1.5 vshort:px-2 vshort:py-1 shadow-xl transition-colors ${
+              className={`shrink-0 rounded-2xl sm:rounded-3xl border px-3 py-2 short:px-2.5 short:py-1.5 vshort:px-2 vshort:py-1 transition-colors ${
                 isDangerOverLimit
-                  ? 'bg-rose-600/95 border-rose-300 ring-2 ring-rose-400/70'
-                  : 'bg-white/[0.08] border-white/15'
-              } ${gpsStatus !== 'active' ? 'cursor-pointer hover:bg-white/[0.11]' : ''}`}
+                  ? 'bg-rose-600 border-rose-300 ring-2 ring-rose-400/70 shadow-2xl'
+                  : theme.cardElevated
+              } ${
+                gpsStatus !== 'active'
+                  ? isLightTheme
+                    ? 'cursor-pointer hover:bg-white'
+                    : 'cursor-pointer hover:bg-white/[0.11]'
+                  : ''
+              }`}
             >
               {/* Hàng 1: Tốc độ + Biển P.127 (trái)  <--->  Giờ + Thời tiết (phải) */}
               <div className="flex items-center justify-between gap-2 min-h-[42px] short:min-h-[34px] vshort:min-h-[28px]">
@@ -583,9 +608,13 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                           isDangerOverLimit
                             ? 'text-white'
                             : speedKmh === null
-                            ? 'text-white'
+                            ? theme.text
                             : isOverLimit
-                            ? 'text-amber-300'
+                            ? isLightTheme
+                              ? 'text-amber-600'
+                              : 'text-amber-300'
+                            : isLightTheme
+                            ? 'text-emerald-700'
                             : 'text-emerald-300'
                         }`}
                       >
@@ -593,7 +622,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       </span>
                       <span
                         className={`text-[9.5px] font-black tracking-tight ${
-                          isDangerOverLimit ? 'text-rose-100' : 'text-white/55'
+                          isDangerOverLimit ? 'text-rose-100' : theme.textMuted
                         }`}
                       >
                         KM/H
@@ -606,13 +635,13 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                           gpsStatus === 'active'
                             ? isDangerOverLimit
                               ? 'bg-white animate-ping'
-                              : 'bg-emerald-400'
-                            : 'bg-amber-400 animate-pulse'
+                              : 'bg-emerald-500'
+                            : 'bg-amber-500 animate-pulse'
                         }`}
                       />
                       <span
                         className={`text-[9px] font-extrabold uppercase tracking-wider cq-hide-xs whitespace-nowrap ${
-                          isDangerOverLimit ? 'text-white' : 'text-white/65'
+                          isDangerOverLimit ? 'text-white' : theme.textSub
                         }`}
                       >
                         {gpsStatus === 'active'
@@ -637,8 +666,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                           isDangerOverLimit
                             ? 'text-white'
                             : speedAlertSound
-                            ? 'text-emerald-300 hover:text-emerald-200'
-                            : 'text-white/35 hover:text-white/60'
+                            ? isLightTheme
+                              ? 'text-emerald-700 hover:text-emerald-800'
+                              : 'text-emerald-300 hover:text-emerald-200'
+                            : theme.textDim
                         }`}
                       >
                         {speedAlertSound ? (
@@ -667,7 +698,11 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                           isDangerOverLimit
                             ? 'text-white'
                             : roadInfo?.isVerifiedLimit
-                            ? 'text-emerald-300'
+                            ? isLightTheme
+                              ? 'text-emerald-700'
+                              : 'text-emerald-300'
+                            : isLightTheme
+                            ? 'text-amber-700'
                             : 'text-amber-300'
                         }`}
                       >
@@ -679,7 +714,11 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
 
                 {/* Cụm Đồng hồ + Thời tiết góc phải */}
                 <div className="flex flex-col items-end justify-center shrink-0 text-right">
-                  <span className="text-xl sm:text-2xl short:text-lg vshort:text-base font-mono font-black tracking-tight text-white leading-none tabular-nums">
+                  <span
+                    className={`text-xl sm:text-2xl short:text-lg vshort:text-base font-mono font-black tracking-tight leading-none tabular-nums ${
+                      isDangerOverLimit ? 'text-white' : theme.text
+                    }`}
+                  >
                     {clockTime}
                   </span>
                   <div
@@ -687,20 +726,28 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       isDangerOverLimit
                         ? 'text-rose-100'
                         : weather?.isRainy
-                        ? 'text-sky-300'
-                        : 'text-white/80'
+                        ? isLightTheme
+                          ? 'text-blue-700'
+                          : 'text-sky-300'
+                        : theme.textSub
                     }`}
                   >
                     {weather ? (
                       <>
                         <span>{weather.icon}</span>
                         <span className="tabular-nums">{weather.temperature}°C</span>
-                        <span className="cq-hide-md text-white/60 font-bold truncate max-w-[96px]">
+                        <span
+                          className={`cq-hide-md font-bold truncate max-w-[96px] ${
+                            isDangerOverLimit ? 'text-rose-100' : theme.textMuted
+                          }`}
+                        >
                           • {weather.label}
                         </span>
                       </>
                     ) : (
-                      <span className="text-white/45 font-bold">VF5 HUD</span>
+                      <span className={`font-bold ${isDangerOverLimit ? 'text-rose-100' : theme.textMuted}`}>
+                        VF5 HUD
+                      </span>
                     )}
                   </div>
                 </div>
@@ -709,7 +756,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               {/* Hàng 2: Vị trí hiện tại (tên đường, quốc lộ, số làn) + Cảnh báo Camera phạt nguội */}
               <div
                 className={`mt-1.5 short:mt-1 pt-1.5 short:pt-1 border-t flex items-center justify-between gap-1.5 min-w-0 ${
-                  isDangerOverLimit ? 'border-white/25' : 'border-white/10'
+                  isDangerOverLimit ? 'border-white/25' : theme.divider
                 }`}
               >
                 <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -718,8 +765,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       isDangerOverLimit
                         ? 'text-white'
                         : gpsStatus === 'active'
-                        ? 'text-emerald-400'
-                        : 'text-amber-400'
+                        ? isLightTheme
+                          ? 'text-emerald-600'
+                          : 'text-emerald-400'
+                        : 'text-amber-500'
                     }`}
                   />
                   {roadInfo?.roadRef && (
@@ -727,6 +776,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       className={`px-1.5 py-0.5 rounded border text-[9.5px] font-black shrink-0 leading-none ${
                         isDangerOverLimit
                           ? 'bg-white/20 border-white/40 text-white'
+                          : isLightTheme
+                          ? 'bg-blue-100 border-blue-300 text-blue-900'
                           : 'bg-sky-500/25 border-sky-400/50 text-sky-200'
                       }`}
                     >
@@ -735,7 +786,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   )}
                   <span
                     className={`text-[11px] sm:text-xs short:text-[10.5px] font-extrabold truncate ${
-                      isDangerOverLimit ? 'text-white' : 'text-white/95'
+                      isDangerOverLimit ? 'text-white' : theme.text
                     }`}
                   >
                     {roadInfo?.roadName ||
@@ -746,7 +797,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   {roadInfo?.lanes && (
                     <span
                       className={`cq-hide-sm text-[10px] font-bold shrink-0 ${
-                        isDangerOverLimit ? 'text-rose-100' : 'text-white/50'
+                        isDangerOverLimit ? 'text-rose-100' : theme.textMuted
                       }`}
                     >
                       • {roadInfo.lanes} làn
@@ -776,12 +827,16 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
               {cockpitNavSummary && (
                 <div
                   onClick={(e) => e.stopPropagation()}
-                  className="mt-1.5 short:mt-1 rounded-xl bg-sky-600/35 border border-sky-400/55 px-2.5 py-1.5 short:px-2 short:py-1 flex flex-col gap-1.5 shadow-inner"
+                  className={`mt-1.5 short:mt-1 rounded-xl border px-2.5 py-1.5 short:px-2 short:py-1 flex flex-col gap-1.5 shadow-inner ${
+                    isLightTheme
+                      ? 'bg-blue-600 border-blue-500 text-white'
+                      : 'bg-sky-600/35 border-sky-400/55 text-white'
+                  }`}
                 >
                   <div className="flex items-center justify-between gap-2 min-w-0">
                     <div className="min-w-0 flex-1">
                       {cockpitNavSummary.isRerouting ? (
-                        <p className="text-xs short:text-[11px] font-black text-amber-300 flex items-center gap-1.5">
+                        <p className="text-xs short:text-[11px] font-black text-amber-200 flex items-center gap-1.5">
                           <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
                           <span className="truncate">Đang tính lại đường đi mới...</span>
                         </p>
@@ -793,8 +848,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                             : ''}
                         </p>
                       )}
-                      <div className="flex items-center gap-1 text-[10.5px] short:text-[10px] font-bold text-sky-200 truncate mt-0.5">
-                        <Flag className="w-3 h-3 shrink-0 text-sky-300" />
+                      <div className="flex items-center gap-1 text-[10.5px] short:text-[10px] font-bold text-sky-100 truncate mt-0.5">
+                        <Flag className="w-3 h-3 shrink-0 text-sky-200" />
                         <span className="truncate">
                           {cockpitNavSummary.destinationName} • {cockpitNavSummary.remainingKm} km (
                           {cockpitNavSummary.remainingMin}p)
@@ -827,7 +882,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                         className={`w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition ${
                           cockpitNavSummary.voiceNavEnabled
                             ? 'bg-emerald-400 text-slate-950'
-                            : 'bg-white/15 text-white/75 hover:bg-white/25'
+                            : 'bg-white/20 text-white/80 hover:bg-white/30'
                         }`}
                       >
                         {cockpitNavSummary.voiceNavEnabled ? (
@@ -842,7 +897,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                         onClick={() => navControlsRef.current?.cancelRoute()}
                         aria-label="Hủy lộ trình dẫn đường"
                         title="Hủy lộ trình"
-                        className="w-7 h-7 rounded-full bg-white/15 hover:bg-rose-500 text-white flex items-center justify-center active:scale-90 transition"
+                        className="w-7 h-7 rounded-full bg-white/20 hover:bg-rose-500 text-white flex items-center justify-center active:scale-90 transition"
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -857,10 +912,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                ================================================================= */}
             <div
               {...gestureHandlers}
-              className="flex-1 min-w-0 min-h-[250px] car:min-h-0 bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-3 sm:p-3.5 short:p-2 vshort:p-1.5 flex flex-col justify-between gap-2 short:gap-1.5 vshort:gap-1 relative overflow-hidden shadow-2xl"
+              className={`flex-1 min-w-0 min-h-[250px] car:min-h-0 rounded-2xl sm:rounded-3xl border p-3 sm:p-3.5 short:p-2 vshort:p-1.5 flex flex-col justify-between gap-2 short:gap-1.5 vshort:gap-1 relative overflow-hidden ${theme.card}`}
             >
             {heartBurst && (
-              <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-black/20">
+              <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-black/15">
                 <Heart className="w-20 h-20 text-rose-500 fill-rose-500 animate-ping" />
               </div>
             )}
@@ -869,7 +924,9 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             <div className="flex items-center justify-between gap-1.5 shrink-0">
               <div className="flex items-center gap-1.5 min-w-0">
                 {/* Segmented Switch iOS: Nhạc (Lyrics) | Video */}
-                <div className="inline-flex items-center p-0.5 rounded-full bg-black/45 border border-white/15 shrink-0">
+                <div
+                  className={`inline-flex items-center p-0.5 rounded-full border shrink-0 ${theme.segTrack}`}
+                >
                   <button
                     type="button"
                     onClick={() => {
@@ -877,9 +934,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     }}
                     aria-label="Chế độ Nghe nhạc và Lời bài hát"
                     className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
-                      !effectiveVideoMode
-                        ? 'bg-white text-slate-950 shadow-sm'
-                        : 'text-white/65 hover:text-white'
+                      !effectiveVideoMode ? theme.segActive : theme.segIdle
                     }`}
                   >
                     <Music className="w-3 h-3 shrink-0" />
@@ -898,8 +953,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     aria-label="Chế độ Phát Video YouTube"
                     className={`h-7 px-2.5 rounded-full text-[11px] font-extrabold flex items-center gap-1 transition-colors ${
                       effectiveVideoMode
-                        ? 'bg-sky-400 text-slate-950 shadow-sm'
-                        : 'text-white/65 hover:text-white'
+                        ? isLightTheme
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'bg-sky-400 text-slate-950 shadow-sm'
+                        : theme.segIdle
                     }`}
                   >
                     <Tv className="w-3 h-3 shrink-0" />
@@ -920,8 +977,8 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   }
                   className={`h-7 px-2 rounded-full border text-[10px] font-black flex items-center gap-1 shrink-0 active:scale-95 transition ${
                     musicSource === 'soundcloud' || isSoundCloudTrack
-                      ? 'bg-[#ff5500] border-orange-300/70 text-white shadow-sm'
-                      : 'bg-white/10 hover:bg-white/20 border-white/15 text-white/80'
+                      ? 'bg-[#ff5500] border-orange-400 text-white shadow-sm'
+                      : theme.iconBtn
                   }`}
                 >
                   <span>{musicSource === 'soundcloud' || isSoundCloudTrack ? '☁️ SC' : '▶ YT'}</span>
@@ -935,7 +992,11 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   onClick={toggleMapSide}
                   aria-label="Đổi vị trí Trái Phải giữa Nhạc và Bản đồ"
                   title="Đổi bên Trái / Phải với Bản đồ"
-                  className="hidden car:flex w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-300 items-center justify-center active:scale-90 transition"
+                  className={`hidden car:flex w-8 h-8 rounded-full border items-center justify-center active:scale-90 transition ${
+                    isLightTheme
+                      ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-700'
+                      : 'bg-white/10 hover:bg-white/20 border-white/15 text-emerald-300'
+                  }`}
                 >
                   <ArrowLeftRight className="w-3.5 h-3.5" />
                 </button>
@@ -948,7 +1009,9 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   title="Phát liên hoàn bài tương tự (Auto-Mix)"
                   className={`cq-hide-xs w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
                     isMixActive
-                      ? 'bg-amber-400 text-black border-amber-300 shadow'
+                      ? 'bg-amber-400 text-slate-950 border-amber-400 shadow'
+                      : isLightTheme
+                      ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-700'
                       : 'bg-white/10 hover:bg-white/20 border-white/15 text-amber-200'
                   }`}
                 >
@@ -964,7 +1027,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   onClick={onOpenAddPlaylist}
                   aria-label="Lưu vào Playlist"
                   title="Lưu vào Playlist"
-                  className="cq-hide-sm w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-white/80 flex items-center justify-center active:scale-90 transition"
+                  className={`cq-hide-sm w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
                 >
                   <FolderPlus className="w-3.5 h-3.5" />
                 </button>
@@ -976,11 +1039,17 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   title={isFavorite ? 'Bỏ yêu thích' : 'Yêu thích'}
                   className={`w-8 h-8 rounded-full border flex items-center justify-center active:scale-90 transition ${
                     isFavorite
-                      ? 'bg-rose-500/25 border-rose-400/50 text-rose-400'
-                      : 'bg-white/10 border-white/15 text-white/75'
+                      ? isLightTheme
+                        ? 'bg-rose-50 border-rose-300 text-rose-600'
+                        : 'bg-rose-500/25 border-rose-400/50 text-rose-400'
+                      : theme.iconBtn
                   }`}
                 >
-                  <Heart className={`w-3.5 h-3.5 ${isFavorite ? 'fill-rose-400' : ''}`} />
+                  <Heart
+                    className={`w-3.5 h-3.5 ${
+                      isFavorite ? (isLightTheme ? 'fill-rose-600' : 'fill-rose-400') : ''
+                    }`}
+                  />
                 </button>
               </div>
             </div>
@@ -988,14 +1057,15 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             {/* TẦNG 2 (TRUNG TÂM CÂN ĐỐI TỈ LỆ): VIDEO 16:9 CHUẨN HOẶC ALBUM + KARAOKE */}
             {effectiveVideoMode ? (
               <div className="flex-1 min-h-0 flex flex-col gap-2 short:gap-1.5">
-                {/* Sân khấu 16:9 chuẩn container-type: size -> Video KHÔNG BAO GIỜ bị kéo dọc méo hay đẩy vỡ layout! */}
+                {/* Sân khấu 16:9 chuẩn container-type: size -> Video luôn nền đen chuẩn điện ảnh */}
                 <div className="media-stage relative h-[185px] xs:h-[210px] car:h-auto car:flex-1 car:min-h-0 w-full flex items-center justify-center">
                   <div
                     ref={videoSlotRef}
                     aria-label="Khung phát Video YouTube trong Cockpit"
-                    className="car-video-fit relative rounded-2xl overflow-hidden bg-black border border-white/15 shadow-[0_12px_32px_rgba(0,0,0,0.65)]"
+                    className={`car-video-fit relative rounded-2xl overflow-hidden bg-black border shadow-lg ${
+                      isLightTheme ? 'border-slate-300' : 'border-white/15'
+                    }`}
                   >
-                    {/* Ảnh bìa tối nhẹ làm nền chờ mượt khi chuyển sang Video (không hiện text nhấp nháy!) */}
                     <img
                       src={streamData.thumbnailUrl}
                       alt=""
@@ -1007,23 +1077,23 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
 
                 {/* Thông tin Video căn giữa thoáng rộng 100% bề ngang */}
                 <div className="shrink-0 text-center px-1">
-                  <h3 className="text-xs sm:text-sm font-extrabold text-white truncate leading-snug">
+                  <h3 className={`text-xs sm:text-sm font-extrabold truncate leading-snug ${theme.text}`}>
                     {streamData.title}
                   </h3>
-                  <p className="text-[11px] text-white/60 font-semibold truncate">
+                  <p className={`text-[11px] font-semibold truncate ${theme.textSub}`}>
                     {streamData.uploader}
                   </p>
                 </div>
               </div>
             ) : (
               <div className="flex-1 min-h-0 flex flex-col justify-center gap-2.5 short:gap-2">
-                {/* Thông tin Bài hát + Ảnh bìa rộng rãi 100% bề ngang (không bị nút nào đè ép!) */}
+                {/* Thông tin Bài hát + Ảnh bìa rộng rãi 100% bề ngang */}
                 <div className="flex items-center gap-3 short:gap-2.5 shrink-0 px-0.5">
                   <div
                     onClick={onTogglePlay}
-                    className={`relative w-14 h-14 sm:w-16 sm:h-16 short:w-12 short:h-12 rounded-2xl overflow-hidden shrink-0 border border-white/20 shadow-xl cursor-pointer bg-black transition-transform duration-300 ${
-                      isPlaying && !isBuffering ? 'scale-100' : 'scale-95'
-                    }`}
+                    className={`relative w-14 h-14 sm:w-16 sm:h-16 short:w-12 short:h-12 rounded-2xl overflow-hidden shrink-0 border shadow-lg cursor-pointer bg-black transition-transform duration-300 ${
+                      isLightTheme ? 'border-slate-300' : 'border-white/20'
+                    } ${isPlaying && !isBuffering ? 'scale-100' : 'scale-95'}`}
                   >
                     <img
                       src={streamData.thumbnailUrl}
@@ -1038,30 +1108,40 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    <h3 className="text-sm sm:text-base short:text-xs font-extrabold text-white line-clamp-2 leading-snug">
+                    <h3
+                      className={`text-sm sm:text-base short:text-xs font-extrabold line-clamp-2 leading-snug ${theme.text}`}
+                    >
                       {streamData.title}
                     </h3>
-                    <p className="text-[11px] sm:text-xs text-white/65 font-semibold truncate mt-0.5">
+                    <p
+                      className={`text-[11px] sm:text-xs font-semibold truncate mt-0.5 ${theme.textSub}`}
+                    >
                       {streamData.uploader}
                     </p>
                   </div>
                 </div>
 
                 {/* Khung lời bài hát Karaoke 2 dòng cân đối */}
-                <div className="flex-1 min-h-[52px] short:min-h-[44px] max-h-[156px] bg-black/40 rounded-2xl border border-white/12 px-3 py-2 short:py-1.5 flex flex-col justify-center text-center shadow-inner">
+                <div
+                  className={`flex-1 min-h-[52px] short:min-h-[44px] max-h-[156px] rounded-2xl border px-3 py-2 short:py-1.5 flex flex-col justify-center text-center shadow-inner ${theme.well}`}
+                >
                   {currentLyricText ? (
                     <>
-                      <p className="text-sm sm:text-base short:text-xs font-extrabold text-white line-clamp-2 leading-snug">
+                      <p
+                        className={`text-sm sm:text-base short:text-xs font-extrabold line-clamp-2 leading-snug ${theme.text}`}
+                      >
                         “{currentLyricText}”
                       </p>
                       {nextLyricText && (
-                        <p className="text-[11px] sm:text-xs text-white/45 font-semibold truncate mt-1 vshort:hidden">
+                        <p
+                          className={`text-[11px] sm:text-xs font-semibold truncate mt-1 vshort:hidden ${theme.textMuted}`}
+                        >
                           {nextLyricText}
                         </p>
                       )}
                     </>
                   ) : (
-                    <p className="text-xs short:text-[11px] font-bold text-white/45 line-clamp-2">
+                    <p className={`text-xs short:text-[11px] font-bold line-clamp-2 ${theme.textMuted}`}>
                       🎵 Vuốt ⇄ để qua bài • Chạm đúp thả tim ❤️
                     </p>
                   )}
@@ -1090,9 +1170,11 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     commitScrubOnce(parseFloat((e.target as HTMLInputElement).value))
                   }
                   onKeyUp={(e) => commitScrubOnce(parseFloat((e.target as HTMLInputElement).value))}
-                  className="car-scrubber"
+                  className={theme.scrubber}
                 />
-                <div className="flex justify-between text-[10px] font-mono font-bold text-white/55 -mt-1.5 px-0.5">
+                <div
+                  className={`flex justify-between text-[10px] font-mono font-bold -mt-1.5 px-0.5 ${theme.textMuted}`}
+                >
                   <span>{formatSeconds(displayedTime)}</span>
                   <span>{safeDuration > 0 ? `-${formatSeconds(remainingTime)}` : 'AUTO'}</span>
                 </div>
@@ -1105,7 +1187,11 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   aria-label="Phát ngẫu nhiên"
                   className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
                     isShuffle
-                      ? 'bg-rose-500/30 border border-rose-400/50 text-rose-200'
+                      ? isLightTheme
+                        ? 'bg-rose-100 border border-rose-300 text-rose-700'
+                        : 'bg-rose-500/30 border border-rose-400/50 text-rose-200'
+                      : isLightTheme
+                      ? 'text-slate-500 hover:text-slate-950 hover:bg-slate-200/70'
                       : 'text-white/55 hover:text-white'
                   }`}
                 >
@@ -1117,7 +1203,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   onClick={onPrev}
                   disabled={!hasPrev}
                   aria-label="Bài trước"
-                  className="w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
+                  className={`w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
                 >
                   <SkipBack className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
                 </button>
@@ -1126,14 +1212,18 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   type="button"
                   onClick={onTogglePlay}
                   aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-                  className="w-12 h-12 sm:w-14 sm:h-14 short:w-10 short:h-10 vshort:w-9 vshort:h-9 rounded-full bg-white hover:bg-white/90 text-black flex items-center justify-center shadow-[0_6px_22px_rgba(255,255,255,0.3)] active:scale-90 transition"
+                  className={`w-12 h-12 sm:w-14 sm:h-14 short:w-10 short:h-10 vshort:w-9 vshort:h-9 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
                 >
                   {isBuffering ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-black" />
+                    <Loader2 className="w-5 h-5 animate-spin" />
                   ) : isPlaying ? (
-                    <Pause className="w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 fill-black" />
+                    <Pause
+                      className={`w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 ${theme.primaryCtaIcon}`}
+                    />
                   ) : (
-                    <Play className="w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 fill-black ml-0.5" />
+                    <Play
+                      className={`w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 ml-0.5 ${theme.primaryCtaIcon}`}
+                    />
                   )}
                 </button>
 
@@ -1142,7 +1232,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   onClick={onNext}
                   disabled={!hasNext}
                   aria-label="Bài tiếp theo"
-                  className="w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
+                  className={`w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
                 >
                   <SkipForward className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
                 </button>
@@ -1153,12 +1243,18 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   aria-label="Chế độ lặp"
                   className={`cq-hide-xs w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center active:scale-90 transition ${
                     repeatMode !== 'off'
-                      ? 'bg-white/20 border border-white/25 text-white'
+                      ? isLightTheme
+                        ? 'bg-slate-200 border border-slate-300 text-slate-950'
+                        : 'bg-white/20 border border-white/25 text-white'
+                      : isLightTheme
+                      ? 'text-slate-500 hover:text-slate-950 hover:bg-slate-200/70'
                       : 'text-white/55 hover:text-white'
                   }`}
                 >
                   {repeatMode === 'one' ? (
-                    <Repeat1 className="w-4 h-4 text-rose-300" />
+                    <Repeat1
+                      className={`w-4 h-4 ${isLightTheme ? 'text-rose-600' : 'text-rose-300'}`}
+                    />
                   ) : (
                     <Repeat className="w-4 h-4" />
                   )}

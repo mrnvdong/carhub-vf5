@@ -13,10 +13,12 @@ import {
   QueueSource,
   UserPlaylist,
   NightMode,
+  MapTheme,
   SavedPlace,
   PendingNavTarget,
   MusicSource,
 } from './types';
+import { getCarTheme, isLightMapTheme } from './utils/theme';
 import { getCategoryQuery } from './constants/categories';
 import { searchVideos, fetchRadioMix } from './services/api';
 import {
@@ -156,40 +158,38 @@ export const App: React.FC = () => {
     }
   });
 
-  // Upgrade #4: Night Mode ('auto' dims between 18:00 and 05:30)
-  const [nightMode, setNightMode] = useState<NightMode>(() => {
+  // Đồng bộ chủ đề toàn hệ thống (Bản đồ 3D Sáng / OSM -> Toàn app Sáng; 3D Đêm / Vệ tinh -> Toàn app Tối)
+  const [mapTheme, setMapTheme] = useState<MapTheme>(() => {
     try {
-      const saved = localStorage.getItem('carhub_night_mode') as NightMode | null;
-      if (saved === 'auto' || saved === 'on' || saved === 'off') return saved;
-      return 'auto';
-    } catch {
-      return 'auto';
-    }
+      const saved = localStorage.getItem('carhub_cockpit_map_theme') as MapTheme | null;
+      if (saved === 'vector3d' || saved === 'dark3d' || saved === 'osm' || saved === 'satellite') {
+        return saved;
+      }
+    } catch {}
+    const hr = new Date().getHours();
+    return hr >= 18 || hr < 6 ? 'dark3d' : 'vector3d';
   });
 
-  const [isAfterDusk, setIsAfterDusk] = useState<boolean>(() => {
-    const hr = new Date().getHours();
-    return hr >= 18 || hr < 6;
-  });
+  const isLightTheme = isLightMapTheme(mapTheme);
+  const nightMode: NightMode = isLightTheme ? 'off' : 'on';
+  const isNightDimmed = !isLightTheme;
+
+  const handleToggleDayNight = useCallback(() => {
+    setMapTheme((prev) => (isLightMapTheme(prev) ? 'dark3d' : 'vector3d'));
+  }, []);
 
   useEffect(() => {
-    const checkHour = () => {
-      const hr = new Date().getHours();
-      setIsAfterDusk(hr >= 18 || hr < 6);
-    };
-    const id = window.setInterval(checkHour, 60000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  const isNightDimmed = nightMode === 'on' || (nightMode === 'auto' && isAfterDusk);
-
-  const handleCycleNightMode = useCallback(() => {
-    setNightMode((prev) => {
-      if (prev === 'auto') return 'on';
-      if (prev === 'on') return 'off';
-      return 'auto';
-    });
-  }, []);
+    try {
+      localStorage.setItem('carhub_cockpit_map_theme', mapTheme);
+    } catch {}
+    if (typeof document !== 'undefined') {
+      document.documentElement.dataset.theme = isLightTheme ? 'light' : 'dark';
+      const metaTheme = document.querySelector('meta[name="theme-color"]');
+      if (metaTheme) {
+        metaTheme.setAttribute('content', isLightTheme ? '#e8edf5' : '#070a12');
+      }
+    }
+  }, [mapTheme, isLightTheme]);
 
   // Playback modes: Shuffle & Repeat
   const [isShuffle, setIsShuffle] = useState<boolean>(() => {
@@ -1028,8 +1028,12 @@ export const App: React.FC = () => {
   const totalSavedCount =
     favorites.length + playlists.reduce((sum, p) => sum + p.items.length, 0);
 
+  const theme = getCarTheme(isLightTheme);
+
   return (
-    <div className="car-app-shell w-full bg-[#050507] text-slate-100 flex flex-col overflow-hidden">
+    <div
+      className={`car-app-shell w-full ${theme.shell} flex flex-col overflow-hidden transition-colors duration-300`}
+    >
       <main className="flex-1 min-h-0 w-full h-full">
         {currentVideo ? (
           <VideoPlayer
@@ -1081,7 +1085,10 @@ export const App: React.FC = () => {
             onOpenSyncModal={handleOpenSyncModal}
             nightMode={nightMode}
             isNightDimmed={isNightDimmed}
-            onCycleNightMode={handleCycleNightMode}
+            onCycleNightMode={handleToggleDayNight}
+            mapTheme={mapTheme}
+            onChangeMapTheme={setMapTheme}
+            isLightTheme={isLightTheme}
             isMixActive={queueSource === 'mix'}
             isLoadingMix={isLoadingMix}
             onStartAutoMix={handleStartAutoMix}
@@ -1094,22 +1101,26 @@ export const App: React.FC = () => {
             onChangeMusicSource={handleChangeMusicSource}
           />
         ) : isLoadingVideos ? (
-          <div className="w-full h-full bg-[#050507] flex flex-col items-center justify-center gap-3 text-center p-6">
+          <div
+            className={`w-full h-full ${theme.shell} flex flex-col items-center justify-center gap-3 text-center p-6`}
+          >
             <div className="w-11 h-11 border-4 border-rose-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-base font-bold text-white/85">
+            <p className={`text-base font-bold ${theme.text}`}>
               {viewMode === 'classic'
                 ? 'Đang chuẩn bị trình phát Video cho VF5...'
                 : 'Đang tải danh sách nhạc cho VF5...'}
             </p>
           </div>
         ) : (
-          <div className="w-full h-full bg-[#050507] flex flex-col items-center justify-center gap-4 text-center p-6">
-            <WifiOff className="w-12 h-12 text-rose-400" />
+          <div
+            className={`w-full h-full ${theme.shell} flex flex-col items-center justify-center gap-4 text-center p-6`}
+          >
+            <WifiOff className="w-12 h-12 text-rose-500" />
             <div className="max-w-md">
-              <h2 className="text-lg font-extrabold text-white">
+              <h2 className={`text-lg font-extrabold ${theme.text}`}>
                 Chưa tải được danh sách nhạc (Sóng 4G yếu)
               </h2>
-              <p className="text-xs sm:text-sm text-white/60 mt-1">
+              <p className={`text-xs sm:text-sm ${theme.textSub} mt-1`}>
                 Kiểm tra kết nối mạng trên iPhone hoặc bấm Thử lại khi xe đã ra khỏi tầng hầm.
               </p>
             </div>
@@ -1123,7 +1134,7 @@ export const App: React.FC = () => {
                     false
                   )
                 }
-                className="min-h-[46px] px-5 rounded-full bg-white text-black font-extrabold text-sm flex items-center gap-2 shadow-lg active:scale-95 transition"
+                className={`min-h-[46px] px-5 rounded-full font-extrabold text-sm flex items-center gap-2 shadow-lg active:scale-95 transition ${theme.primaryCta}`}
               >
                 <RefreshCw className="w-4 h-4" />
                 <span>Thử lại ngay</span>
@@ -1131,7 +1142,7 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 onClick={() => handleOpenSearchModal(false)}
-                className="min-h-[46px] px-5 rounded-full bg-white/12 hover:bg-white/20 border border-white/20 text-white font-extrabold text-sm flex items-center gap-2 active:scale-95 transition"
+                className={`min-h-[46px] px-5 rounded-full border font-extrabold text-sm flex items-center gap-2 active:scale-95 transition ${theme.iconBtn}`}
               >
                 <Search className="w-4 h-4" />
                 <span>Tìm kiếm</span>
@@ -1139,7 +1150,11 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 onClick={() => handleOpenSearchModal(true)}
-                className="min-h-[46px] px-4 rounded-full bg-rose-500/25 border border-rose-400/45 text-rose-200 font-extrabold text-sm flex items-center gap-2 active:scale-95 transition"
+                className={`min-h-[46px] px-4 rounded-full border font-extrabold text-sm flex items-center gap-2 active:scale-95 transition ${
+                  isLightTheme
+                    ? 'bg-rose-600 border-rose-600 text-white hover:bg-rose-700'
+                    : 'bg-rose-500/25 border-rose-400/45 text-rose-200 hover:bg-rose-500/35'
+                }`}
               >
                 <Mic className="w-4 h-4" />
                 <span>Giọng nói</span>
@@ -1167,6 +1182,7 @@ export const App: React.FC = () => {
         variant={viewMode}
         startVoice={startVoiceOnOpen}
         artworkBackdrop={streamData?.thumbnailUrl || currentVideo?.thumbnail}
+        isLightTheme={isLightTheme}
       />
 
       <PlaylistSyncModal
@@ -1185,6 +1201,7 @@ export const App: React.FC = () => {
         syncCode={syncCode}
         onSaveSyncCode={setSyncCode}
         onApplyPulledData={applyPulledSync}
+        isLightTheme={isLightTheme}
       />
     </div>
   );

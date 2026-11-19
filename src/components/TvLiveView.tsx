@@ -23,10 +23,12 @@ import {
 } from 'lucide-react';
 import { TvChannel, TvPlaylistData, TvResolvedStream } from '../types';
 import { DEFAULT_TV_PLAYLIST_URL, fetchTvPlaylist, resolveTvStream } from '../services/tv';
+import { getCarTheme } from '../utils/theme';
 
 interface TvLiveViewProps {
   onPauseMusic: () => void;
   onNotifyToast: (msg: string) => void;
+  isLightTheme: boolean;
 }
 
 const POPULAR_CHANNEL_PATTERNS: RegExp[] = [
@@ -64,7 +66,12 @@ function getChannelFavKey(ch: TvChannel): string {
   return `${ch.group}::${ch.name}`.toLowerCase();
 }
 
-export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyToast }) => {
+export const TvLiveView: React.FC<TvLiveViewProps> = ({
+  onPauseMusic,
+  onNotifyToast,
+  isLightTheme,
+}) => {
+  const theme = getCarTheme(isLightTheme);
   const [playlistUrl, setPlaylistUrl] = useState<string>(() => {
     try {
       return localStorage.getItem('carhub_tv_playlist_url') || DEFAULT_TV_PLAYLIST_URL;
@@ -476,7 +483,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
           1. KHUNG PHÁT TV / RADIO TRỰC TIẾP (60% chiều ngang hoặc 100% Toàn màn hình)
          ===================================================================== */}
       <div
-        className={`flex flex-col min-h-0 bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-2.5 sm:p-3 short:p-2 gap-2 short:gap-1.5 shadow-2xl ${
+        className={`flex flex-col min-h-0 rounded-2xl sm:rounded-3xl border p-2.5 sm:p-3 short:p-2 gap-2 short:gap-1.5 ${theme.card} ${
           isTvFullscreen
             ? 'flex-1 w-full h-full'
             : 'w-full car:w-[58%] lg:w-[61%] shrink-0 car:h-full'
@@ -492,10 +499,18 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                 onError={() =>
                   setFailedLogos((prev) => ({ ...prev, [activeChannel.id]: true }))
                 }
-                className="w-9 h-9 short:w-8 short:h-8 rounded-xl object-contain bg-black/60 border border-white/15 p-1 shrink-0"
+                className={`w-9 h-9 short:w-8 short:h-8 rounded-xl object-contain p-1 shrink-0 border ${
+                  isLightTheme ? 'bg-slate-900 border-slate-300' : 'bg-black/60 border-white/15'
+                }`}
               />
             ) : (
-              <div className="w-9 h-9 short:w-8 short:h-8 rounded-xl bg-sky-500/20 border border-sky-400/40 text-sky-300 flex items-center justify-center shrink-0">
+              <div
+                className={`w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center shrink-0 ${
+                  isLightTheme
+                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                    : 'bg-sky-500/20 border-sky-400/40 text-sky-300'
+                }`}
+              >
                 {activeChannel?.isRadio ? (
                   <Radio className="w-4 h-4" />
                 ) : activeChannel?.isVod ? (
@@ -512,11 +527,11 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                   <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
                   {activeChannel?.isVod ? 'PHIM' : activeChannel?.isRadio ? 'RADIO' : 'LIVE'}
                 </span>
-                <h3 className="text-xs sm:text-sm font-black text-white truncate">
+                <h3 className={`text-xs sm:text-sm font-black truncate ${theme.text}`}>
                   {activeChannel ? activeChannel.name : 'Truyền hình & Radio VF5'}
                 </h3>
               </div>
-              <p className="text-[10.5px] text-white/60 font-semibold truncate mt-0.5">
+              <p className={`text-[10.5px] font-semibold truncate mt-0.5 ${theme.textSub}`}>
                 {activeChannel
                   ? `${activeChannel.group} • ${
                       streamMode === 'proxy' ? 'Proxy chống chặn CORS' : 'CDN trực tiếp'
@@ -535,8 +550,8 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                 title={isCurrentFav ? 'Bỏ khỏi Yêu thích' : 'Lưu kênh Yêu thích'}
                 className={`w-8 h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${
                   isCurrentFav
-                    ? 'bg-amber-400 border-amber-300 text-slate-950'
-                    : 'bg-white/10 hover:bg-white/20 border-white/15 text-white/80'
+                    ? 'bg-amber-400 border-amber-400 text-slate-950'
+                    : theme.iconBtn
                 }`}
               >
                 <Star className={`w-4 h-4 ${isCurrentFav ? 'fill-slate-950' : ''}`} />
@@ -550,8 +565,10 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                 title="Đổi giữa phát CDN trực tiếp và Proxy chống chặn"
                 className={`h-8 px-2 rounded-xl border text-[10px] font-extrabold flex items-center gap-1 active:scale-95 transition ${
                   streamMode === 'proxy'
-                    ? 'bg-sky-500/25 border-sky-400/50 text-sky-200'
-                    : 'bg-white/10 hover:bg-white/20 border-white/15 text-white/75'
+                    ? isLightTheme
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'bg-sky-500/25 border-sky-400/50 text-sky-200'
+                    : theme.iconBtn
                 }`}
               >
                 <Wifi className="w-3 h-3" />
@@ -566,7 +583,11 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
               onClick={() => setIsTvFullscreen((v) => !v)}
               aria-label={isTvFullscreen ? 'Thu gọn danh sách kênh' : 'Xem TV toàn màn hình'}
               title={isTvFullscreen ? 'Hiện danh sách kênh' : 'Xem toàn màn hình'}
-              className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-sky-300 flex items-center justify-center active:scale-90 transition"
+              className={`w-8 h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${
+                isLightTheme
+                  ? 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700'
+                  : 'bg-white/10 hover:bg-white/20 border-white/15 text-sky-300'
+              }`}
             >
               {isTvFullscreen ? (
                 <Minimize2 className="w-4 h-4" />
@@ -578,7 +599,11 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
         </div>
 
         {/* Sân khấu phát Video 16:9 / Radio Studio */}
-        <div className="media-stage relative flex-1 min-h-[190px] car:min-h-0 w-full flex items-center justify-center rounded-2xl overflow-hidden bg-black border border-white/12 shadow-inner">
+        <div
+          className={`media-stage relative flex-1 min-h-[190px] car:min-h-0 w-full flex items-center justify-center rounded-2xl overflow-hidden bg-black border shadow-inner ${
+            isLightTheme ? 'border-slate-300' : 'border-white/12'
+          }`}
+        >
           <video
             ref={videoRef}
             playsInline
@@ -618,13 +643,23 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
           {activeChannel?.isRadio && !playError && (
             <div
               onClick={handleTogglePlay}
-              className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gradient-to-br from-slate-900 via-[#0a1628] to-emerald-950/60 p-4 text-center cursor-pointer"
+              className={`absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 text-center cursor-pointer ${
+                isLightTheme
+                  ? 'bg-gradient-to-br from-emerald-50 via-sky-50 to-slate-100'
+                  : 'bg-gradient-to-br from-slate-900 via-[#0a1628] to-emerald-950/60'
+              }`}
             >
               <div className="relative">
                 {isPlaying && (
                   <div className="absolute -inset-3 rounded-full bg-emerald-500/25 animate-ping" />
                 )}
-                <div className="relative w-20 h-20 short:w-16 short:h-16 rounded-2xl bg-black/60 border border-emerald-400/50 flex items-center justify-center overflow-hidden shadow-2xl p-2">
+                <div
+                  className={`relative w-20 h-20 short:w-16 short:h-16 rounded-2xl border flex items-center justify-center overflow-hidden shadow-xl p-2 ${
+                    isLightTheme
+                      ? 'bg-slate-900 border-emerald-500/60'
+                      : 'bg-black/60 border-emerald-400/50'
+                  }`}
+                >
                   {activeChannel.logo && !failedLogos[activeChannel.id] ? (
                     <img
                       src={activeChannel.logo}
@@ -637,8 +672,14 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                 </div>
               </div>
               <div>
-                <p className="text-sm sm:text-base font-black text-white">{activeChannel.name}</p>
-                <p className="text-xs font-bold text-emerald-300 mt-0.5">
+                <p className={`text-sm sm:text-base font-black ${theme.text}`}>
+                  {activeChannel.name}
+                </p>
+                <p
+                  className={`text-xs font-bold mt-0.5 ${
+                    isLightTheme ? 'text-emerald-700' : 'text-emerald-300'
+                  }`}
+                >
                   {isPlaying
                     ? '📻 Đang phát thanh trực tiếp...'
                     : isBuffering || isResolving
@@ -654,9 +695,9 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                       height: isPlaying ? `${h}%` : '22%',
                       animationDelay: `${i * 110}ms`,
                     }}
-                    className={`w-1.5 rounded-full bg-emerald-400 transition-all ${
-                      isPlaying ? 'animate-pulse' : 'opacity-40'
-                    }`}
+                    className={`w-1.5 rounded-full transition-all ${
+                      isLightTheme ? 'bg-emerald-600' : 'bg-emerald-400'
+                    } ${isPlaying ? 'animate-pulse' : 'opacity-40'}`}
                   />
                 ))}
               </div>
@@ -710,7 +751,7 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
             <button
               type="button"
               onClick={() => handleZapChannel(-1)}
-              className="min-h-[38px] short:min-h-[34px] px-3 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white text-xs font-extrabold flex items-center gap-1 active:scale-95 transition"
+              className={`min-h-[38px] short:min-h-[34px] px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1 active:scale-95 transition ${theme.iconBtn}`}
             >
               <ChevronLeft className="w-4 h-4" />
               <span className="hidden xs:inline">Kênh trước</span>
@@ -720,19 +761,19 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
               type="button"
               onClick={handleTogglePlay}
               aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-              className="w-10 h-10 short:w-9 short:h-9 rounded-full bg-white hover:bg-white/90 text-black flex items-center justify-center shadow-lg active:scale-90 transition"
+              className={`w-10 h-10 short:w-9 short:h-9 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
             >
               {isPlaying ? (
-                <Pause className="w-4 h-4 fill-black" />
+                <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
               ) : (
-                <Play className="w-4 h-4 fill-black ml-0.5" />
+                <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
               )}
             </button>
 
             <button
               type="button"
               onClick={() => handleZapChannel(1)}
-              className="min-h-[38px] short:min-h-[34px] px-3 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white text-xs font-extrabold flex items-center gap-1 active:scale-95 transition"
+              className={`min-h-[38px] short:min-h-[34px] px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1 active:scale-95 transition ${theme.iconBtn}`}
             >
               <span className="hidden xs:inline">Kênh sau</span>
               <ChevronRight className="w-4 h-4" />
@@ -746,8 +787,10 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
               aria-label={isMuted ? 'Bật tiếng' : 'Tắt tiếng'}
               className={`w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${
                 isMuted
-                  ? 'bg-rose-500/25 border-rose-400/50 text-rose-300'
-                  : 'bg-white/10 hover:bg-white/20 border-white/15 text-white/80'
+                  ? isLightTheme
+                    ? 'bg-rose-50 border-rose-300 text-rose-600'
+                    : 'bg-rose-500/25 border-rose-400/50 text-rose-300'
+                  : theme.iconBtn
               }`}
             >
               {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
@@ -759,14 +802,14 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                 onClick={() => startChannel(activeChannel, streamMode === 'proxy')}
                 aria-label="Tải lại luồng kênh"
                 title="Tải lại kênh hiện tại"
-                className="w-9 h-9 short:w-8 short:h-8 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white/80 flex items-center justify-center active:scale-90 transition"
+                className={`w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
               >
                 <RefreshCw className={`w-4 h-4 ${isResolving ? 'animate-spin' : ''}`} />
               </button>
             )}
 
             {activeChannelIndex >= 0 && (
-              <span className="hidden sm:inline text-[11px] font-mono font-bold text-white/55 px-2">
+              <span className={`hidden sm:inline text-[11px] font-mono font-bold px-2 ${theme.textMuted}`}>
                 {activeChannelIndex + 1}/{filteredChannels.length}
               </span>
             )}
@@ -778,24 +821,28 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
           2. DANH SÁCH KÊNH TV / RADIO / PHIM & TÌM KIẾM NHANH (Ẩn khi Fullscreen)
          ===================================================================== */}
       {!isTvFullscreen && (
-        <div className="flex-1 min-w-0 min-h-[280px] car:min-h-0 car:h-full bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-2.5 sm:p-3 short:p-2 flex flex-col gap-2 short:gap-1.5 shadow-2xl overflow-hidden">
+        <div
+          className={`flex-1 min-w-0 min-h-[280px] car:min-h-0 car:h-full rounded-2xl sm:rounded-3xl border p-2.5 sm:p-3 short:p-2 flex flex-col gap-2 short:gap-1.5 overflow-hidden ${theme.card}`}
+        >
           {/* Ô tìm kiếm kênh + Nút đổi nguồn M3U8 */}
           <div className="flex items-center gap-1.5 shrink-0">
             <div className="relative flex-1 min-w-0">
-              <Search className="w-3.5 h-3.5 text-white/50 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Search
+                className={`w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none ${theme.textMuted}`}
+              />
               <input
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Tìm kênh (vtv3, vov giao thong, htv7...)"
-                className="w-full h-9 short:h-8 pl-8 pr-7 rounded-xl bg-black/40 border border-white/15 focus:border-sky-400 text-xs font-bold text-white placeholder-white/45 focus:outline-none"
+                className={`w-full h-9 short:h-8 pl-8 pr-7 rounded-xl border text-xs font-bold focus:outline-none ${theme.input}`}
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
                   aria-label="Xóa tìm kiếm kênh"
-                  className="w-6 h-6 rounded-full absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center text-white/55 hover:text-white"
+                  className={`w-6 h-6 rounded-full absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center ${theme.textMuted}`}
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -811,8 +858,10 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
               title="Cấu hình link danh sách M3U8"
               className={`h-9 short:h-8 px-2.5 rounded-xl border text-[11px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 transition ${
                 showSourceModal
-                  ? 'bg-sky-400 text-slate-950 border-sky-300'
-                  : 'bg-white/10 hover:bg-white/20 border-white/15 text-white/80'
+                  ? isLightTheme
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-sky-400 text-slate-950 border-sky-300'
+                  : theme.iconBtn
               }`}
             >
               <Settings2 className="w-3.5 h-3.5" />
@@ -830,12 +879,20 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                 setShowSourceModal(false);
                 onNotifyToast('📺 Đang nạp danh sách kênh M3U mới...');
               }}
-              className="p-2.5 rounded-xl bg-black/60 border border-sky-400/40 space-y-2 shrink-0"
+              className={`p-2.5 rounded-xl border space-y-2 shrink-0 ${
+                isLightTheme
+                  ? 'bg-blue-50/90 border-blue-300'
+                  : 'bg-black/60 border-sky-400/40'
+              }`}
             >
-              <div className="flex items-center justify-between text-[11px] font-extrabold text-sky-300">
+              <div
+                className={`flex items-center justify-between text-[11px] font-extrabold ${
+                  isLightTheme ? 'text-blue-800' : 'text-sky-300'
+                }`}
+              >
                 <span>Nguồn danh sách M3U / M3U8</span>
                 {playlist && (
-                  <span className="text-white/60 font-mono text-[10px]">
+                  <span className={`font-mono text-[10px] ${theme.textMuted}`}>
                     {playlist.totalPlayable} kênh HLS
                     {playlist.totalDrmFiltered > 0 ? ` • ẩn ${playlist.totalDrmFiltered} DRM` : ''}
                   </span>
@@ -847,11 +904,13 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                   value={customUrlInput}
                   onChange={(e) => setCustomUrlInput(e.target.value)}
                   placeholder="https://tinyurl.com/vmt47"
-                  className="flex-1 min-w-0 h-8 px-2.5 rounded-lg bg-white/10 border border-white/20 text-[11px] font-mono text-white focus:outline-none focus:border-sky-400"
+                  className={`flex-1 min-w-0 h-8 px-2.5 rounded-lg border text-[11px] font-mono focus:outline-none ${theme.input}`}
                 />
                 <button
                   type="submit"
-                  className="h-8 px-3 rounded-lg bg-sky-400 text-slate-950 text-[11px] font-black shrink-0 active:scale-95"
+                  className={`h-8 px-3 rounded-lg text-[11px] font-black shrink-0 active:scale-95 ${
+                    isLightTheme ? 'bg-blue-600 text-white' : 'bg-sky-400 text-slate-950'
+                  }`}
                 >
                   Nạp
                 </button>
@@ -864,7 +923,9 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                     setPlaylistUrl(DEFAULT_TV_PLAYLIST_URL);
                     setShowSourceModal(false);
                   }}
-                  className="text-[10.5px] font-bold text-amber-300 hover:underline"
+                  className={`text-[10.5px] font-bold hover:underline ${
+                    isLightTheme ? 'text-amber-700' : 'text-amber-300'
+                  }`}
                 >
                   ↩ Khôi phục nguồn mặc định (tinyurl.com/vmt47)
                 </button>
@@ -892,8 +953,10 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                     onClick={() => setSelectedGroup(tab.id)}
                     className={`min-h-[32px] short:min-h-[28px] px-2.5 rounded-full text-[11px] font-extrabold whitespace-nowrap border active:scale-95 transition ${
                       active
-                        ? 'bg-sky-400 text-slate-950 border-sky-300 shadow'
-                        : 'bg-white/10 text-white/80 border-white/12 hover:bg-white/20'
+                        ? isLightTheme
+                          ? 'bg-blue-600 text-white border-blue-600 shadow'
+                          : 'bg-sky-400 text-slate-950 border-sky-300 shadow'
+                        : theme.chipIdle
                     }`}
                   >
                     {tab.label}
@@ -907,25 +970,31 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
           <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-1.5 pr-0.5">
             {isLoadingPlaylist ? (
               <div className="h-full flex flex-col items-center justify-center gap-2 py-8 text-center">
-                <Loader2 className="w-7 h-7 text-sky-400 animate-spin" />
-                <p className="text-xs font-bold text-white/70">
+                <Loader2 className="w-7 h-7 text-blue-500 animate-spin" />
+                <p className={`text-xs font-bold ${theme.textSub}`}>
                   Đang tải danh sách kênh TV & Radio...
                 </p>
               </div>
             ) : playlistError ? (
-              <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-400/35 text-center space-y-2">
-                <ShieldAlert className="w-7 h-7 text-rose-400 mx-auto" />
-                <p className="text-xs font-bold text-white">{playlistError}</p>
+              <div
+                className={`p-4 rounded-2xl border text-center space-y-2 ${
+                  isLightTheme
+                    ? 'bg-rose-50 border-rose-300'
+                    : 'bg-rose-500/15 border-rose-400/35'
+                }`}
+              >
+                <ShieldAlert className="w-7 h-7 text-rose-500 mx-auto" />
+                <p className={`text-xs font-bold ${theme.text}`}>{playlistError}</p>
                 <button
                   type="button"
                   onClick={() => loadPlaylist(playlistUrl)}
-                  className="min-h-[34px] px-4 rounded-full bg-white text-black text-xs font-extrabold active:scale-95"
+                  className={`min-h-[34px] px-4 rounded-full text-xs font-extrabold active:scale-95 ${theme.primaryCta}`}
                 >
                   Thử tải lại
                 </button>
               </div>
             ) : filteredChannels.length === 0 ? (
-              <div className="py-10 text-center text-xs font-bold text-white/55">
+              <div className={`py-10 text-center text-xs font-bold ${theme.textMuted}`}>
                 {selectedGroup === '__favorites__'
                   ? 'Chưa có kênh yêu thích — bấm biểu tượng ⭐ cạnh tên kênh để lưu nhanh.'
                   : 'Không tìm thấy kênh phù hợp.'}
@@ -939,8 +1008,10 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                     key={ch.id}
                     className={`w-full rounded-xl border flex items-center gap-2 p-1.5 short:p-1 transition ${
                       isSelected
-                        ? 'bg-sky-500/25 border-sky-400/70 shadow-md'
-                        : 'bg-white/[0.05] hover:bg-white/[0.12] border-white/10'
+                        ? isLightTheme
+                          ? 'bg-blue-50 border-blue-500 shadow-sm'
+                          : 'bg-sky-500/25 border-sky-400/70 shadow-md'
+                        : theme.itemIdle
                     }`}
                   >
                     <button
@@ -948,7 +1019,13 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                       onClick={() => setActiveChannel(ch)}
                       className="flex items-center gap-2.5 min-w-0 flex-1 text-left active:scale-[0.99]"
                     >
-                      <div className="w-11 h-8 short:w-10 short:h-7 rounded-lg bg-black/55 border border-white/10 flex items-center justify-center overflow-hidden p-1 shrink-0">
+                      <div
+                        className={`w-11 h-8 short:w-10 short:h-7 rounded-lg border flex items-center justify-center overflow-hidden p-1 shrink-0 ${
+                          isLightTheme
+                            ? 'bg-slate-900 border-slate-300'
+                            : 'bg-black/55 border-white/10'
+                        }`}
+                      >
                         {ch.logo && !failedLogos[ch.id] ? (
                           <img
                             src={ch.logo}
@@ -969,18 +1046,32 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <h4 className="text-xs font-extrabold text-white truncate leading-snug">
+                        <h4 className={`text-xs font-extrabold truncate leading-snug ${theme.text}`}>
                           {ch.name}
                         </h4>
-                        <div className="flex items-center gap-1.5 text-[10px] font-semibold text-white/55 mt-0.5">
+                        <div
+                          className={`flex items-center gap-1.5 text-[10px] font-semibold mt-0.5 ${theme.textMuted}`}
+                        >
                           <span className="truncate">{ch.group}</span>
                           {ch.isRadio && (
-                            <span className="px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-bold shrink-0">
+                            <span
+                              className={`px-1 rounded font-bold shrink-0 ${
+                                isLightTheme
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-emerald-500/20 text-emerald-300'
+                              }`}
+                            >
                               FM
                             </span>
                           )}
                           {ch.isVod && (
-                            <span className="px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold shrink-0">
+                            <span
+                              className={`px-1 rounded font-bold shrink-0 ${
+                                isLightTheme
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-amber-500/20 text-amber-300'
+                              }`}
+                            >
                               VOD
                             </span>
                           )}
@@ -994,11 +1085,13 @@ export const TvLiveView: React.FC<TvLiveViewProps> = ({ onPauseMusic, onNotifyTo
                       aria-label={isFav ? `Bỏ yêu thích ${ch.name}` : `Lưu ${ch.name}`}
                       className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 active:scale-90 transition ${
                         isFav
-                          ? 'text-amber-400'
+                          ? 'text-amber-500'
+                          : isLightTheme
+                          ? 'text-slate-400 hover:text-slate-700'
                           : 'text-white/35 hover:text-white/75'
                       }`}
                     >
-                      <Star className={`w-3.5 h-3.5 ${isFav ? 'fill-amber-400' : ''}`} />
+                      <Star className={`w-3.5 h-3.5 ${isFav ? 'fill-amber-500' : ''}`} />
                     </button>
                   </div>
                 );

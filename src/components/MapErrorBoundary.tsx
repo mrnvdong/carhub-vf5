@@ -6,10 +6,10 @@ interface State {
 }
 
 export class MapErrorBoundary extends React.Component<
-  { children: React.ReactNode },
+  { children: React.ReactNode; isLightTheme?: boolean },
   State
 > {
-  constructor(props: { children: React.ReactNode }) {
+  constructor(props: { children: React.ReactNode; isLightTheme?: boolean }) {
     super(props);
     this.state = { hasError: false };
   }
@@ -24,14 +24,23 @@ export class MapErrorBoundary extends React.Component<
 
   render() {
     if (this.state.hasError) {
+      const light = Boolean(this.props.isLightTheme);
       return (
-        <div className="w-full h-full min-h-[260px] rounded-2xl sm:rounded-3xl bg-[#0b1220] border border-white/15 flex flex-col items-center justify-center gap-3 p-5 text-center shadow-2xl">
-          <AlertTriangle className="w-10 h-10 text-amber-400" />
+        <div
+          className={`w-full h-full min-h-[260px] rounded-2xl sm:rounded-3xl border flex flex-col items-center justify-center gap-3 p-5 text-center shadow-2xl ${
+            light ? 'bg-white/95 border-slate-300' : 'bg-[#0b1220] border-white/15'
+          }`}
+        >
+          <AlertTriangle className="w-10 h-10 text-amber-500" />
           <div>
-            <h3 className="text-sm sm:text-base font-extrabold text-white">
+            <h3
+              className={`text-sm sm:text-base font-extrabold ${
+                light ? 'text-slate-950' : 'text-white'
+              }`}
+            >
               Chưa tải được Bản đồ 3D (Sóng 4G chập chờn)
             </h3>
-            <p className="text-xs text-slate-300 mt-1">
+            <p className={`text-xs mt-1 ${light ? 'text-slate-600' : 'text-slate-300'}`}>
               Nhạc vẫn phát bình thường. Hãy bấm thử lại khi ra khỏi hầm hoặc có sóng mạnh hơn.
             </p>
           </div>

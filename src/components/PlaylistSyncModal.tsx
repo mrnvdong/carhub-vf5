@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { SavedPlace, UserPlaylist, VideoItem } from '../types';
 import { normalizeSyncCode, pushSyncData, pullSyncData } from '../services/sync';
+import { getCarTheme } from '../utils/theme';
 
 interface PlaylistSyncModalProps {
   isOpen: boolean;
@@ -37,6 +38,7 @@ interface PlaylistSyncModalProps {
     savedPlaces: SavedPlace[],
     code: string
   ) => void;
+  isLightTheme?: boolean;
 }
 
 const PRESET_NEW_PLAYLISTS = [
@@ -62,7 +64,9 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
   syncCode,
   onSaveSyncCode,
   onApplyPulledData,
+  isLightTheme = false,
 }) => {
+  const theme = getCarTheme(isLightTheme);
   const [codeDigits, setCodeDigits] = useState<string>(syncCode || '6868');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
@@ -196,7 +200,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
       aria-modal="true"
       aria-label="Quản lý Playlist và Đồng bộ Mã Xe VF5"
       onClick={onClose}
-      className="car-app-shell fixed inset-0 z-50 flex flex-col bg-black/80 backdrop-blur-2xl overflow-hidden"
+      className={`car-app-shell fixed inset-0 z-50 flex flex-col overflow-hidden ${theme.modalBackdrop}`}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -204,13 +208,13 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
       >
         {/* TOP HEADER */}
         <div className="flex items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-1.5 bg-white/10 p-1 rounded-full border border-white/15">
+          <div className={`flex items-center gap-1.5 p-1 rounded-full border ${theme.segTrack}`}>
             {currentTrack && (
               <button
                 type="button"
                 onClick={() => onSwitchMode('addTrack')}
                 className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-extrabold flex items-center gap-1.5 transition ${
-                  mode === 'addTrack' ? 'bg-white text-black shadow' : 'text-white/75 hover:text-white'
+                  mode === 'addTrack' ? theme.segActive : theme.segIdle
                 }`}
               >
                 <FolderPlus className="w-4 h-4" />
@@ -221,7 +225,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
               type="button"
               onClick={() => onSwitchMode('sync')}
               className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-extrabold flex items-center gap-1.5 transition ${
-                mode === 'sync' ? 'bg-white text-black shadow' : 'text-white/75 hover:text-white'
+                mode === 'sync' ? theme.segActive : theme.segIdle
               }`}
             >
               <CloudUpload className="w-4 h-4" />
@@ -233,7 +237,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Đóng cửa sổ"
-            className="h-11 w-11 short:h-10 short:w-10 rounded-full bg-white/12 hover:bg-white/22 border border-white/25 text-white flex items-center justify-center shrink-0 active:scale-90 transition"
+            className={`h-11 w-11 short:h-10 short:w-10 rounded-full border flex items-center justify-center shrink-0 active:scale-90 transition ${theme.iconBtn}`}
           >
             <X className="w-5 h-5" />
           </button>
@@ -243,13 +247,21 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
         <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-2">
           {mode === 'sync' ? (
             <div className="grid grid-cols-1 car:grid-cols-12 gap-3 items-start">
-              {/* CỘT TRÁI: BÀN PHÍM SỐ TO CHO MÀN CẢM ỨNG XE (Không cần bật bàn phím nhỏ của iPhone!) */}
-              <div className="car:col-span-6 bg-white/[0.06] border border-white/12 rounded-2xl p-3 short:p-2.5">
+              {/* CỘT TRÁI: BÀN PHÍM SỐ TO CHO MÀN CẢM ỨNG XE */}
+              <div className={`car:col-span-6 border rounded-2xl p-3 short:p-2.5 ${theme.card}`}>
                 <div className="flex items-center justify-between mb-2 px-1">
-                  <span className="text-xs font-extrabold uppercase tracking-wider text-white/60">
+                  <span
+                    className={`text-xs font-extrabold uppercase tracking-wider ${theme.textSub}`}
+                  >
                     Nhập Mã Xe (4–6 số)
                   </span>
-                  <span className="text-base sm:text-lg font-mono font-black tracking-widest text-emerald-300 bg-emerald-500/15 px-3 py-0.5 rounded-lg border border-emerald-400/30">
+                  <span
+                    className={`text-base sm:text-lg font-mono font-black tracking-widest px-3 py-0.5 rounded-lg border ${
+                      isLightTheme
+                        ? 'text-emerald-800 bg-emerald-50 border-emerald-300'
+                        : 'text-emerald-300 bg-emerald-500/15 border-emerald-400/30'
+                    }`}
+                  >
                     VF5-{cleanCode || '____'}
                   </span>
                 </div>
@@ -260,7 +272,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                       key={digit}
                       type="button"
                       onClick={() => handleDigitPress(digit)}
-                      className="min-h-[46px] short:min-h-[40px] rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-lg font-black text-white active:scale-95 transition"
+                      className={`min-h-[46px] short:min-h-[40px] rounded-xl border text-lg font-black active:scale-95 transition ${theme.iconBtn} ${theme.text}`}
                     >
                       {digit}
                     </button>
@@ -271,14 +283,18 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                       setCodeDigits('');
                       setStatusMsg(null);
                     }}
-                    className="min-h-[46px] short:min-h-[40px] rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/30 text-xs font-extrabold text-rose-200 active:scale-95 transition"
+                    className={`min-h-[46px] short:min-h-[40px] rounded-xl border text-xs font-extrabold active:scale-95 transition ${
+                      isLightTheme
+                        ? 'bg-rose-50 hover:bg-rose-100 border-rose-300 text-rose-700'
+                        : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/30 text-rose-200'
+                    }`}
                   >
                     Xóa hết
                   </button>
                   <button
                     type="button"
                     onClick={() => handleDigitPress('0')}
-                    className="min-h-[46px] short:min-h-[40px] rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-lg font-black text-white active:scale-95 transition"
+                    className={`min-h-[46px] short:min-h-[40px] rounded-xl border text-lg font-black active:scale-95 transition ${theme.iconBtn} ${theme.text}`}
                   >
                     0
                   </button>
@@ -286,7 +302,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                     type="button"
                     onClick={handleBackspace}
                     aria-label="Xóa 1 số"
-                    className="min-h-[46px] short:min-h-[40px] rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white flex items-center justify-center active:scale-95 transition"
+                    className={`min-h-[46px] short:min-h-[40px] rounded-xl border flex items-center justify-center active:scale-95 transition ${theme.iconBtn}`}
                   >
                     <Delete className="w-5 h-5" />
                   </button>
@@ -295,20 +311,34 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
 
               {/* CỘT PHẢI: NÚT ĐẨY LÊN MÂY & TẢI VỀ XE */}
               <div className="car:col-span-6 flex flex-col gap-2.5 short:gap-2">
-                <div className="bg-white/[0.06] border border-white/12 rounded-2xl p-3.5 short:p-2.5 space-y-2">
-                  <h3 className="text-sm sm:text-base font-extrabold text-white">
+                <div className={`border rounded-2xl p-3.5 short:p-2.5 space-y-2 ${theme.card}`}>
+                  <h3 className={`text-sm sm:text-base font-extrabold ${theme.text}`}>
                     Đồng bộ giữa Điện thoại ở nhà &amp; APTV / asCar
                   </h3>
-                  <p className="text-xs text-white/65 leading-relaxed">
+                  <p className={`text-xs leading-relaxed ${theme.textSub}`}>
                     Soạn sẵn nhạc trên điện thoại hoặc máy tính rồi bấm{' '}
-                    <strong className="text-white">Đẩy lên mây</strong>. Khi lên xe VF5, nhập đúng
-                    mã số này và bấm <strong className="text-emerald-300">Tải về màn VF5</strong>.
+                    <strong className={theme.text}>Đẩy lên mây</strong>. Khi lên xe VF5, nhập đúng
+                    mã số này và bấm{' '}
+                    <strong className={isLightTheme ? 'text-emerald-700' : 'text-emerald-300'}>
+                      Tải về màn VF5
+                    </strong>
+                    .
                   </p>
-                  <div className="text-xs font-bold text-sky-300 bg-sky-500/10 border border-sky-400/25 rounded-xl px-3 py-1.5">
+                  <div
+                    className={`text-xs font-bold border rounded-xl px-3 py-1.5 ${
+                      isLightTheme
+                        ? 'text-blue-800 bg-blue-50 border-blue-200'
+                        : 'text-sky-300 bg-sky-500/10 border-sky-400/25'
+                    }`}
+                  >
                     Máy này: {favorites.length} Yêu thích • {playlists.length} Playlist (
                     {totalPlaylistTracks} bài) • {savedPlaces.length} điểm ghim bản đồ
                   </div>
-                  <p className="text-[11px] text-emerald-300/90 font-semibold">
+                  <p
+                    className={`text-[11px] font-semibold ${
+                      isLightTheme ? 'text-emerald-700' : 'text-emerald-300/90'
+                    }`}
+                  >
                     💡 Mẹo Send-to-Car: Khi đã gắn cùng Mã Xe, tìm địa chỉ trên điện thoại rồi bấm{' '}
                     <strong>“Gửi xe”</strong> — Bản đồ 3D trên VF5 sẽ tự vẽ lộ trình ngay!
                   </p>
@@ -319,7 +349,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                     type="button"
                     disabled={isSyncing || cleanCode.length < 4}
                     onClick={handlePush}
-                    className="min-h-[50px] short:min-h-[44px] px-4 rounded-2xl bg-white text-black hover:bg-white/90 font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xl disabled:opacity-40 active:scale-95 transition"
+                    className={`min-h-[50px] short:min-h-[44px] px-4 rounded-2xl font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xl disabled:opacity-40 active:scale-95 transition ${theme.primaryCta}`}
                   >
                     {isSyncing ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -333,7 +363,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                     type="button"
                     disabled={isSyncing || cleanCode.length < 4}
                     onClick={handlePull}
-                    className="min-h-[50px] short:min-h-[44px] px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xl disabled:opacity-40 active:scale-95 transition"
+                    className="min-h-[50px] short:min-h-[44px] px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xl disabled:opacity-40 active:scale-95 transition"
                   >
                     {isSyncing ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -348,18 +378,20 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                   <button
                     type="button"
                     onClick={handleCopyAutoSyncUrl}
-                    className="min-h-[42px] px-3.5 rounded-xl bg-white/10 hover:bg-white/18 border border-white/15 text-xs font-bold text-white/85 flex items-center justify-center gap-2 active:scale-95 transition"
+                    className={`min-h-[42px] px-3.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 active:scale-95 transition ${theme.iconBtn}`}
                   >
                     {copiedLink ? (
                       <>
-                        <Check className="w-4 h-4 text-emerald-400" />
-                        <span className="text-emerald-300">
+                        <Check className="w-4 h-4 text-emerald-500" />
+                        <span className={isLightTheme ? 'text-emerald-700' : 'text-emerald-300'}>
                           Đã chép Link tự đồng bộ (?sync={cleanCode}) cho APTV / asCar!
                         </span>
                       </>
                     ) : (
                       <>
-                        <Link2 className="w-4 h-4 text-sky-300" />
+                        <Link2
+                          className={`w-4 h-4 ${isLightTheme ? 'text-blue-600' : 'text-sky-300'}`}
+                        />
                         <span>Chép Link mở tự động trên APTV / asCar (?sync={cleanCode})</span>
                       </>
                     )}
@@ -370,7 +402,11 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                   <div
                     className={`p-3 rounded-xl border text-xs font-bold ${
                       statusMsg.type === 'ok'
-                        ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-100'
+                        ? isLightTheme
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                          : 'bg-emerald-500/20 border-emerald-400/50 text-emerald-100'
+                        : isLightTheme
+                        ? 'bg-rose-50 border-rose-300 text-rose-900'
                         : 'bg-rose-500/20 border-rose-400/50 text-rose-100'
                     }`}
                   >
@@ -383,17 +419,19 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
             /* CHẾ ĐỘ LƯU BÀI HÁT VÀO PLAYLIST RIÊNG */
             <div className="space-y-3">
               {currentTrack && (
-                <div className="flex items-center gap-3 p-2.5 rounded-2xl bg-white/[0.07] border border-white/12">
+                <div className={`flex items-center gap-3 p-2.5 rounded-2xl border ${theme.card}`}>
                   <img
                     src={currentTrack.thumbnail}
                     alt={currentTrack.title}
                     className="w-12 h-12 rounded-xl object-cover shrink-0 bg-black"
                   />
                   <div className="min-w-0 flex-1">
-                    <h4 className="text-sm font-extrabold text-white truncate">
+                    <h4 className={`text-sm font-extrabold truncate ${theme.text}`}>
                       {currentTrack.title}
                     </h4>
-                    <p className="text-xs text-white/60 truncate">{currentTrack.uploaderName}</p>
+                    <p className={`text-xs truncate ${theme.textSub}`}>
+                      {currentTrack.uploaderName}
+                    </p>
                   </div>
                 </div>
               )}
@@ -406,21 +444,33 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                     onClick={() => onToggleFavoriteTrack(currentTrack)}
                     className={`min-h-[48px] px-4 py-2.5 rounded-2xl border flex items-center justify-between gap-2 active:scale-98 transition ${
                       isTrackFav
-                        ? 'bg-rose-500/25 border-rose-400/60 text-white'
-                        : 'bg-white/[0.06] border-white/12 text-white/85 hover:bg-white/12'
+                        ? isLightTheme
+                          ? 'bg-rose-50 border-rose-400 text-rose-950'
+                          : 'bg-rose-500/25 border-rose-400/60 text-white'
+                        : `${theme.itemIdle} ${theme.text}`
                     }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <Heart
                         className={`w-5 h-5 shrink-0 ${
-                          isTrackFav ? 'fill-rose-400 text-rose-400' : 'text-rose-300'
+                          isTrackFav
+                            ? 'fill-rose-500 text-rose-500'
+                            : isLightTheme
+                            ? 'text-rose-500'
+                            : 'text-rose-300'
                         }`}
                       />
                       <span className="text-sm font-extrabold truncate">
                         Bài hát Yêu thích ({favorites.length})
                       </span>
                     </div>
-                    {isTrackFav && <Check className="w-5 h-5 text-rose-300 shrink-0" />}
+                    {isTrackFav && (
+                      <Check
+                        className={`w-5 h-5 shrink-0 ${
+                          isLightTheme ? 'text-rose-600' : 'text-rose-300'
+                        }`}
+                      />
+                    )}
                   </button>
                 )}
 
@@ -433,8 +483,10 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                       key={pl.id}
                       className={`min-h-[48px] pl-4 pr-2 py-2 rounded-2xl border flex items-center justify-between gap-2 ${
                         inPl
-                          ? 'bg-emerald-500/20 border-emerald-400/50 text-white'
-                          : 'bg-white/[0.06] border-white/12 text-white/85'
+                          ? isLightTheme
+                            ? 'bg-emerald-50 border-emerald-400 text-emerald-950'
+                            : 'bg-emerald-500/20 border-emerald-400/50 text-white'
+                          : `${theme.itemIdle} ${theme.text}`
                       }`}
                     >
                       <button
@@ -446,16 +498,24 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                           {pl.icon} {pl.name} ({pl.items.length})
                         </span>
                         {inPl ? (
-                          <Check className="w-5 h-5 text-emerald-300 shrink-0" />
+                          <Check
+                            className={`w-5 h-5 shrink-0 ${
+                              isLightTheme ? 'text-emerald-600' : 'text-emerald-300'
+                            }`}
+                          />
                         ) : (
-                          <Plus className="w-4 h-4 text-white/50 shrink-0" />
+                          <Plus className={`w-4 h-4 shrink-0 ${theme.textMuted}`} />
                         )}
                       </button>
                       <button
                         type="button"
                         aria-label={`Xóa playlist ${pl.name}`}
                         onClick={() => onDeletePlaylist(pl.id)}
-                        className="w-9 h-9 rounded-xl text-white/40 hover:text-rose-300 hover:bg-white/10 flex items-center justify-center shrink-0 transition"
+                        className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition ${
+                          isLightTheme
+                            ? 'text-slate-400 hover:text-rose-600 hover:bg-slate-200/70'
+                            : 'text-white/40 hover:text-rose-300 hover:bg-white/10'
+                        }`}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -465,9 +525,11 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
               </div>
 
               {/* Tạo nhanh Playlist 1 chạm cho màn xe */}
-              <div className="p-3 rounded-2xl bg-white/[0.05] border border-white/10 space-y-2.5">
-                <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider text-white/60">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <div className={`p-3 rounded-2xl border space-y-2.5 ${theme.card}`}>
+                <div
+                  className={`flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider ${theme.textSub}`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
                   <span>Tạo thêm Playlist mới</span>
                 </div>
 
@@ -482,7 +544,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                         const id = onCreatePlaylist(preset.name, preset.icon);
                         if (currentTrack) onToggleTrackInPlaylist(id, currentTrack);
                       }}
-                      className="min-h-[38px] px-3 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-bold text-white flex items-center gap-1.5 active:scale-95 transition"
+                      className={`min-h-[38px] px-3 rounded-full border text-xs font-bold flex items-center gap-1.5 active:scale-95 transition ${theme.chipIdle}`}
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>
@@ -500,7 +562,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                       const idx = icons.indexOf(newPlIcon);
                       setNewPlIcon(icons[(idx + 1) % icons.length]);
                     }}
-                    className="h-11 w-11 rounded-xl bg-white/10 border border-white/15 text-lg flex items-center justify-center shrink-0"
+                    className={`h-11 w-11 rounded-xl border text-lg flex items-center justify-center shrink-0 ${theme.iconBtn}`}
                     title="Đổi biểu tượng"
                   >
                     {newPlIcon}
@@ -510,12 +572,12 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                     value={newPlName}
                     onChange={(e) => setNewPlName(e.target.value)}
                     placeholder="Nhập tên Playlist riêng..."
-                    className="flex-1 h-11 px-3.5 rounded-xl bg-white/10 border border-white/20 text-sm font-bold text-white placeholder-white/40 focus:outline-none focus:border-white/50"
+                    className={`flex-1 h-11 px-3.5 rounded-xl border text-sm font-bold focus:outline-none ${theme.input}`}
                   />
                   <button
                     type="submit"
                     disabled={!newPlName.trim()}
-                    className="h-11 px-4 rounded-xl bg-white text-black font-extrabold text-xs sm:text-sm disabled:opacity-40 active:scale-95 transition shrink-0"
+                    className={`h-11 px-4 rounded-xl font-extrabold text-xs sm:text-sm disabled:opacity-40 active:scale-95 transition shrink-0 ${theme.primaryCta}`}
                   >
                     Tạo mới
                   </button>

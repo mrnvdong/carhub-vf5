@@ -12,8 +12,26 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#050507" />
+    <meta name="theme-color" content="#070a12" />
     <title>CarHub VF5 - Apple CarPlay (APTV &amp; asCar)</title>
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('carhub_cockpit_map_theme');
+          var hr = new Date().getHours();
+          var theme =
+            saved === 'vector3d' || saved === 'dark3d' || saved === 'osm' || saved === 'satellite'
+              ? saved
+              : hr >= 18 || hr < 6
+              ? 'dark3d'
+              : 'vector3d';
+          var isLight = theme === 'vector3d' || theme === 'osm';
+          document.documentElement.dataset.theme = isLight ? 'light' : 'dark';
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', isLight ? '#e8edf5' : '#070a12');
+        } catch (e) {}
+      })();
+    </script>
     <style>
       html,
       body {
@@ -25,15 +43,20 @@
         overscroll-behavior: none;
         user-select: none;
         -webkit-user-select: none;
-        background-color: #050507;
+        background-color: #070a12;
         color: #f8fafc;
+      }
+      html[data-theme='light'],
+      html[data-theme='light'] body {
+        background-color: #e8edf5;
+        color: #0f172a;
       }
       #root {
         height: 100%;
       }
     </style>
   </head>
-  <body class="bg-[#050507] text-slate-100 antialiased">
+  <body class="antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -38,13 +38,11 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
-import { ActiveNavSummary, CockpitNavControls, PendingNavTarget, SavedPlace } from '../types';
+import { ActiveNavSummary, CockpitNavControls, MapTheme, PendingNavTarget, SavedPlace } from '../types';
 import { sendNavToCar } from '../services/sync';
 import { playTurnChime, speakVietnamese, unlockCarAudio } from '../services/voiceAudio';
 
 setWorkerUrl(maplibreWorkerUrl);
-
-type MapTheme = 'vector3d' | 'dark3d' | 'osm' | 'satellite';
 
 const LIBERTY_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 let cachedLibertyBaseJson: any = null;
@@ -314,6 +312,8 @@ export interface CarCockpitMapProps {
   onToggleMapSide: () => void;
   mapWidthPct: number;
   onChangeMapWidthPct: (pct: number) => void;
+  mapTheme: MapTheme;
+  onChangeMapTheme: (theme: MapTheme) => void;
   suppressResizeObserver?: boolean;
   savedPlaces: SavedPlace[];
   onSavePlace: (place: SavedPlace) => void;
@@ -385,6 +385,8 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
   onToggleMapSide,
   mapWidthPct,
   onChangeMapWidthPct,
+  mapTheme,
+  onChangeMapTheme,
   suppressResizeObserver = false,
   savedPlaces,
   onSavePlace,
@@ -417,17 +419,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
   const suppressResizeRef = useRef<boolean>(suppressResizeObserver);
   suppressResizeRef.current = suppressResizeObserver;
 
-  // Lưu lớp bản đồ người dùng chọn vào localStorage
-  const [mapTheme, setMapTheme] = useState<MapTheme>(() => {
-    try {
-      const saved = localStorage.getItem('carhub_cockpit_map_theme') as MapTheme | null;
-      if (saved === 'vector3d' || saved === 'dark3d' || saved === 'osm' || saved === 'satellite') {
-        return saved;
-      }
-    } catch {}
-    const hr = new Date().getHours();
-    return hr >= 18 || hr < 6 ? 'dark3d' : 'vector3d';
-  });
+  // Lớp bản đồ & giao diện toàn hệ thống được đồng bộ từ App.tsx
   const appliedThemeRef = useRef<MapTheme>(mapTheme);
 
   const [voiceNavEnabled, setVoiceNavEnabled] = useState<boolean>(() => {
@@ -997,12 +989,15 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
   }, [roadInfo?.hazards]);
 
   const cycleMapTheme = () => {
-    setMapTheme((prev) => {
-      if (prev === 'vector3d') return 'dark3d';
-      if (prev === 'dark3d') return 'osm';
-      if (prev === 'osm') return 'satellite';
-      return 'vector3d';
-    });
+    const next: MapTheme =
+      mapTheme === 'vector3d'
+        ? 'dark3d'
+        : mapTheme === 'dark3d'
+        ? 'osm'
+        : mapTheme === 'osm'
+        ? 'satellite'
+        : 'vector3d';
+    onChangeMapTheme(next);
   };
 
   const runPlaceSearch = useCallback(

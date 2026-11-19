@@ -58,6 +58,7 @@ import {
   SponsorSegment,
   UserPlaylist,
   NightMode,
+  MapTheme,
   SavedPlace,
   PendingNavTarget,
   ActiveNavSummary,
@@ -70,6 +71,7 @@ import { fetchSponsorSegments, getSponsorCategoryLabel } from '../services/spons
 import { useCarHardwareControls } from '../hooks/useCarHardwareControls';
 import { useCockpitTelemetry } from '../hooks/useCockpitTelemetry';
 import { CockpitView, VideoSlotRect } from './CockpitView';
+import { getCarTheme } from '../utils/theme';
 
 const LazyTvLiveView = React.lazy(() => import('./TvLiveView'));
 
@@ -119,10 +121,13 @@ interface VideoPlayerProps {
   onSelectPlaylistId: (id: string) => void;
   syncCode: string;
   onOpenSyncModal: (mode: 'sync' | 'addTrack') => void;
-  // Upgrade #4: Night Dimmer
+  // Upgrade #4: Unified Day/Night Theme synced with Map Theme
   nightMode: NightMode;
   isNightDimmed: boolean;
   onCycleNightMode: () => void;
+  mapTheme: MapTheme;
+  onChangeMapTheme: (theme: MapTheme) => void;
+  isLightTheme: boolean;
   // Upgrade #5: Auto-Mix Radio
   isMixActive: boolean;
   isLoadingMix: boolean;
@@ -182,9 +187,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onSelectPlaylistId,
   syncCode,
   onOpenSyncModal,
-  nightMode,
-  isNightDimmed,
+  nightMode: _nightMode,
+  isNightDimmed: _isNightDimmed,
   onCycleNightMode,
+  mapTheme,
+  onChangeMapTheme,
+  isLightTheme,
   isMixActive,
   isLoadingMix,
   onStartAutoMix,
@@ -1089,11 +1097,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const overlayIframeOnArtForFirstUnlock =
     !isSoundCloudTrack && !isVideoMode && isNowPlayingView && !hasUnlockedAudio && !isPlaying;
 
+  const theme = getCarTheme(isLightTheme);
+  // Khi phóng to toàn màn hình Video -> luôn giữ thanh điều khiển nền tối chuẩn điện ảnh
+  const npLight = isLightTheme && !isFullscreen;
+  const npTheme = getCarTheme(npLight);
+
   return (
     <div
       ref={containerRef}
-      className={`relative w-full h-full overflow-hidden bg-[#050507] text-white select-none flex flex-col car:flex-row ${
-        isFullscreen ? 'fixed inset-0 z-50' : ''
+      className={`relative w-full h-full overflow-hidden select-none flex flex-col car:flex-row transition-colors duration-300 ${
+        isFullscreen ? 'fixed inset-0 z-50 bg-black text-white' : theme.shell
       }`}
     >
       {/* AUDIO NATIVE DUY NHẤT CHO SOUNDCLOUD (MP3 Progressive + iOS Native HLS + Lazy hls.js) */}
@@ -1145,13 +1158,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
         }}
       />
-      {/* NỀN ÁNH SÁNG ĐỘNG (Tự hạ độ chói khi bật Chế độ Ban Đêm trên VF5!) */}
+      {/* NỀN ÁNH SÁNG ĐỘNG (Tự đồng bộ Sáng / Tối theo lớp bản đồ & chế độ Ngày/Đêm!) */}
       {!isFullscreen && (
         <>
           <div
             key={`bg-${streamData.id}`}
             className={`absolute inset-0 pointer-events-none blur-3xl animate-ambient-drift transition-opacity duration-500 ${
-              isNightDimmed ? 'opacity-20' : 'opacity-45'
+              isLightTheme ? 'opacity-18' : 'opacity-35'
             }`}
             style={{
               backgroundImage: `url(${streamData.thumbnailUrl})`,
@@ -1161,31 +1174,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           />
           <div
             className={`absolute inset-0 pointer-events-none transition-colors duration-500 ${
-              isNightDimmed
-                ? 'bg-gradient-to-br from-black/80 via-black/80 to-black/95'
-                : 'bg-gradient-to-br from-black/60 via-black/55 to-black/85'
+              isLightTheme
+                ? 'bg-gradient-to-br from-[#eef2f7]/88 via-[#e8edf5]/90 to-[#dde5f0]/94'
+                : 'bg-gradient-to-br from-[#070a12]/80 via-[#070a12]/82 to-[#05070e]/94'
             }`}
           />
         </>
       )}
 
-      {/* Màng lọc Dịu mắt Ban đêm chống chói trên cao tốc (không chặn cảm ứng) */}
-      {isNightDimmed && (
-        <div className="fixed inset-0 z-40 pointer-events-none bg-amber-950/[0.12] mix-blend-multiply" />
-      )}
-      {isNightDimmed && (
-        <div className="fixed inset-0 z-40 pointer-events-none bg-black/25" />
-      )}
-
       {/* Toast thông báo thông minh (Vô lăng, Vuốt mù, SponsorBlock, Auto-Mix, Send-to-Car) */}
       {hardwareNotice && (
-        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 bg-black/85 backdrop-blur-xl text-white px-4 py-2 rounded-full text-xs sm:text-sm font-bold flex items-center gap-2 shadow-2xl border border-white/25 pointer-events-none max-w-[90vw]">
+        <div
+          className={`fixed top-3 left-1/2 -translate-x-1/2 z-50 backdrop-blur-xl px-4 py-2 rounded-full text-xs sm:text-sm font-bold flex items-center gap-2 shadow-2xl border pointer-events-none max-w-[90vw] ${theme.toast}`}
+        >
           <ShieldCheck className="w-4 h-4 text-rose-400 shrink-0" />
           <span className="truncate">{hardwareNotice}</span>
         </div>
       )}
 
-      {/* MINI SPEED & TURN PILL: Khi đang mở tab Nhạc/Khám phá mà vẫn đang dẫn đường -> 1 chạm quay về Cockpit! */}
+      {/* MINI SPEED & TURN PILL: Khi đang mở tab Nhạc/Khám phá/TV mà vẫn đang dẫn đường -> 1 chạm quay về Cockpit! */}
       {!isCockpitView && !isFullscreen && activeNavSummary && (
         <button
           type="button"
@@ -1195,13 +1202,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             telemetry.speedKmh !== null &&
             telemetry.speedKmh >= telemetry.roadInfo.speedLimit + 5
               ? 'bg-rose-600/95 border-rose-300 text-white animate-pulse'
+              : isLightTheme
+              ? 'bg-blue-600 border-blue-500 text-white hover:bg-blue-700'
               : 'bg-sky-950/94 border-sky-400/60 text-white hover:bg-sky-900'
           }`}
         >
-          <span className="px-1.5 py-0.5 rounded-md bg-black/40 font-mono text-xs font-black text-emerald-300 shrink-0">
+          <span className="px-1.5 py-0.5 rounded-md bg-black/35 font-mono text-xs font-black text-emerald-300 shrink-0">
             {telemetry.speedKmh ?? 0} km/h
           </span>
-          <Navigation className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+          <Navigation className="w-3.5 h-3.5 text-sky-200 shrink-0" />
           <span className="text-xs font-extrabold truncate">
             {activeNavSummary.nextArrow} {activeNavSummary.nextInstruction}
             {activeNavSummary.nextDistM > 0 ? ` (${activeNavSummary.nextDistM}m)` : ''} •{' '}
@@ -1214,28 +1223,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           1. THANH ĐIỀU HƯỚNG BÊN TRÁI (Gần tay phải người lái VF5 nhất)
          ===================================================================== */}
       {!isFullscreen && (
-        <aside className="relative z-20 flex car:flex-col items-center justify-between gap-1 px-2 py-1.5 car:py-1.5 short:py-1 car:px-1.5 car:w-[4.65rem] lg:w-[5rem] bg-black/50 backdrop-blur-xl border-b car:border-b-0 car:border-r border-white/12 shrink-0 overflow-x-auto car:overflow-x-hidden car:overflow-y-auto no-scrollbar">
+        <aside
+          className={`relative z-20 flex car:flex-col items-center justify-between gap-1 px-2 py-1.5 car:py-1.5 short:py-1 car:px-1.5 car:w-[4.65rem] lg:w-[5rem] border-b car:border-b-0 car:border-r shrink-0 overflow-x-auto car:overflow-x-hidden car:overflow-y-auto no-scrollbar transition-colors ${theme.rail}`}
+        >
           {/* Nút 1-chạm chuyển đổi Music <-> Video */}
           <button
             type="button"
             onClick={() => onViewModeChange(isVideoMode ? 'ytmusic' : 'classic')}
             aria-label={isVideoMode ? 'Chuyển sang chế độ Nghe Nhạc' : 'Chuyển sang chế độ Xem Video'}
-            className={`flex car:flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] px-2.5 car:px-1 car:w-full py-1 rounded-xl border shadow-md ios-spring-fast active:scale-95 shrink-0 ${
+            className={`flex car:flex-col items-center justify-center gap-0.5 min-h-[38px] short:min-h-[34px] px-2.5 car:px-1 car:w-full py-1 rounded-xl border shadow-sm ios-spring-fast active:scale-95 shrink-0 ${
               isVideoMode
-                ? 'bg-gradient-to-br from-sky-500/30 to-blue-600/30 border-sky-400/50 text-sky-100'
+                ? isLightTheme
+                  ? 'bg-blue-50 border-blue-300 text-blue-800 hover:bg-blue-100'
+                  : 'bg-gradient-to-br from-sky-500/30 to-blue-600/30 border-sky-400/50 text-sky-100'
+                : isLightTheme
+                ? 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100'
                 : 'bg-gradient-to-br from-rose-500/30 to-pink-600/30 border-rose-400/50 text-rose-100'
             }`}
           >
             {isVideoMode ? (
               <>
-                <Tv className="w-4 h-4 text-sky-300 shrink-0" />
+                <Tv
+                  className={`w-4 h-4 shrink-0 ${
+                    isLightTheme ? 'text-blue-600' : 'text-sky-300'
+                  }`}
+                />
                 <span className="text-[10px] vshort:text-[9px] font-extrabold leading-none">
                   Video
                 </span>
               </>
             ) : (
               <>
-                <Music className="w-4 h-4 text-rose-300 shrink-0" />
+                <Music
+                  className={`w-4 h-4 shrink-0 ${
+                    isLightTheme ? 'text-rose-600' : 'text-rose-300'
+                  }`}
+                />
                 <span className="text-[10px] vshort:text-[9px] font-extrabold leading-none">
                   Music
                 </span>
@@ -1252,9 +1275,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               type="button"
               onClick={() => onChangeRailSection('cockpit')}
               className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'cockpit'
-                  ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/45 shadow-inner'
-                  : 'text-white/65 hover:text-white hover:bg-white/10'
+                railSection === 'cockpit' ? theme.railCockpitActive : theme.railNavIdle
               }`}
             >
               <Gauge className="w-4 h-4 short:w-3.5 short:h-3.5" />
@@ -1267,9 +1288,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               type="button"
               onClick={() => onChangeRailSection('tv')}
               className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'tv'
-                  ? 'bg-sky-500/25 text-sky-200 border border-sky-400/50 shadow-inner'
-                  : 'text-white/65 hover:text-white hover:bg-white/10'
+                railSection === 'tv' ? theme.railTvActive : theme.railNavIdle
               }`}
             >
               <Tv className="w-4 h-4 short:w-3.5 short:h-3.5" />
@@ -1282,9 +1301,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               type="button"
               onClick={() => onChangeRailSection('nowPlaying')}
               className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'nowPlaying'
-                  ? 'bg-white/20 text-white border border-white/25 shadow-inner'
-                  : 'text-white/65 hover:text-white hover:bg-white/10'
+                railSection === 'nowPlaying' ? theme.railNavActive : theme.railNavIdle
               }`}
             >
               {effectiveVideoMode ? (
@@ -1301,9 +1318,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               type="button"
               onClick={() => onChangeRailSection('browse')}
               className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'browse'
-                  ? 'bg-white/20 text-white border border-white/25 shadow-inner'
-                  : 'text-white/65 hover:text-white hover:bg-white/10'
+                railSection === 'browse' ? theme.railNavActive : theme.railNavIdle
               }`}
             >
               <Compass className="w-4 h-4 short:w-3.5 short:h-3.5" />
@@ -1315,7 +1330,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onOpenSearchModal(false)}
-              className="flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl text-white/65 hover:text-white hover:bg-white/10 ios-spring-fast active:scale-95"
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${theme.railNavIdle}`}
             >
               <Search className="w-4 h-4 short:w-3.5 short:h-3.5" />
               <span className="text-[10px] vshort:text-[9px] font-bold leading-none">
@@ -1327,9 +1342,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               type="button"
               onClick={() => onChangeRailSection('favorites')}
               className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'favorites'
-                  ? 'bg-white/20 text-white border border-white/25 shadow-inner'
-                  : 'text-white/65 hover:text-white hover:bg-white/10'
+                railSection === 'favorites' ? theme.railNavActive : theme.railNavIdle
               }`}
             >
               <Bookmark className="w-4 h-4 short:w-3.5 short:h-3.5" />
@@ -1342,9 +1355,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               type="button"
               onClick={() => onChangeRailSection('history')}
               className={`flex flex-col items-center justify-center gap-0.5 min-h-[34px] short:min-h-[30px] vshort:min-h-[26px] w-14 car:w-full py-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'history'
-                  ? 'bg-white/20 text-white border border-white/25 shadow-inner'
-                  : 'text-white/65 hover:text-white hover:bg-white/10'
+                railSection === 'history' ? theme.railNavActive : theme.railNavIdle
               }`}
             >
               <History className="w-4 h-4 short:w-3.5 short:h-3.5" />
@@ -1354,7 +1365,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           </nav>
 
-          {/* Cụm công cụ nhanh phía dưới: [Micro + Đêm] song song cực gọn + Tỉ lệ chữ */}
+          {/* Cụm công cụ nhanh phía dưới: [Micro + Sáng/Tối đồng bộ Map] + Tỉ lệ chữ */}
           <div className="flex car:flex-col items-center gap-1 car:w-full shrink-0">
             <div className="flex car:grid car:grid-cols-2 gap-1 car:w-full">
               <button
@@ -1362,7 +1373,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 onClick={() => onOpenSearchModal(true)}
                 aria-label="Tìm kiếm bằng giọng nói"
                 title="Tìm giọng nói tiếng Việt"
-                className="min-h-[34px] w-9 car:w-full rounded-lg bg-rose-500/25 hover:bg-rose-500/40 border border-rose-400/45 text-rose-200 flex items-center justify-center active:scale-95 transition"
+                className={`min-h-[34px] w-9 car:w-full rounded-lg border flex items-center justify-center active:scale-95 transition ${
+                  isLightTheme
+                    ? 'bg-rose-50 hover:bg-rose-100 border-rose-300 text-rose-600'
+                    : 'bg-rose-500/25 hover:bg-rose-500/40 border-rose-400/45 text-rose-200'
+                }`}
               >
                 <Mic className="w-3.5 h-3.5" />
               </button>
@@ -1370,33 +1385,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <button
                 type="button"
                 onClick={() => {
+                  const willBeDark = isLightTheme;
                   onCycleNightMode();
-                  const nextLabel =
-                    nightMode === 'auto'
-                      ? '🌙 Đã bật Dịu mắt Ban đêm'
-                      : nightMode === 'on'
-                      ? '☀️ Đã tắt Dịu mắt (Sáng tối đa)'
-                      : '🌗 Chế độ Đêm Tự động (sau 18h)';
-                  showToast(nextLabel);
+                  showToast(
+                    willBeDark
+                      ? '🌙 Giao diện & Bản đồ 3D: Chế độ Tối'
+                      : '☀️ Giao diện & Bản đồ 3D: Chế độ Sáng'
+                  );
                 }}
-                aria-label="Chế độ dịu mắt ban đêm"
+                aria-label={
+                  isLightTheme
+                    ? 'Chuyển sang giao diện & bản đồ Tối'
+                    : 'Chuyển sang giao diện & bản đồ Sáng'
+                }
                 title={
-                  nightMode === 'auto'
-                    ? 'Đang để Đêm Tự động (sau 18h)'
-                    : nightMode === 'on'
-                    ? 'Đang bật Dịu mắt Ban đêm'
-                    : 'Đang tắt Dịu mắt'
+                  isLightTheme
+                    ? 'Đang ở chế độ Sáng • Bấm để chuyển sang Tối'
+                    : 'Đang ở chế độ Tối • Bấm để chuyển sang Sáng'
                 }
                 className={`min-h-[34px] w-9 car:w-full rounded-lg border flex items-center justify-center active:scale-95 transition ${
-                  isNightDimmed
-                    ? 'bg-amber-500/25 border-amber-400/50 text-amber-200'
-                    : 'bg-white/10 hover:bg-white/20 border-white/15 text-white/75'
+                  isLightTheme
+                    ? 'bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-700'
+                    : 'bg-indigo-500/25 hover:bg-indigo-500/40 border-indigo-400/50 text-amber-200'
                 }`}
               >
-                {isNightDimmed ? (
-                  <Moon className="w-3.5 h-3.5" />
-                ) : (
+                {isLightTheme ? (
                   <Sun className="w-3.5 h-3.5" />
+                ) : (
+                  <Moon className="w-3.5 h-3.5" />
                 )}
               </button>
             </div>
@@ -1405,7 +1421,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               type="button"
               onClick={cycleScale}
               aria-label={`Đổi cỡ giao diện, hiện tại ${scaleLabel}`}
-              className="min-h-[28px] px-2 car:px-0 car:w-full rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-extrabold text-white/80 border border-white/12 flex items-center justify-center active:scale-95 transition"
+              className={`min-h-[28px] px-2 car:px-0 car:w-full rounded-lg text-[10px] font-extrabold border flex items-center justify-center active:scale-95 transition ${theme.railToolBtn}`}
             >
               {scaleLabel}
             </button>
@@ -1638,10 +1654,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 {/* Tiêu đề bài hát + Cụm nút thông minh (Auto-Mix ⚡, Auto-Skip ⏭️, Playlist ➕, Tim ❤️, Phóng to ⛶) */}
                 <div className="w-full flex items-center justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <h2 className="text-base sm:text-lg lg:text-xl short:text-sm vshort:text-xs font-extrabold text-white truncate tracking-tight">
+                    <h2
+                      className={`text-base sm:text-lg lg:text-xl short:text-sm vshort:text-xs font-extrabold truncate tracking-tight ${npTheme.text}`}
+                    >
                       {streamData.title}
                     </h2>
-                    <p className="text-xs sm:text-sm short:text-[11px] text-white/65 font-semibold truncate">
+                    <p
+                      className={`text-xs sm:text-sm short:text-[11px] font-semibold truncate ${npTheme.textSub}`}
+                    >
                       {streamData.uploader}
                     </p>
                   </div>
@@ -1659,7 +1679,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       title="Phát liên hoàn các bài tương tự bài này (Auto-Mix)"
                       className={`h-9 short:h-8 px-2.5 rounded-full border text-[11px] font-extrabold flex items-center gap-1 ios-spring-fast active:scale-90 ${
                         isMixActive
-                          ? 'bg-amber-400 text-black border-amber-300 shadow'
+                          ? 'bg-amber-400 text-slate-950 border-amber-400 shadow'
+                          : npLight
+                          ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-800'
                           : 'bg-white/10 hover:bg-white/20 border-white/15 text-amber-200'
                       }`}
                     >
@@ -1690,8 +1712,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       }
                       className={`w-9 h-9 short:w-8 short:h-8 rounded-full border flex items-center justify-center ios-spring-fast active:scale-90 ${
                         autoSkipEnabled
-                          ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300'
-                          : 'bg-white/10 border-white/15 text-white/45'
+                          ? npLight
+                            ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                            : 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300'
+                          : npTheme.iconBtn
                       }`}
                     >
                       <FastForward className="w-4 h-4" />
@@ -1703,7 +1727,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       onClick={() => onOpenSyncModal('addTrack')}
                       aria-label="Lưu bài hát vào Playlist riêng"
                       title="Lưu vào Playlist"
-                      className="w-9 h-9 short:w-8 short:h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-white/80 hover:text-white flex items-center justify-center ios-spring-fast active:scale-90"
+                      className={`w-9 h-9 short:w-8 short:h-8 rounded-full border flex items-center justify-center ios-spring-fast active:scale-90 ${npTheme.iconBtn}`}
                     >
                       <FolderPlus className="w-4 h-4" />
                     </button>
@@ -1715,11 +1739,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       title="Yêu thích"
                       className={`w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center border ios-spring-fast active:scale-90 ${
                         isFavorite
-                          ? 'bg-rose-500/25 border-rose-400/50 text-rose-400'
-                          : 'bg-white/10 border-white/15 text-white/75 hover:text-white'
+                          ? npLight
+                            ? 'bg-rose-50 border-rose-300 text-rose-600'
+                            : 'bg-rose-500/25 border-rose-400/50 text-rose-400'
+                          : npTheme.iconBtn
                       }`}
                     >
-                      <Heart className={`w-4 h-4 ${isFavorite ? 'fill-rose-400' : ''}`} />
+                      <Heart
+                        className={`w-4 h-4 ${
+                          isFavorite ? (npLight ? 'fill-rose-600' : 'fill-rose-400') : ''
+                        }`}
+                      />
                     </button>
 
                     {isVideoMode && (
@@ -1727,7 +1757,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         type="button"
                         onClick={toggleFullscreen}
                         aria-label={isFullscreen ? 'Thu nhỏ khung hình' : 'Xem toàn màn hình xe'}
-                        className="w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center bg-white/10 hover:bg-white/20 border border-white/15 text-white/85 hover:text-white ios-spring-fast active:scale-90"
+                        className={`w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center border ios-spring-fast active:scale-90 ${npTheme.iconBtn}`}
                       >
                         {isFullscreen ? (
                           <Minimize2 className="w-4 h-4" />
@@ -1776,9 +1806,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         handleSeekTo(finalVal);
                       }
                     }}
-                    className="car-scrubber"
+                    className={npTheme.scrubber}
                   />
-                  <div className="flex justify-between text-[11px] font-mono font-bold text-white/60 -mt-1.5 px-0.5">
+                  <div
+                    className={`flex justify-between text-[11px] font-mono font-bold -mt-1.5 px-0.5 ${npTheme.textMuted}`}
+                  >
                     <span>{formatSeconds(displayedTime)}</span>
                     <span>
                       {safeDuration > 0 ? `-${formatSeconds(remainingTime)}` : 'LIVE / AUTO'}
@@ -1798,7 +1830,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     aria-label="Phát ngẫu nhiên"
                     className={`w-10 h-10 short:w-9 short:h-9 rounded-full flex items-center justify-center ios-spring-fast active:scale-90 ${
                       isShuffle
-                        ? 'bg-rose-500/30 border border-rose-400/50 text-rose-200'
+                        ? npLight
+                          ? 'bg-rose-100 border border-rose-300 text-rose-700'
+                          : 'bg-rose-500/30 border border-rose-400/50 text-rose-200'
+                        : npLight
+                        ? 'text-slate-500 hover:text-slate-950 hover:bg-slate-200/70'
                         : 'text-white/55 hover:text-white hover:bg-white/10'
                     }`}
                   >
@@ -1810,7 +1846,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     onClick={onPrev}
                     disabled={!hasPrev}
                     aria-label="Bài trước đó"
-                    className="w-11 h-11 sm:w-12 sm:h-12 short:w-10 short:h-10 rounded-full text-white hover:bg-white/10 flex items-center justify-center disabled:opacity-30 ios-spring-fast active:scale-90"
+                    className={`w-11 h-11 sm:w-12 sm:h-12 short:w-10 short:h-10 rounded-full flex items-center justify-center disabled:opacity-30 ios-spring-fast active:scale-90 ${
+                      npLight
+                        ? 'text-slate-900 hover:bg-slate-200/80'
+                        : 'text-white hover:bg-white/10'
+                    }`}
                   >
                     <SkipBack className="w-6 h-6 short:w-5 short:h-5 fill-current" />
                   </button>
@@ -1819,7 +1859,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     type="button"
                     onClick={() => handleSeekRelative(-10)}
                     aria-label="Tua lùi 10 giây"
-                    className="w-10 h-10 short:w-9 short:h-9 rounded-full text-white/80 hover:text-white hover:bg-white/10 flex flex-col items-center justify-center ios-spring-fast active:scale-90"
+                    className={`w-10 h-10 short:w-9 short:h-9 rounded-full flex flex-col items-center justify-center ios-spring-fast active:scale-90 ${
+                      npLight
+                        ? 'text-slate-700 hover:text-slate-950 hover:bg-slate-200/80'
+                        : 'text-white/80 hover:text-white hover:bg-white/10'
+                    }`}
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span className="text-[9px] font-extrabold leading-none mt-0.5">-10s</span>
@@ -1829,14 +1873,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     type="button"
                     onClick={togglePlay}
                     aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-                    className="w-14 h-14 sm:w-16 sm:h-16 short:w-12 short:h-12 rounded-full bg-white hover:bg-white/90 text-black flex items-center justify-center shadow-[0_6px_24px_rgba(255,255,255,0.28)] ios-spring-fast active:scale-90"
+                    className={`w-14 h-14 sm:w-16 sm:h-16 short:w-12 short:h-12 rounded-full flex items-center justify-center ios-spring-fast active:scale-90 ${npTheme.primaryCta}`}
                   >
                     {isBuffering || isLoading ? (
-                      <Loader2 className="w-6 h-6 sm:w-7 sm:h-7 short:w-5 short:h-5 animate-spin text-black" />
+                      <Loader2 className="w-6 h-6 sm:w-7 sm:h-7 short:w-5 short:h-5 animate-spin" />
                     ) : isPlaying ? (
-                      <Pause className="w-6 h-6 sm:w-7 sm:h-7 short:w-5 short:h-5 fill-black text-black" />
+                      <Pause
+                        className={`w-6 h-6 sm:w-7 sm:h-7 short:w-5 short:h-5 ${npTheme.primaryCtaIcon}`}
+                      />
                     ) : (
-                      <Play className="w-6 h-6 sm:w-7 sm:h-7 short:w-5 short:h-5 fill-black text-black ml-0.5" />
+                      <Play
+                        className={`w-6 h-6 sm:w-7 sm:h-7 short:w-5 short:h-5 ml-0.5 ${npTheme.primaryCtaIcon}`}
+                      />
                     )}
                   </button>
 
@@ -1844,7 +1892,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     type="button"
                     onClick={() => handleSeekRelative(10)}
                     aria-label="Tua tới 10 giây"
-                    className="w-10 h-10 short:w-9 short:h-9 rounded-full text-white/80 hover:text-white hover:bg-white/10 flex flex-col items-center justify-center ios-spring-fast active:scale-90"
+                    className={`w-10 h-10 short:w-9 short:h-9 rounded-full flex flex-col items-center justify-center ios-spring-fast active:scale-90 ${
+                      npLight
+                        ? 'text-slate-700 hover:text-slate-950 hover:bg-slate-200/80'
+                        : 'text-white/80 hover:text-white hover:bg-white/10'
+                    }`}
                   >
                     <RotateCw className="w-3.5 h-3.5" />
                     <span className="text-[9px] font-extrabold leading-none mt-0.5">+10s</span>
@@ -1855,7 +1907,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     onClick={onNext}
                     disabled={!hasNext}
                     aria-label="Bài tiếp theo"
-                    className="w-11 h-11 sm:w-12 sm:h-12 short:w-10 short:h-10 rounded-full text-white hover:bg-white/10 flex items-center justify-center disabled:opacity-30 ios-spring-fast active:scale-90"
+                    className={`w-11 h-11 sm:w-12 sm:h-12 short:w-10 short:h-10 rounded-full flex items-center justify-center disabled:opacity-30 ios-spring-fast active:scale-90 ${
+                      npLight
+                        ? 'text-slate-900 hover:bg-slate-200/80'
+                        : 'text-white hover:bg-white/10'
+                    }`}
                   >
                     <SkipForward className="w-6 h-6 short:w-5 short:h-5 fill-current" />
                   </button>
@@ -1866,12 +1922,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     aria-label={`Chế độ lặp: ${repeatMode}`}
                     className={`w-10 h-10 short:w-9 short:h-9 rounded-full flex items-center justify-center ios-spring-fast active:scale-90 ${
                       repeatMode !== 'off'
-                        ? 'bg-white/20 border border-white/25 text-white'
+                        ? npLight
+                          ? 'bg-slate-200 border border-slate-300 text-slate-950'
+                          : 'bg-white/20 border border-white/25 text-white'
+                        : npLight
+                        ? 'text-slate-500 hover:text-slate-950 hover:bg-slate-200/70'
                         : 'text-white/55 hover:text-white hover:bg-white/10'
                     }`}
                   >
                     {repeatMode === 'one' ? (
-                      <Repeat1 className="w-4 h-4 sm:w-5 sm:h-5 text-rose-300" />
+                      <Repeat1
+                        className={`w-4 h-4 sm:w-5 sm:h-5 ${
+                          npLight ? 'text-rose-600' : 'text-rose-300'
+                        }`}
+                      />
                     ) : (
                       <Repeat className="w-4 h-4 sm:w-5 sm:h-5" />
                     )}
@@ -1884,20 +1948,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* CỘT PHẢI: Lời bài hát / Danh sách phát tiếp theo / Chủ đề */}
           {isNowPlayingView && !isFullscreen && (
             <div
-              className={`flex flex-col min-h-[260px] car:min-h-0 car:h-full max-h-full bg-white/[0.05] backdrop-blur-xl rounded-2xl sm:rounded-3xl border border-white/12 overflow-hidden shadow-xl ${
+              className={`flex flex-col min-h-[260px] car:min-h-0 car:h-full max-h-full rounded-2xl sm:rounded-3xl border overflow-hidden ${theme.card} ${
                 effectiveVideoMode ? 'car:col-span-5 lg:col-span-4' : 'car:col-span-7 md:col-span-7'
               }`}
             >
-              <div className="flex items-center justify-between gap-2 px-3 py-2 short:py-1.5 border-b border-white/10 shrink-0">
+              <div
+                className={`flex items-center justify-between gap-2 px-3 py-2 short:py-1.5 border-b shrink-0 ${theme.divider}`}
+              >
                 {!effectiveVideoMode ? (
-                  <div className="grid grid-cols-3 bg-black/40 p-1 rounded-full border border-white/10 w-full">
+                  <div className={`grid grid-cols-3 p-1 rounded-full border w-full ${theme.segTrack}`}>
                     <button
                       type="button"
                       onClick={() => setMusicRightTab('lyrics')}
                       className={`flex items-center justify-center gap-1 min-h-[36px] short:min-h-[32px] px-2 rounded-full text-xs font-extrabold ios-spring-fast ${
-                        musicRightTab === 'lyrics'
-                          ? 'bg-white text-black shadow'
-                          : 'text-white/70 hover:text-white'
+                        musicRightTab === 'lyrics' ? theme.segActive : theme.segIdle
                       }`}
                     >
                       <Quote className="w-3.5 h-3.5 shrink-0" />
@@ -1907,9 +1971,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       type="button"
                       onClick={() => setMusicRightTab('queue')}
                       className={`flex items-center justify-center gap-1 min-h-[36px] short:min-h-[32px] px-2 rounded-full text-xs font-extrabold ios-spring-fast ${
-                        musicRightTab === 'queue'
-                          ? 'bg-white text-black shadow'
-                          : 'text-white/70 hover:text-white'
+                        musicRightTab === 'queue' ? theme.segActive : theme.segIdle
                       }`}
                     >
                       {isMixActive ? (
@@ -1925,9 +1987,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       type="button"
                       onClick={() => setMusicRightTab('categories')}
                       className={`flex items-center justify-center gap-1 min-h-[36px] short:min-h-[32px] px-2 rounded-full text-xs font-extrabold ios-spring-fast ${
-                        musicRightTab === 'categories'
-                          ? 'bg-white text-black shadow'
-                          : 'text-white/70 hover:text-white'
+                        musicRightTab === 'categories' ? theme.segActive : theme.segIdle
                       }`}
                     >
                       <Sparkles className="w-3.5 h-3.5 shrink-0" />
@@ -1935,14 +1995,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     </button>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 bg-black/40 p-1 rounded-full border border-white/10 w-full">
+                  <div className={`grid grid-cols-2 p-1 rounded-full border w-full ${theme.segTrack}`}>
                     <button
                       type="button"
                       onClick={() => setVideoRightTab('queue')}
                       className={`flex items-center justify-center gap-1.5 min-h-[36px] short:min-h-[32px] px-3 rounded-full text-xs font-extrabold ios-spring-fast ${
-                        videoRightTab === 'queue'
-                          ? 'bg-white text-black shadow'
-                          : 'text-white/70 hover:text-white'
+                        videoRightTab === 'queue' ? theme.segActive : theme.segIdle
                       }`}
                     >
                       <ListMusic className="w-3.5 h-3.5 shrink-0" />
@@ -1952,9 +2010,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       type="button"
                       onClick={() => setVideoRightTab('categories')}
                       className={`flex items-center justify-center gap-1.5 min-h-[36px] short:min-h-[32px] px-3 rounded-full text-xs font-extrabold ios-spring-fast ${
-                        videoRightTab === 'categories'
-                          ? 'bg-white text-black shadow'
-                          : 'text-white/70 hover:text-white'
+                        videoRightTab === 'categories' ? theme.segActive : theme.segIdle
                       }`}
                     >
                       <Sparkles className="w-3.5 h-3.5 shrink-0" />
@@ -1971,13 +2027,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   className="relative flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-5 short:py-3.5 no-scrollbar space-y-4 short:space-y-3 animate-ios-browse-in"
                 >
                   {isLoadingLyrics ? (
-                    <div className="h-full flex flex-col items-center justify-center gap-2.5 text-white/65">
-                      <Loader2 className="w-7 h-7 animate-spin text-white/85" />
+                    <div className={`h-full flex flex-col items-center justify-center gap-2.5 ${theme.textSub}`}>
+                      <Loader2 className="w-7 h-7 animate-spin" />
                       <p className="text-xs sm:text-sm font-semibold">Đang tải lời bài hát...</p>
                     </div>
                   ) : lyricsData && lyricsData.lines.length > 0 ? (
                     <>
-                      <div className="flex items-center justify-between text-[11px] font-bold text-white/45 pb-1">
+                      <div className={`flex items-center justify-between text-[11px] font-bold pb-1 ${theme.textMuted}`}>
                         <span>
                           {lyricsData.isSynced
                             ? 'Chạm vào câu hát bất kỳ để tua nhanh'
@@ -1990,7 +2046,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           return (
                             <p
                               key={i}
-                              className="text-base sm:text-lg short:text-sm font-bold text-white/85 leading-relaxed"
+                              className={`text-base sm:text-lg short:text-sm font-bold leading-relaxed ${theme.text}`}
                             >
                               {line.text}
                             </p>
@@ -2009,10 +2065,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             }}
                             className={`block w-full text-left font-extrabold tracking-tight ios-lyric-ease origin-left py-0.5 ${
                               isActive
-                                ? 'text-xl sm:text-2xl short:text-lg text-white scale-[1.02]'
+                                ? `text-xl sm:text-2xl short:text-lg scale-[1.02] ${
+                                    isLightTheme ? 'text-blue-700' : 'text-white'
+                                  }`
                                 : isPast
-                                ? 'text-base sm:text-lg short:text-sm text-white/30 hover:text-white/75'
-                                : 'text-base sm:text-lg short:text-sm text-white/55 hover:text-white/90'
+                                ? `text-base sm:text-lg short:text-sm ${
+                                    isLightTheme
+                                      ? 'text-slate-400 hover:text-slate-700'
+                                      : 'text-white/30 hover:text-white/75'
+                                  }`
+                                : `text-base sm:text-lg short:text-sm ${
+                                    isLightTheme
+                                      ? 'text-slate-600 hover:text-slate-950'
+                                      : 'text-white/55 hover:text-white/90'
+                                  }`
                             }`}
                           >
                             {line.text}
@@ -2022,19 +2088,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     </>
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-center gap-3 px-3">
-                      <Quote className="w-10 h-10 text-white/25" />
+                      <Quote className={`w-10 h-10 ${theme.textDim}`} />
                       <div>
-                        <p className="text-sm sm:text-base font-bold text-white/85">
+                        <p className={`text-sm sm:text-base font-bold ${theme.text}`}>
                           Chưa có lời cho bản thu này
                         </p>
-                        <p className="text-xs text-white/50 mt-1">
+                        <p className={`text-xs mt-1 ${theme.textMuted}`}>
                           Các bản Nonstop / Remix dài thường không kèm lời LRC.
                         </p>
                       </div>
                       <button
                         type="button"
                         onClick={() => setMusicRightTab('queue')}
-                        className="min-h-[40px] px-4 rounded-full bg-white/15 hover:bg-white/25 border border-white/20 text-xs sm:text-sm font-bold text-white transition active:scale-95"
+                        className={`min-h-[40px] px-4 rounded-full border text-xs sm:text-sm font-bold transition active:scale-95 ${theme.iconBtn}`}
                       >
                         Mở danh sách phát tiếp theo ({playbackQueue.length})
                       </button>
@@ -2045,14 +2111,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 (effectiveVideoMode && videoRightTab === 'categories') ? (
                 <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 no-scrollbar animate-ios-browse-in">
                   {/* Bộ chọn nguồn nhạc YouTube <-> SoundCloud ngay đầu tab Chủ đề */}
-                  <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-black/45 border border-white/12">
+                  <div className={`grid grid-cols-2 gap-1.5 p-1 rounded-2xl border ${theme.segTrack}`}>
                     <button
                       type="button"
                       onClick={() => onChangeMusicSource('youtube')}
                       className={`min-h-[36px] rounded-xl text-xs font-extrabold transition ${
-                        musicSource === 'youtube'
-                          ? 'bg-rose-600 text-white shadow'
-                          : 'text-white/65 hover:text-white'
+                        musicSource === 'youtube' ? 'bg-rose-600 text-white shadow' : theme.segIdle
                       }`}
                     >
                       ▶ YouTube
@@ -2063,7 +2127,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       className={`min-h-[36px] rounded-xl text-xs font-extrabold transition ${
                         musicSource === 'soundcloud'
                           ? 'bg-[#ff5500] text-white shadow'
-                          : 'text-white/65 hover:text-white'
+                          : theme.segIdle
                       }`}
                     >
                       ☁️ SoundCloud
@@ -2081,9 +2145,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           else setMusicRightTab('queue');
                         }}
                         className={`w-full min-h-[44px] px-3.5 py-2.5 rounded-xl text-left text-sm font-bold flex items-center justify-between ios-spring-fast active:scale-98 border ${
-                          isSelected
-                            ? 'bg-white text-black border-white shadow-lg'
-                            : 'bg-white/[0.06] text-white/85 border-white/10 hover:bg-white/[0.14]'
+                          isSelected ? theme.chipActive : `${theme.itemIdle} ${theme.text}`
                         }`}
                       >
                         <span>{cat.label}</span>
@@ -2101,10 +2163,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         key={`${item.id}-${idx}`}
                         type="button"
                         onClick={() => onSelectQueueVideo(item)}
-                        className={`w-full text-left flex items-center gap-2.5 p-2 rounded-xl ios-spring-fast active:scale-99 ${
+                        className={`w-full text-left flex items-center gap-2.5 p-2 rounded-xl border ios-spring-fast active:scale-99 ${
                           isCurrent
-                            ? 'bg-white/20 border border-white/30'
-                            : 'hover:bg-white/10 border border-transparent'
+                            ? theme.itemActive
+                            : isLightTheme
+                            ? 'hover:bg-slate-100 border-transparent'
+                            : 'hover:bg-white/10 border-transparent'
                         }`}
                       >
                         <div className="w-5 text-center shrink-0">
@@ -2113,23 +2177,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                               <span
                                 className={`w-1 rounded-full h-full ${
                                   isPlaying ? 'animate-bounce' : ''
-                                } ${isVideoMode ? 'bg-sky-400' : 'bg-rose-400'}`}
+                                } ${
+                                  isVideoMode
+                                    ? isLightTheme
+                                      ? 'bg-blue-600'
+                                      : 'bg-sky-400'
+                                    : isLightTheme
+                                    ? 'bg-rose-600'
+                                    : 'bg-rose-400'
+                                }`}
                               />
                               <span
                                 className={`w-1 rounded-full h-3/5 ${
                                   isPlaying ? 'animate-bounce' : ''
-                                } ${isVideoMode ? 'bg-sky-400' : 'bg-rose-400'}`}
+                                } ${
+                                  isVideoMode
+                                    ? isLightTheme
+                                      ? 'bg-blue-600'
+                                      : 'bg-sky-400'
+                                    : isLightTheme
+                                    ? 'bg-rose-600'
+                                    : 'bg-rose-400'
+                                }`}
                                 style={{ animationDelay: '150ms' }}
                               />
                               <span
                                 className={`w-1 rounded-full h-4/5 ${
                                   isPlaying ? 'animate-bounce' : ''
-                                } ${isVideoMode ? 'bg-sky-400' : 'bg-rose-400'}`}
+                                } ${
+                                  isVideoMode
+                                    ? isLightTheme
+                                      ? 'bg-blue-600'
+                                      : 'bg-sky-400'
+                                    : isLightTheme
+                                    ? 'bg-rose-600'
+                                    : 'bg-rose-400'
+                                }`}
                                 style={{ animationDelay: '300ms' }}
                               />
                             </div>
                           ) : (
-                            <span className="text-xs font-mono font-bold text-white/45">
+                            <span className={`text-xs font-mono font-bold ${theme.textMuted}`}>
                               {idx + 1 < 10 ? `0${idx + 1}` : idx + 1}
                             </span>
                           )}
@@ -2140,18 +2228,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           loading="lazy"
                           className={`${
                             isVideoMode ? 'w-18 aspect-video' : 'w-11 h-11 short:w-10 short:h-10'
-                          } rounded-lg object-cover shrink-0 border border-white/10 bg-black`}
+                          } rounded-lg object-cover shrink-0 border ${
+                            isLightTheme ? 'border-slate-300' : 'border-white/10'
+                          } bg-black`}
                         />
                         <div className="min-w-0 flex-1">
-                          <h4 className="text-xs sm:text-sm font-bold text-white line-clamp-1">
+                          <h4 className={`text-xs sm:text-sm font-bold line-clamp-1 ${theme.text}`}>
                             {item.title}
                           </h4>
-                          <p className="text-[11px] text-white/60 truncate mt-0.5">
+                          <p className={`text-[11px] truncate mt-0.5 ${theme.textSub}`}>
                             {item.uploaderName}
                           </p>
                         </div>
                         {item.durationText && (
-                          <span className="text-[11px] font-mono font-bold text-white/50 shrink-0 pr-0.5">
+                          <span className={`text-[11px] font-mono font-bold shrink-0 pr-0.5 ${theme.textMuted}`}>
                             {item.durationText}
                           </span>
                         )}
@@ -2164,7 +2254,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       type="button"
                       onClick={onLoadMoreExplore}
                       disabled={isLoadingMoreExplore}
-                      className="w-full min-h-[44px] py-2.5 mt-1 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/15 flex items-center justify-center gap-2 transition disabled:opacity-50"
+                      className={`w-full min-h-[44px] py-2.5 mt-1 rounded-xl text-xs font-bold border flex items-center justify-center gap-2 transition disabled:opacity-50 ${theme.iconBtn}`}
                     >
                       {isLoadingMoreExplore ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -2232,6 +2322,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onConsumeIncomingNav={onConsumeIncomingNav}
             onActiveNavChange={setActiveNavSummary}
             onNotifyToast={showToast}
+            mapTheme={mapTheme}
+            onChangeMapTheme={onChangeMapTheme}
+            isLightTheme={isLightTheme}
           />
         )}
 
@@ -2242,14 +2335,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <Suspense
             fallback={
               <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center">
-                <Loader2 className="w-9 h-9 text-sky-400 animate-spin" />
-                <p className="text-sm font-extrabold text-white/80">
+                <Loader2 className="w-9 h-9 text-blue-500 animate-spin" />
+                <p className={`text-sm font-extrabold ${theme.textSub}`}>
                   Đang mở Truyền hình & Radio trực tiếp...
                 </p>
               </div>
             }
           >
-            <LazyTvLiveView onPauseMusic={pauseAllMusicForTv} onNotifyToast={showToast} />
+            <LazyTvLiveView
+              onPauseMusic={pauseAllMusicForTv}
+              onNotifyToast={showToast}
+              isLightTheme={isLightTheme}
+            />
           </Suspense>
         )}
 
@@ -2264,7 +2361,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Header trang */}
             <div className="flex items-center justify-between gap-2 mb-2 short:mb-1.5 shrink-0">
               <div className="min-w-0">
-                <h2 className="text-lg sm:text-xl short:text-base font-black text-white tracking-tight truncate">
+                <h2
+                  className={`text-lg sm:text-xl short:text-base font-black tracking-tight truncate ${theme.text}`}
+                >
                   {railSection === 'favorites'
                     ? 'Playlist & Đồng bộ VF5'
                     : railSection === 'history'
@@ -2279,14 +2378,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
               <div className="flex items-center gap-2 shrink-0">
                 {railSection === 'browse' && (
-                  <div className="inline-flex items-center p-0.5 rounded-full bg-white/10 border border-white/15">
+                  <div className={`inline-flex items-center p-0.5 rounded-full border ${theme.segTrack}`}>
                     <button
                       type="button"
                       onClick={() => onChangeMusicSource('youtube')}
                       className={`min-h-[32px] px-3 rounded-full text-xs font-extrabold transition ${
-                        musicSource === 'youtube'
-                          ? 'bg-rose-600 text-white shadow'
-                          : 'text-white/70 hover:text-white'
+                        musicSource === 'youtube' ? 'bg-rose-600 text-white shadow' : theme.segIdle
                       }`}
                     >
                       ▶ YouTube
@@ -2297,7 +2394,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       className={`min-h-[32px] px-3 rounded-full text-xs font-extrabold transition ${
                         musicSource === 'soundcloud'
                           ? 'bg-[#ff5500] text-white shadow'
-                          : 'text-white/70 hover:text-white'
+                          : theme.segIdle
                       }`}
                     >
                       ☁️ SoundCloud
@@ -2309,7 +2406,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   <button
                     type="button"
                     onClick={() => onOpenSyncModal('sync')}
-                    className="min-h-[36px] px-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition"
+                    className="min-h-[36px] px-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold flex items-center gap-1.5 shadow-lg active:scale-95 transition"
                   >
                     <Cloud className="w-3.5 h-3.5" />
                     <span>{syncCode ? `Mã VF5-${syncCode}` : 'Đồng bộ Mã Xe'}</span>
@@ -2328,9 +2425,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       }
                     }}
                     className={`min-h-[36px] px-3 rounded-full text-xs font-bold flex items-center gap-1.5 border transition active:scale-95 ${
-                      confirmClearHistory
-                        ? 'bg-rose-600 text-white border-rose-400'
-                        : 'bg-white/10 text-white/75 border-white/15 hover:bg-white/20'
+                      confirmClearHistory ? 'bg-rose-600 text-white border-rose-500' : theme.iconBtn
                     }`}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -2338,7 +2433,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   </button>
                 )}
 
-                <span className="text-xs font-mono font-bold text-white/60 bg-white/10 px-2.5 py-1 rounded-full border border-white/10">
+                <span
+                  className={`text-xs font-mono font-bold px-2.5 py-1 rounded-full border ${
+                    isLightTheme
+                      ? 'bg-white/90 text-slate-700 border-slate-300'
+                      : 'bg-white/10 text-white/60 border-white/10'
+                  }`}
+                >
                   {browseVideos.length} bài
                 </span>
 
@@ -2349,8 +2450,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     disabled={isLoadingMoreExplore}
                     className={`min-h-[32px] px-2.5 rounded-full text-xs font-extrabold border flex items-center gap-1 active:scale-95 transition disabled:opacity-50 ${
                       musicSource === 'soundcloud'
-                        ? 'bg-[#ff5500]/25 hover:bg-[#ff5500]/40 border-orange-400/50 text-orange-200'
-                        : 'bg-white/12 hover:bg-white/22 border-white/20 text-white'
+                        ? isLightTheme
+                          ? 'bg-[#ff5500] border-orange-500 text-white shadow-sm'
+                          : 'bg-[#ff5500]/25 hover:bg-[#ff5500]/40 border-orange-400/50 text-orange-200'
+                        : theme.iconBtn
                     }`}
                   >
                     {isLoadingMoreExplore ? (
@@ -2371,9 +2474,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   type="button"
                   onClick={() => onSelectPlaylistId('favorites')}
                   className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap border flex items-center gap-1.5 active:scale-95 transition ${
-                    selectedPlaylistId === 'favorites'
-                      ? 'bg-white text-black border-white shadow'
-                      : 'bg-white/10 text-white/85 border-white/15 hover:bg-white/20'
+                    selectedPlaylistId === 'favorites' ? theme.chipActive : theme.chipIdle
                   }`}
                 >
                   <span>❤️ Yêu thích ({favoritesOnlyCount})</span>
@@ -2387,9 +2488,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       type="button"
                       onClick={() => onSelectPlaylistId(pl.id)}
                       className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap border flex items-center gap-1.5 active:scale-95 transition ${
-                        active
-                          ? 'bg-white text-black border-white shadow'
-                          : 'bg-white/10 text-white/85 border-white/15 hover:bg-white/20'
+                        active ? theme.chipActive : theme.chipIdle
                       }`}
                     >
                       <span>
@@ -2402,7 +2501,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <button
                   type="button"
                   onClick={() => onOpenSyncModal('addTrack')}
-                  className="min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap bg-white/10 hover:bg-white/20 border border-dashed border-white/30 text-white/85 flex items-center gap-1 active:scale-95 transition"
+                  className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap border border-dashed flex items-center gap-1 active:scale-95 transition ${theme.chipIdle}`}
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Quản lý / Tạo mới</span>
@@ -2421,9 +2520,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       type="button"
                       onClick={() => onSelectCategory(cat.id, cat.query)}
                       className={`min-h-[38px] short:min-h-[34px] px-3.5 rounded-full text-xs sm:text-sm font-bold whitespace-nowrap ios-spring-fast active:scale-95 border ${
-                        isSelected
-                          ? 'bg-white text-black border-white shadow'
-                          : 'bg-white/10 text-white/85 border-white/15 hover:bg-white/20'
+                        isSelected ? theme.chipActive : theme.chipIdle
                       }`}
                     >
                       {cat.label}
@@ -2437,18 +2534,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar grid grid-cols-1 car:grid-cols-2 gap-2.5 sm:gap-3 content-start pb-2">
               {isLoadingBrowse && browseVideos.length === 0 ? (
                 <div className="col-span-full py-12 text-center flex flex-col items-center gap-3">
-                  <Loader2 className="w-9 h-9 text-white animate-spin" />
-                  <p className="text-sm font-bold text-white/70">Đang tải danh sách...</p>
+                  <Loader2 className={`w-9 h-9 animate-spin ${theme.text}`} />
+                  <p className={`text-sm font-bold ${theme.textSub}`}>Đang tải danh sách...</p>
                 </div>
               ) : browseVideos.length === 0 ? (
-                <div className="col-span-full py-8 px-4 rounded-2xl bg-white/[0.05] border border-white/10 text-center flex flex-col items-center gap-3">
+                <div
+                  className={`col-span-full py-8 px-4 rounded-2xl border text-center flex flex-col items-center gap-3 ${theme.card}`}
+                >
                   {railSection === 'favorites' ? (
                     <>
-                      <Heart className="w-10 h-10 text-rose-400/60" />
-                      <p className="text-base font-extrabold text-white">
+                      <Heart className="w-10 h-10 text-rose-500/70" />
+                      <p className={`text-base font-extrabold ${theme.text}`}>
                         Playlist này chưa có bài hát nào
                       </p>
-                      <p className="text-xs sm:text-sm text-white/60 max-w-md">
+                      <p className={`text-xs sm:text-sm max-w-md ${theme.textSub}`}>
                         Bấm nút ➕ hoặc ❤️ khi đang nghe để lưu bài, hoặc dùng Đồng bộ Mã Xe để tải
                         danh sách nhạc đã soạn từ điện thoại ở nhà lên xe VF5.
                       </p>
@@ -2456,14 +2555,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         <button
                           type="button"
                           onClick={() => onOpenSyncModal('sync')}
-                          className="min-h-[42px] px-4 rounded-full bg-emerald-500 text-black font-extrabold text-xs sm:text-sm active:scale-95 transition"
+                          className="min-h-[42px] px-4 rounded-full bg-emerald-500 text-slate-950 font-extrabold text-xs sm:text-sm active:scale-95 transition"
                         >
                           Nhập Mã Xe tải về
                         </button>
                         <button
                           type="button"
                           onClick={() => onChangeRailSection('browse')}
-                          className="min-h-[42px] px-4 rounded-full bg-white text-black font-extrabold text-xs sm:text-sm active:scale-95 transition"
+                          className={`min-h-[42px] px-4 rounded-full font-extrabold text-xs sm:text-sm active:scale-95 transition ${theme.primaryCta}`}
                         >
                           Khám phá nhạc
                         </button>
@@ -2471,13 +2570,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     </>
                   ) : railSection === 'history' ? (
                     <>
-                      <History className="w-10 h-10 text-white/40" />
-                      <p className="text-base font-extrabold text-white">Lịch sử phát đang trống</p>
+                      <History className={`w-10 h-10 ${theme.textDim}`} />
+                      <p className={`text-base font-extrabold ${theme.text}`}>
+                        Lịch sử phát đang trống
+                      </p>
                     </>
                   ) : (
                     <>
-                      <Search className="w-10 h-10 text-white/40" />
-                      <p className="text-base font-extrabold text-white">
+                      <Search className={`w-10 h-10 ${theme.textDim}`} />
+                      <p className={`text-base font-extrabold ${theme.text}`}>
                         Không tìm thấy bài hát phù hợp
                       </p>
                     </>
@@ -2507,9 +2608,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         )
                       }
                       className={`w-full text-left flex items-center gap-3 p-2.5 short:p-2 rounded-2xl border backdrop-blur-md ios-spring-fast active:scale-98 ${
-                        isCurrent
-                          ? 'bg-white/20 border-white/35 shadow-lg'
-                          : 'bg-white/[0.06] border-white/10 hover:bg-white/14'
+                        isCurrent ? theme.itemActive : theme.itemIdle
                       }`}
                     >
                       <div className="relative shrink-0">
@@ -2535,10 +2634,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         )}
                       </div>
                       <div className="min-w-0 flex-1 pr-1">
-                        <h4 className="text-xs sm:text-sm font-bold text-white line-clamp-2 leading-snug">
+                        <h4 className={`text-xs sm:text-sm font-bold line-clamp-2 leading-snug ${theme.text}`}>
                           {item.title}
                         </h4>
-                        <p className="text-[11px] text-white/60 truncate mt-1">
+                        <p className={`text-[11px] truncate mt-1 ${theme.textSub}`}>
                           {item.uploaderName}
                         </p>
                       </div>
@@ -2555,8 +2654,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     disabled={isLoadingMoreExplore}
                     className={`w-full sm:max-w-md min-h-[46px] rounded-2xl border font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg ios-spring-fast active:scale-95 disabled:opacity-50 ${
                       musicSource === 'soundcloud'
-                        ? 'bg-[#ff5500]/25 hover:bg-[#ff5500]/40 border-orange-400/55 text-white'
-                        : 'bg-white/12 hover:bg-white/20 border-white/20 text-white'
+                        ? isLightTheme
+                          ? 'bg-[#ff5500] hover:bg-[#e64d00] border-orange-500 text-white'
+                          : 'bg-[#ff5500]/25 hover:bg-[#ff5500]/40 border-orange-400/55 text-white'
+                        : theme.iconBtn
                     }`}
                   >
                     {isLoadingMoreExplore ? (
@@ -2582,7 +2683,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* MINI PLAYER NỔI PHÍA DƯỚI */}
             <div
               onClick={() => onChangeRailSection('nowPlaying')}
-              className="shrink-0 mt-2 short:mt-1.5 bg-white/15 backdrop-blur-2xl border border-white/25 rounded-2xl px-3 py-2 short:py-1.5 flex items-center justify-between gap-2.5 shadow-2xl cursor-pointer hover:bg-white/20 ios-spring-fast animate-ios-mini-up active:scale-[0.99]"
+              className={`shrink-0 mt-2 short:mt-1.5 border rounded-2xl px-3 py-2 short:py-1.5 flex items-center justify-between gap-2.5 cursor-pointer ios-spring-fast animate-ios-mini-up active:scale-[0.99] ${theme.miniPlayer}`}
             >
               <div className="flex items-center gap-2.5 min-w-0 flex-1">
                 <img
@@ -2593,10 +2694,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   } rounded-xl object-cover shrink-0 shadow bg-black`}
                 />
                 <div className="min-w-0">
-                  <h4 className="text-xs sm:text-sm font-extrabold text-white truncate">
+                  <h4 className={`text-xs sm:text-sm font-extrabold truncate ${theme.text}`}>
                     {streamData.title}
                   </h4>
-                  <p className="text-[11px] text-white/65 truncate">{streamData.uploader}</p>
+                  <p className={`text-[11px] truncate ${theme.textSub}`}>{streamData.uploader}</p>
                 </div>
               </div>
 
@@ -2609,7 +2710,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   onClick={onPrev}
                   disabled={!hasPrev}
                   aria-label="Bài trước"
-                  className="w-10 h-10 short:w-9 short:h-9 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
+                  className={`w-10 h-10 short:w-9 short:h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
                 >
                   <SkipBack className="w-4 h-4 fill-current" />
                 </button>
@@ -2617,12 +2718,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   type="button"
                   onClick={togglePlay}
                   aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-                  className="w-11 h-11 short:w-10 short:h-10 rounded-full bg-white hover:bg-white/90 text-black flex items-center justify-center shadow active:scale-90 transition"
+                  className={`w-11 h-11 short:w-10 short:h-10 rounded-full flex items-center justify-center active:scale-90 transition ${theme.primaryCta}`}
                 >
                   {isPlaying ? (
-                    <Pause className="w-4 h-4 fill-black" />
+                    <Pause className={`w-4 h-4 ${theme.primaryCtaIcon}`} />
                   ) : (
-                    <Play className="w-4 h-4 fill-black ml-0.5" />
+                    <Play className={`w-4 h-4 ml-0.5 ${theme.primaryCtaIcon}`} />
                   )}
                 </button>
                 <button
@@ -2630,7 +2731,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   onClick={onNext}
                   disabled={!hasNext}
                   aria-label="Bài tiếp theo"
-                  className="w-10 h-10 short:w-9 short:h-9 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
+                  className={`w-10 h-10 short:w-9 short:h-9 rounded-full border flex items-center justify-center disabled:opacity-30 active:scale-90 transition ${theme.iconBtn}`}
                 >
                   <SkipForward className="w-4 h-4 fill-current" />
                 </button>
