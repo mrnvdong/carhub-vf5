@@ -1388,8 +1388,10 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       )}
 
       {/* =====================================================================
-          1. CỤM HUD TỐC ĐỘ & BIỂN BÁO P.127 GÓC TRÊN BÊN TRÁI (Tự đồng bộ Sáng / Đêm)
+          1. CỤM HUD TỐC ĐỘ & BIỂN BÁO P.127 TRÊN BẢN ĐỒ (Chỉ hiện khi Mở rộng toàn màn hình;
+             ở chế độ chia đôi Cockpit đã gom gọn vào cột cùng với phần Nhạc!)
          ===================================================================== */}
+      {isMapExpanded && (
       <div
         onClick={gpsStatus !== 'active' ? requestGps : undefined}
         className={`absolute top-2 left-2 z-20 backdrop-blur-xl rounded-2xl border px-2.5 py-1.5 flex items-center gap-2.5 transition-colors ${
@@ -1507,6 +1509,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
           </div>
         )}
       </div>
+      )}
 
       {/* =====================================================================
           2. CỤM NÚT ĐIỀU KHIỂN & TÙY BIẾN BỐ CỤC GÓC TRÊN BÊN PHẢI
@@ -1855,7 +1858,11 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
          ===================================================================== */}
       {activeRoute && !navDrawerOpen && !layoutMenuOpen && (
         <div
-          className={`absolute top-[4.65rem] short:top-[4.1rem] left-2 z-20 max-w-[min(285px,calc(100%-16px))] backdrop-blur-xl border rounded-2xl p-2.5 flex flex-col gap-1.5 shadow-2xl ${
+          className={`absolute ${
+            isMapExpanded
+              ? 'top-[4.65rem] short:top-[4.1rem]'
+              : 'top-13 short:top-11'
+          } left-2 z-20 max-w-[min(285px,calc(100%-16px))] backdrop-blur-xl border rounded-2xl p-2.5 flex flex-col gap-1.5 shadow-2xl ${
             isLightMap
               ? 'bg-blue-700 text-white border-blue-500'
               : 'bg-sky-950/96 text-white border-sky-400/70'
@@ -1950,7 +1957,9 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
          ===================================================================== */}
       {navDrawerOpen && (
         <div
-          className={`absolute inset-x-2 top-13 short:top-11 bottom-12 z-30 backdrop-blur-2xl border rounded-2xl p-2.5 flex flex-col gap-2 animate-ios-sheet-in ${
+          className={`absolute inset-x-2 top-13 short:top-11 ${
+            isMapExpanded ? 'bottom-12' : 'bottom-2'
+          } z-30 backdrop-blur-2xl border rounded-2xl p-2.5 flex flex-col gap-2 animate-ios-sheet-in ${
             isLightMap
               ? 'bg-white/98 border-slate-300 text-slate-950 shadow-[0_16px_44px_rgba(15,23,42,0.3)]'
               : 'bg-[#0b1220]/98 border-slate-600 text-white shadow-[0_16px_44px_rgba(0,0,0,0.88)]'
@@ -2293,25 +2302,27 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
          ===================================================================== */}
       <div className="absolute inset-x-2 bottom-2 z-20 flex flex-col gap-1.5 pointer-events-none">
         <div className="flex flex-wrap items-center justify-between gap-1.5">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {roadInfo?.hazards?.map((hz, i) => (
-              <span
-                key={i}
-                className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold flex items-center gap-1 border backdrop-blur-xl shadow-lg ${
-                  hz.type === 'camera'
-                    ? 'bg-rose-600 border-rose-300 text-white animate-pulse'
-                    : 'bg-amber-600 border-amber-300 text-white'
-                }`}
-              >
-                {hz.type === 'camera' ? (
-                  <CameraIcon className="w-3 h-3 shrink-0" />
-                ) : (
-                  <AlertTriangle className="w-3 h-3 shrink-0" />
-                )}
-                <span>{hz.label}</span>
-              </span>
-            ))}
-          </div>
+          {isMapExpanded && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {roadInfo?.hazards?.map((hz, i) => (
+                <span
+                  key={i}
+                  className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold flex items-center gap-1 border backdrop-blur-xl shadow-lg ${
+                    hz.type === 'camera'
+                      ? 'bg-rose-600 border-rose-300 text-white animate-pulse'
+                      : 'bg-amber-600 border-amber-300 text-white'
+                  }`}
+                >
+                  {hz.type === 'camera' ? (
+                    <CameraIcon className="w-3 h-3 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-3 h-3 shrink-0" />
+                  )}
+                  <span>{hz.label}</span>
+                </span>
+              ))}
+            </div>
+          )}
 
           <div className="flex items-center gap-1.5 ml-auto">
             {!webglError && (
@@ -2405,6 +2416,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
           </div>
         </div>
 
+        {isMapExpanded && (
         <div
           className={`backdrop-blur-xl border rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 shadow-xl ${
             isLightMap
@@ -2472,6 +2484,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
             </span>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

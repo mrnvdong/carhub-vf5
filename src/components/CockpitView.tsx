@@ -15,6 +15,11 @@ import {
   GripVertical,
   Tv,
   Music,
+  Bell,
+  BellOff,
+  MapPin,
+  Video as CameraIcon,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   ActiveNavSummary,
@@ -142,10 +147,28 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     onNotifyToast,
   }) => {
     const splitContainerRef = useRef<HTMLDivElement | null>(null);
+    const telemetryCardRef = useRef<HTMLDivElement | null>(null);
     const videoSlotRef = useRef<HTMLDivElement | null>(null);
     const badgeTextRef = useRef<HTMLSpanElement | null>(null);
     const rafDragRef = useRef<number | null>(null);
     const isScrubbingRef = useRef<boolean>(false);
+
+    const {
+      speedKmh,
+      gpsStatus,
+      weather,
+      roadInfo,
+      speedAlertSound,
+      onToggleSpeedAlertSound,
+      requestGps,
+    } = telemetry;
+
+    const speedValue = speedKmh !== null ? speedKmh : 0;
+    const activeLimit = roadInfo?.speedLimit ?? null;
+    const isOverLimit = activeLimit !== null && speedKmh !== null && speedValue > activeLimit;
+    const isDangerOverLimit =
+      activeLimit !== null && speedKmh !== null && speedValue >= activeLimit + 5;
+    const primaryHazard = roadInfo?.hazards?.[0] ?? null;
 
     const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
 
@@ -208,11 +231,13 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
 
       const slotEl = videoSlotRef.current;
       const containerEl = splitContainerRef.current;
+      const telemetryEl = telemetryCardRef.current;
       let ro: ResizeObserver | null = null;
       if (typeof ResizeObserver !== 'undefined') {
         ro = new ResizeObserver(() => syncVideoSlotRect());
         if (slotEl) ro.observe(slotEl);
         if (containerEl) ro.observe(containerEl);
+        if (telemetryEl) ro.observe(telemetryEl);
       }
 
       window.addEventListener('resize', syncVideoSlotRect);
@@ -227,7 +252,14 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
         window.visualViewport?.removeEventListener('resize', syncVideoSlotRect);
         containerEl?.removeEventListener('scroll', syncVideoSlotRect);
       };
-    }, [showVideoSlot, mapSide, mapWidthPct, syncVideoSlotRect]);
+    }, [
+      showVideoSlot,
+      mapSide,
+      mapWidthPct,
+      activeLimit,
+      primaryHazard?.label,
+      syncVideoSlotRect,
+    ]);
 
     useEffect(() => {
       return () => {
@@ -506,11 +538,229 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
           </div>
         ) : (
           <div
-            {...gestureHandlers}
-            className={`cockpit-pane-cq flex-1 min-w-0 min-h-0 h-full bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-3 sm:p-3.5 short:p-2.5 flex flex-col justify-between gap-2.5 short:gap-2 relative overflow-hidden shadow-2xl ${
+            className={`cockpit-pane-cq flex-1 min-w-0 car:min-h-0 car:h-full flex flex-col gap-2 short:gap-1.5 ${
               isDraggingSplit ? 'pointer-events-none select-none' : ''
             }`}
           >
+            {/* =================================================================
+                3A. THẺ THÔNG SỐ LÁI XE (TỐC ĐỘ • CẢNH BÁO P.127 • ĐỊA ĐIỂM • THỜI TIẾT • GIỜ)
+               ================================================================= */}
+            <div
+              ref={telemetryCardRef}
+              onClick={gpsStatus !== 'active' ? requestGps : undefined}
+              className={`shrink-0 rounded-2xl sm:rounded-3xl border backdrop-blur-2xl px-3 py-2 short:px-2.5 short:py-1.5 vshort:px-2 vshort:py-1 shadow-xl transition-colors ${
+                isDangerOverLimit
+                  ? 'bg-rose-600/95 border-rose-300 ring-2 ring-rose-400/70'
+                  : 'bg-white/[0.08] border-white/15'
+              } ${gpsStatus !== 'active' ? 'cursor-pointer hover:bg-white/[0.11]' : ''}`}
+            >
+              {/* Hàng 1: Tốc độ + Biển P.127 (trái)  <--->  Giờ + Thời tiết (phải) */}
+              <div className="flex items-center justify-between gap-2 min-h-[42px] short:min-h-[34px] vshort:min-h-[28px]">
+                <div className="flex items-center gap-2.5 short:gap-2 min-w-0">
+                  <div className="flex flex-col">
+                    <div className="flex items-baseline gap-1">
+                      <span
+                        className={`text-3xl sm:text-4xl short:text-2xl vshort:text-xl font-black tabular-nums tracking-tighter leading-none ${
+                          isDangerOverLimit
+                            ? 'text-white'
+                            : speedKmh === null
+                            ? 'text-white'
+                            : isOverLimit
+                            ? 'text-amber-300'
+                            : 'text-emerald-300'
+                        }`}
+                      >
+                        {speedKmh !== null ? speedKmh : '0'}
+                      </span>
+                      <span
+                        className={`text-[9.5px] font-black tracking-tight ${
+                          isDangerOverLimit ? 'text-rose-100' : 'text-white/55'
+                        }`}
+                      >
+                        KM/H
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span
+                        className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
+                          gpsStatus === 'active'
+                            ? isDangerOverLimit
+                              ? 'bg-white animate-ping'
+                              : 'bg-emerald-400'
+                            : 'bg-amber-400 animate-pulse'
+                        }`}
+                      />
+                      <span
+                        className={`text-[9px] font-extrabold uppercase tracking-wider cq-hide-xs whitespace-nowrap ${
+                          isDangerOverLimit ? 'text-white' : 'text-white/65'
+                        }`}
+                      >
+                        {gpsStatus === 'active'
+                          ? isDangerOverLimit
+                            ? 'QUÁ TỐC!'
+                            : 'GPS'
+                          : 'Bật GPS'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleSpeedAlertSound();
+                        }}
+                        aria-label="Bật hoặc tắt chuông cảnh báo quá tốc độ"
+                        title={
+                          speedAlertSound
+                            ? 'Đang bật chuông cảnh báo tốc độ'
+                            : 'Đang tắt chuông cảnh báo tốc độ'
+                        }
+                        className={`p-0.5 rounded-full active:scale-90 transition ${
+                          isDangerOverLimit
+                            ? 'text-white'
+                            : speedAlertSound
+                            ? 'text-emerald-300 hover:text-emerald-200'
+                            : 'text-white/35 hover:text-white/60'
+                        }`}
+                      >
+                        {speedAlertSound ? (
+                          <Bell className="w-3 h-3" />
+                        ) : (
+                          <BellOff className="w-3 h-3" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Biển báo giới hạn tốc độ P.127 */}
+                  {activeLimit !== null && (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <div
+                        className={`w-10 h-10 sm:w-11 sm:h-11 short:w-9 short:h-9 vshort:w-8 vshort:h-8 rounded-full bg-white text-slate-950 border-[3.5px] border-[#e11d48] flex items-center justify-center shadow-md ${
+                          isDangerOverLimit ? 'scale-105 ring-2 ring-white animate-pulse' : ''
+                        }`}
+                      >
+                        <span className="text-sm short:text-xs font-black tracking-tighter leading-none">
+                          {activeLimit}
+                        </span>
+                      </div>
+                      <span
+                        className={`cq-hide-md text-[8.5px] font-extrabold uppercase leading-tight ${
+                          isDangerOverLimit
+                            ? 'text-white'
+                            : roadInfo?.isVerifiedLimit
+                            ? 'text-emerald-300'
+                            : 'text-amber-300'
+                        }`}
+                      >
+                        {roadInfo?.isVerifiedLimit ? 'OSM' : 'T.Khảo'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Cụm Đồng hồ + Thời tiết góc phải */}
+                <div className="flex flex-col items-end justify-center shrink-0 text-right">
+                  <span className="text-xl sm:text-2xl short:text-lg vshort:text-base font-mono font-black tracking-tight text-white leading-none tabular-nums">
+                    {clockTime}
+                  </span>
+                  <div
+                    className={`flex items-center gap-1 mt-0.5 text-[11px] short:text-[10px] font-extrabold leading-none ${
+                      isDangerOverLimit
+                        ? 'text-rose-100'
+                        : weather?.isRainy
+                        ? 'text-sky-300'
+                        : 'text-white/80'
+                    }`}
+                  >
+                    {weather ? (
+                      <>
+                        <span>{weather.icon}</span>
+                        <span className="tabular-nums">{weather.temperature}°C</span>
+                        <span className="cq-hide-md text-white/60 font-bold truncate max-w-[96px]">
+                          • {weather.label}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-white/45 font-bold">VF5 HUD</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Hàng 2: Vị trí hiện tại (tên đường, quốc lộ, số làn) + Cảnh báo Camera phạt nguội */}
+              <div
+                className={`mt-1.5 short:mt-1 pt-1.5 short:pt-1 border-t flex items-center justify-between gap-1.5 min-w-0 ${
+                  isDangerOverLimit ? 'border-white/25' : 'border-white/10'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <MapPin
+                    className={`w-3.5 h-3.5 short:w-3 short:h-3 shrink-0 ${
+                      isDangerOverLimit
+                        ? 'text-white'
+                        : gpsStatus === 'active'
+                        ? 'text-emerald-400'
+                        : 'text-amber-400'
+                    }`}
+                  />
+                  {roadInfo?.roadRef && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded border text-[9.5px] font-black shrink-0 leading-none ${
+                        isDangerOverLimit
+                          ? 'bg-white/20 border-white/40 text-white'
+                          : 'bg-sky-500/25 border-sky-400/50 text-sky-200'
+                      }`}
+                    >
+                      {roadInfo.roadRef}
+                    </span>
+                  )}
+                  <span
+                    className={`text-[11px] sm:text-xs short:text-[10.5px] font-extrabold truncate ${
+                      isDangerOverLimit ? 'text-white' : 'text-white/95'
+                    }`}
+                  >
+                    {roadInfo?.roadName ||
+                      (gpsStatus === 'active'
+                        ? 'Đang dò tên đường...'
+                        : 'Chạm để bật GPS & cảnh báo tốc độ')}
+                  </span>
+                  {roadInfo?.lanes && (
+                    <span
+                      className={`cq-hide-sm text-[10px] font-bold shrink-0 ${
+                        isDangerOverLimit ? 'text-rose-100' : 'text-white/50'
+                      }`}
+                    >
+                      • {roadInfo.lanes} làn
+                    </span>
+                  )}
+                </div>
+
+                {primaryHazard && (
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[9.5px] font-black flex items-center gap-1 shrink-0 border shadow ${
+                      primaryHazard.type === 'camera'
+                        ? 'bg-rose-600 border-rose-300 text-white animate-pulse'
+                        : 'bg-amber-500 border-amber-200 text-slate-950'
+                    }`}
+                  >
+                    {primaryHazard.type === 'camera' ? (
+                      <CameraIcon className="w-2.5 h-2.5 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+                    )}
+                    <span className="truncate max-w-[115px]">{primaryHazard.label}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* =================================================================
+                3B. KHUNG GIẢI TRÍ NHẠC / VIDEO (Cấu trúc 3 tầng cố định cân đối chuẩn CarPlay)
+               ================================================================= */}
+            <div
+              {...gestureHandlers}
+              className="flex-1 min-w-0 min-h-[250px] car:min-h-0 bg-white/[0.06] backdrop-blur-2xl rounded-2xl sm:rounded-3xl border border-white/15 p-3 sm:p-3.5 short:p-2 vshort:p-1.5 flex flex-col justify-between gap-2 short:gap-1.5 vshort:gap-1 relative overflow-hidden shadow-2xl"
+            >
             {heartBurst && (
               <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-black/20">
                 <Heart className="w-20 h-20 text-rose-500 fill-rose-500 animate-ping" />
@@ -700,20 +950,20 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 </div>
 
                 {/* Khung lời bài hát Karaoke 2 dòng cân đối */}
-                <div className="flex-1 min-h-[60px] max-h-[168px] bg-black/40 rounded-2xl border border-white/12 px-3.5 py-2.5 short:py-2 flex flex-col justify-center text-center shadow-inner">
+                <div className="flex-1 min-h-[52px] short:min-h-[44px] max-h-[156px] bg-black/40 rounded-2xl border border-white/12 px-3 py-2 short:py-1.5 flex flex-col justify-center text-center shadow-inner">
                   {currentLyricText ? (
                     <>
                       <p className="text-sm sm:text-base short:text-xs font-extrabold text-white line-clamp-2 leading-snug">
                         “{currentLyricText}”
                       </p>
                       {nextLyricText && (
-                        <p className="text-[11px] sm:text-xs text-white/45 font-semibold truncate mt-1.5 vshort:hidden">
+                        <p className="text-[11px] sm:text-xs text-white/45 font-semibold truncate mt-1 vshort:hidden">
                           {nextLyricText}
                         </p>
                       )}
                     </>
                   ) : (
-                    <p className="text-xs font-bold text-white/45 line-clamp-2">
+                    <p className="text-xs short:text-[11px] font-bold text-white/45 line-clamp-2">
                       🎵 Vuốt ⇄ để qua bài • Chạm đúp thả tim ❤️
                     </p>
                   )}
@@ -722,7 +972,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             )}
 
             {/* TẦNG 3 (CỐ ĐỊNH ĐÁY): THANH TUA & CỤM NÚT ĐIỀU KHIỂN ĐỐI XỨNG */}
-            <div className="shrink-0 space-y-1">
+            <div className="shrink-0 space-y-1 short:space-y-0.5">
               <div>
                 <input
                   type="range"
@@ -769,23 +1019,23 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   onClick={onPrev}
                   disabled={!hasPrev}
                   aria-label="Bài trước"
-                  className="w-11 h-11 short:w-9 short:h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
+                  className="w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
                 >
-                  <SkipBack className="w-5 h-5 fill-current" />
+                  <SkipBack className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
                 </button>
 
                 <button
                   type="button"
                   onClick={onTogglePlay}
                   aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-                  className="w-13 h-13 sm:w-14 sm:h-14 short:w-11 short:h-11 rounded-full bg-white hover:bg-white/90 text-black flex items-center justify-center shadow-[0_6px_22px_rgba(255,255,255,0.3)] active:scale-90 transition"
+                  className="w-12 h-12 sm:w-14 sm:h-14 short:w-10 short:h-10 vshort:w-9 vshort:h-9 rounded-full bg-white hover:bg-white/90 text-black flex items-center justify-center shadow-[0_6px_22px_rgba(255,255,255,0.3)] active:scale-90 transition"
                 >
                   {isBuffering ? (
                     <Loader2 className="w-5 h-5 animate-spin text-black" />
                   ) : isPlaying ? (
-                    <Pause className="w-5 h-5 sm:w-6 sm:h-6 fill-black" />
+                    <Pause className="w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 fill-black" />
                   ) : (
-                    <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-black ml-0.5" />
+                    <Play className="w-5 h-5 sm:w-6 sm:h-6 short:w-4 short:h-4 fill-black ml-0.5" />
                   )}
                 </button>
 
@@ -794,9 +1044,9 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   onClick={onNext}
                   disabled={!hasNext}
                   aria-label="Bài tiếp theo"
-                  className="w-11 h-11 short:w-9 short:h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
+                  className="w-10 h-10 sm:w-11 sm:h-11 short:w-8 short:h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center disabled:opacity-30 active:scale-90 transition"
                 >
-                  <SkipForward className="w-5 h-5 fill-current" />
+                  <SkipForward className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
                 </button>
 
                 <button
@@ -816,6 +1066,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   )}
                 </button>
               </div>
+            </div>
             </div>
           </div>
         )}
