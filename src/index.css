@@ -71,6 +71,43 @@
   }
 }
 
+/* Container queries riêng cho khung Phát Nhạc / Video / TV (Card 3B) trong Cockpit
+   -> Tự căn chuẩn theo đúng bề ngang thực của thẻ nhạc ở mọi tỉ lệ chia 60/40, 70/30 & Ultrawide 3 cột */
+.cockpit-media-cq {
+  container-type: inline-size;
+  container-name: media-card;
+}
+
+@container media-card (max-width: 29.5rem) {
+  .mc-hide-lg {
+    display: none !important;
+  }
+}
+
+@container media-card (max-width: 24.5rem) {
+  .mc-hide-md {
+    display: none !important;
+  }
+  .mc-seg-btn {
+    padding-inline: 0.55rem !important;
+  }
+}
+
+@container media-card (max-width: 21rem) {
+  .mc-hide-sm {
+    display: none !important;
+  }
+  .mc-seg-btn {
+    padding-inline: 0.45rem !important;
+  }
+}
+
+@container media-card (max-width: 17.5rem) {
+  .mc-hide-xs {
+    display: none !important;
+  }
+}
+
 /* Danh sách kênh TV Live tự mở thành lưới 2 cột khi bề ngang rộng (màn hình to / dài ultrawide!) */
 .tv-list-cq {
   container-type: inline-size;

@@ -872,7 +872,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
           )
         ) : (
           <div
-            className={`cockpit-pane-cq flex-1 min-w-0 car:min-h-0 car:h-full flex flex-col ultrawide:flex-row gap-2 short:gap-1.5 ${
+            className={`flex-1 min-w-0 car:min-h-0 car:h-full flex flex-col ultrawide:flex-row gap-2 short:gap-1.5 ${
               isDraggingSplit ? 'pointer-events-none select-none' : ''
             }`}
           >
@@ -883,7 +883,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
             <div
               ref={telemetryCardRef}
               onClick={gpsStatus !== 'active' ? requestGps : undefined}
-              className={`shrink-0 ultrawide:w-[19rem] ultrawide:h-full ultrawide:flex ultrawide:flex-col ultrawide:justify-between rounded-2xl sm:rounded-3xl border px-3 py-2 short:px-2.5 short:py-1.5 transition-colors ${
+              className={`cockpit-pane-cq shrink-0 ultrawide:w-[19rem] ultrawide:h-full ultrawide:flex ultrawide:flex-col ultrawide:justify-between rounded-2xl sm:rounded-3xl border px-3 py-2 short:px-2.5 short:py-1.5 transition-colors ${
                 isDangerOverLimit
                   ? 'bg-rose-600 border-rose-300 ring-2 ring-rose-400/70 shadow-2xl'
                   : theme.cardElevated
@@ -1209,7 +1209,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                ================================================================= */}
             <div
               {...(cockpitTvMode ? {} : gestureHandlers)}
-              className={`flex-1 min-w-0 min-h-[250px] car:min-h-0 rounded-2xl sm:rounded-3xl border p-3 sm:p-3.5 short:p-2 vshort:p-1.5 flex flex-col justify-between gap-2 short:gap-1.5 vshort:gap-1 relative overflow-hidden ${theme.card}`}
+              className={`cockpit-media-cq flex-1 min-w-0 min-h-[250px] car:min-h-0 rounded-2xl sm:rounded-3xl border p-3 sm:p-3.5 short:p-2 vshort:p-1.5 flex flex-col justify-between gap-2 short:gap-1.5 vshort:gap-1 relative overflow-hidden ${theme.card}`}
             >
               {heartBurst && !cockpitTvMode && (
                 <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center bg-black/15">
@@ -1217,9 +1217,9 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                 </div>
               )}
 
-              {/* TẦNG 1 (CỐ ĐỊNH): THANH CHUYỂN NHẠC / VIDEO / TV + HÀNH ĐỘNG NHANH (Cỡ nút chuẩn ô tô >= 40px) */}
-              <div className="flex items-center justify-between gap-1.5 shrink-0">
-                <div className="flex items-center gap-1.5 min-w-0">
+              {/* TẦNG 1 (CỐ ĐỊNH): THANH CHUYỂN NHẠC / VIDEO / TV + HÀNH ĐỘNG NHANH (Tự co giãn @container media-card + flex-wrap chống đè nút 100%) */}
+              <div className="flex flex-wrap items-center justify-between gap-x-1.5 gap-y-1.5 shrink-0">
+                <div className="flex items-center gap-1.5 min-w-0 shrink-0">
                   {/* Segmented Switch iOS: Nhạc | Video | TV */}
                   <div
                     className={`inline-flex items-center p-0.5 rounded-full border shrink-0 ${theme.segTrack}`}
@@ -1232,11 +1232,11 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                         if (isVideoMode) onToggleViewMode();
                       }}
                       aria-label="Chế độ Nghe nhạc và Lời bài hát"
-                      className={`min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 transition-colors ${
+                      className={`mc-seg-btn min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 whitespace-nowrap transition-colors ${
                         !cockpitTvMode && !effectiveVideoMode ? theme.segActive : theme.segIdle
                       }`}
                     >
-                      <Music className="w-3.5 h-3.5 shrink-0" />
+                      <Music className="mc-hide-md w-3.5 h-3.5 shrink-0" />
                       <span>Nhạc</span>
                     </button>
                     <button
@@ -1252,7 +1252,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                         }
                       }}
                       aria-label="Chế độ Phát Video YouTube"
-                      className={`min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 transition-colors ${
+                      className={`mc-seg-btn min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 whitespace-nowrap transition-colors ${
                         !cockpitTvMode && effectiveVideoMode
                           ? isLightTheme
                             ? 'bg-blue-600 text-white shadow-sm'
@@ -1260,7 +1260,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                           : theme.segIdle
                       }`}
                     >
-                      <Film className="w-3.5 h-3.5 shrink-0" />
+                      <Film className="mc-hide-md w-3.5 h-3.5 shrink-0" />
                       <span>Video</span>
                     </button>
                     <button
@@ -1270,13 +1270,13 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                         onPauseMusic();
                       }}
                       aria-label="Chế độ Xem TV & Radio trực tiếp ngay trong Cockpit"
-                      className={`min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 transition-colors ${
+                      className={`mc-seg-btn min-h-[2.2rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 whitespace-nowrap transition-colors ${
                         cockpitTvMode
                           ? 'bg-rose-600 text-white shadow-sm'
                           : theme.segIdle
                       }`}
                     >
-                      <Tv className="w-3.5 h-3.5 shrink-0" />
+                      <Tv className="mc-hide-md w-3.5 h-3.5 shrink-0" />
                       <span>TV</span>
                     </button>
                   </div>
@@ -1293,28 +1293,36 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                           ? 'Đang dùng nguồn SoundCloud • Bấm để đổi sang YouTube'
                           : 'Đang dùng nguồn YouTube • Bấm để đổi sang SoundCloud'
                       }
-                      className={`min-h-[2.2rem] px-2.5 rounded-full border text-xs font-black flex items-center gap-1 shrink-0 active:scale-95 transition ${
+                      className={`min-h-[2.2rem] px-2 rounded-full border text-xs font-black flex items-center gap-0.5 whitespace-nowrap shrink-0 active:scale-95 transition ${
                         musicSource === 'soundcloud' || isSoundCloudTrack
                           ? 'bg-[#ff5500] border-orange-400 text-white shadow-sm'
                           : theme.iconBtn
                       }`}
                     >
-                      <span>
-                        {musicSource === 'soundcloud' || isSoundCloudTrack ? '☁️ SC' : '▶ YT'}
-                      </span>
+                      {musicSource === 'soundcloud' || isSoundCloudTrack ? (
+                        <>
+                          <span className="mc-hide-sm">☁️</span>
+                          <span>SC</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="mc-hide-sm">▶</span>
+                          <span>YT</span>
+                        </>
+                      )}
                     </button>
                   )}
                 </div>
 
                 {/* Nhóm nút hành động bên phải */}
                 {cockpitTvMode ? (
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-1 shrink-0 ml-auto">
                     <button
                       type="button"
                       onClick={() => setShowTvPicker((v) => !v)}
                       aria-label="Mở danh sách chọn kênh TV nhanh"
                       title="Chọn kênh TV & xem Ping Live"
-                      className={`min-h-[2.25rem] px-2.5 rounded-full border text-xs font-extrabold flex items-center gap-1 active:scale-95 transition ${
+                      className={`min-h-[2.25rem] min-w-[2.25rem] px-2.5 rounded-full border text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition ${
                         showTvPicker
                           ? isLightTheme
                             ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
@@ -1323,7 +1331,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       }`}
                     >
                       <ListVideo className="w-4 h-4 shrink-0" />
-                      <span className="cq-hide-xs">Kênh</span>
+                      <span className="mc-hide-sm">Kênh</span>
                     </button>
 
                     {tv.activeChannel && (
@@ -1361,7 +1369,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       onClick={toggleMapSide}
                       aria-label="Đổi vị trí Trái Phải giữa TV và Bản đồ"
                       title="Đổi bên Trái / Phải với Bản đồ"
-                      className={`hidden car:flex cq-hide-sm w-9 h-9 rounded-full border items-center justify-center active:scale-90 transition ${
+                      className={`hidden car:flex mc-hide-lg w-9 h-9 rounded-full border items-center justify-center active:scale-90 transition ${
                         isLightTheme
                           ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-700'
                           : 'bg-white/10 hover:bg-white/20 border-white/15 text-emerald-300'
@@ -1371,13 +1379,13 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     </button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-1 shrink-0 ml-auto">
                     <button
                       type="button"
                       onClick={toggleMapSide}
                       aria-label="Đổi vị trí Trái Phải giữa Nhạc và Bản đồ"
                       title="Đổi bên Trái / Phải với Bản đồ"
-                      className={`hidden car:flex cq-hide-sm w-9 h-9 rounded-full border items-center justify-center active:scale-90 transition ${
+                      className={`hidden car:flex mc-hide-lg w-9 h-9 rounded-full border items-center justify-center active:scale-90 transition ${
                         isLightTheme
                           ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-700'
                           : 'bg-white/10 hover:bg-white/20 border-white/15 text-emerald-300'
@@ -1392,7 +1400,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       disabled={isLoadingMix}
                       aria-label="Phát đài nhạc tương tự bài này"
                       title="Phát liên hoàn bài tương tự (Auto-Mix)"
-                      className={`cq-hide-xs w-9 h-9 rounded-full border flex items-center justify-center active:scale-90 transition ${
+                      className={`mc-hide-sm w-9 h-9 rounded-full border flex items-center justify-center active:scale-90 transition ${
                         isMixActive
                           ? 'bg-amber-400 text-slate-950 border-amber-400 shadow'
                           : isLightTheme
@@ -1412,7 +1420,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       onClick={onOpenAddPlaylist}
                       aria-label="Lưu vào Playlist"
                       title="Lưu vào Playlist"
-                      className={`cq-hide-sm w-9 h-9 rounded-full border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
+                      className={`mc-hide-lg w-9 h-9 rounded-full border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
                     >
                       <FolderPlus className="w-4 h-4" />
                     </button>
@@ -1606,7 +1614,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                             }`}
                           >
                             <Activity className="w-4 h-4" />
-                            <span className="cq-hide-xs">Ping</span>
+                            <span className="mc-hide-sm">Ping</span>
                           </button>
                         )}
 
@@ -1885,12 +1893,12 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
 
               {/* TẦNG 3 (CỐ ĐỊNH ĐÁY): ĐIỀU KHIỂN TV LIVE HOẶC THANH TUA & ĐIỀU KHIỂN NHẠC/VIDEO */}
               {cockpitTvMode ? (
-                <div className="shrink-0 flex items-center justify-between gap-1.5 pt-0.5">
+                <div className="shrink-0 flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
                   <button
                     type="button"
                     onClick={tv.switchStreamMode}
                     title="Đổi giữa phát CDN trực tiếp và Proxy chống chặn"
-                    className={`min-h-[2.5rem] px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition ${
+                    className={`min-h-[2.5rem] min-w-[2.5rem] px-2.5 rounded-xl border text-xs font-extrabold flex items-center justify-center gap-1.5 active:scale-95 transition ${
                       tv.playerStatus.streamMode === 'proxy'
                         ? isLightTheme
                           ? 'bg-blue-600 border-blue-600 text-white'
@@ -1899,12 +1907,12 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     }`}
                   >
                     <Wifi className="w-4 h-4 shrink-0" />
-                    <span className="cq-hide-xs">
+                    <span className="mc-hide-md">
                       {tv.playerStatus.streamMode === 'proxy' ? 'Proxy' : 'CDN'}
                     </span>
                   </button>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => handleCockpitZapTv(-1)}
@@ -1960,7 +1968,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       onClick={tv.reloadStream}
                       aria-label="Tải lại luồng kênh TV"
                       title="Tải lại kênh"
-                      className={`cq-hide-xs w-10 h-10 rounded-xl border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
+                      className={`mc-hide-sm w-10 h-10 rounded-xl border flex items-center justify-center active:scale-90 transition ${theme.iconBtn}`}
                     >
                       <RefreshCw
                         className={`w-4 h-4 ${tv.playerStatus.isResolving ? 'animate-spin' : ''}`}
@@ -2008,7 +2016,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       type="button"
                       onClick={onToggleShuffle}
                       aria-label="Phát ngẫu nhiên"
-                      className={`cq-hide-xs w-10 h-10 rounded-full flex items-center justify-center active:scale-90 transition ${
+                      className={`mc-hide-xs w-10 h-10 rounded-full flex items-center justify-center active:scale-90 transition ${
                         isShuffle
                           ? isLightTheme
                             ? 'bg-rose-100 border border-rose-300 text-rose-700'
@@ -2064,7 +2072,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       type="button"
                       onClick={onToggleRepeat}
                       aria-label="Chế độ lặp"
-                      className={`cq-hide-xs w-10 h-10 rounded-full flex items-center justify-center active:scale-90 transition ${
+                      className={`mc-hide-xs w-10 h-10 rounded-full flex items-center justify-center active:scale-90 transition ${
                         repeatMode !== 'off'
                           ? isLightTheme
                             ? 'bg-slate-200 border border-slate-300 text-slate-950'
