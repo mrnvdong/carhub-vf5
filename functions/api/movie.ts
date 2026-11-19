@@ -1,14 +1,11 @@
 // Cloudflare Pages Function: /api/movie
-// Engine Phim Rạp ĐA NGUỒN (5 kho phim & trực tiếp sạch popup):
-// 1) KKPhim   (https://phimapi.com)         — 30.600+ phim, 1080p HLS Sạch QC
-// 2) VSMov    (https://vsmov.com/api)       — 38.500+ phim, Chiếu rạp & Subteam (bóc PNG-TS sạch logo/QC)
-// 3) NguonC   (https://phim.nguonc.com/api) — 33.700+ phim HD/FHD
-// 4) CoBePhim (https://cobephim.club)       — Song Ngữ, Đa Server KK/VS/NC
-// 5) K20      (https://sc.k-20.xyz)         — Phim 4K, CLB Phim Xưa MP4, Thể Thao Live (Xôi Lạc, Vebo, SoCoLive...)
+// Engine Phim Rạp ĐA NGUỒN (4 kho phim 100% sạch QC & chuẩn CarPlay):
+// 1) KKPhim   (https://phimapi.com)   — 30.600+ phim, 1080p HLS Sạch QC
+// 2) VSMov    (https://vsmov.com/api) — 38.500+ phim, Chiếu rạp & Subteam (bóc PNG-TS sạch logo/QC)
+// 3) CoBePhim (https://cobephim.club) — Song Ngữ, Đa Server KK/VS
+// 4) K20      (https://sc.k-20.xyz)   — Phim 4K Direct HLS & CLB Phim Xưa MP4
 
 import {
-  NGUONC_COUNTRIES,
-  NGUONC_GENRES,
   handleCobephimDetail,
   handleCobephimList,
   handleCobephimMeta,
@@ -16,14 +13,11 @@ import {
   handleK20Detail,
   handleK20List,
   handleK20Search,
-  handleNguoncDetail,
-  handleNguoncList,
-  handleNguoncSearch,
   handleResolveCobephim,
   handleResolveK20,
 } from '../_lib/movieSources';
 
-type MovieSource = 'kkphim' | 'vsmov' | 'nguonc' | 'cobephim' | 'k20';
+type MovieSource = 'kkphim' | 'vsmov' | 'cobephim' | 'k20';
 
 const PHIMAPI_BASE = 'https://phimapi.com';
 const CDN_IMAGE_BASE = 'https://phimimg.com';
@@ -313,8 +307,6 @@ export const onRequest: PagesFunction = async (context) => {
   const source: MovieSource =
     rawSource === 'vsmov'
       ? 'vsmov'
-      : rawSource === 'nguonc'
-      ? 'nguonc'
       : rawSource === 'cobephim'
       ? 'cobephim'
       : rawSource === 'k20'
@@ -322,18 +314,9 @@ export const onRequest: PagesFunction = async (context) => {
       : 'kkphim';
 
   // =========================================================================
-  // 1. ACTION = META (Danh sách Thể loại & Quốc gia cho 5 kho phim)
+  // 1. ACTION = META (Danh sách Thể loại & Quốc gia cho 4 kho phim)
   // =========================================================================
   if (action === 'meta') {
-    if (source === 'nguonc') {
-      return new Response(
-        JSON.stringify({ source: 'nguonc', genres: NGUONC_GENRES, countries: NGUONC_COUNTRIES }),
-        {
-          status: 200,
-          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=86400, s-maxage=86400' },
-        }
-      );
-    }
     if (source === 'k20') {
       return new Response(
         JSON.stringify({ source: 'k20', genres: [], countries: [] }),
@@ -412,21 +395,6 @@ export const onRequest: PagesFunction = async (context) => {
     const page = Number.isFinite(pageRaw) && pageRaw >= 1 && pageRaw <= 500 ? pageRaw : 1;
     const limitRaw = parseInt(reqUrl.searchParams.get('limit') || '24', 10);
     const limit = Number.isFinite(limitRaw) && limitRaw >= 6 && limitRaw <= 48 ? limitRaw : 24;
-
-    if (source === 'nguonc') {
-      try {
-        const data = await handleNguoncList({ type, category, country, year, sortLang, page });
-        return new Response(JSON.stringify(data), {
-          status: 200,
-          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
-        });
-      } catch (err: any) {
-        return new Response(
-          JSON.stringify({ source: 'nguonc', error: err?.message || 'Lỗi tải NguonC', items: [], page: 1, totalPages: 1, totalItems: 0 }),
-          { status: 502, headers: JSON_HEADERS }
-        );
-      }
-    }
 
     if (source === 'cobephim') {
       try {
@@ -662,13 +630,6 @@ export const onRequest: PagesFunction = async (context) => {
     if (sortLang) params.set('sort_lang', sortLang);
 
     try {
-      if (source === 'nguonc') {
-        const data = await handleNguoncSearch(keyword, page);
-        return new Response(JSON.stringify(data), {
-          status: 200,
-          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=180, s-maxage=180' },
-        });
-      }
       if (source === 'cobephim') {
         const data = await handleCobephimSearch(keyword);
         return new Response(JSON.stringify(data), {
@@ -749,8 +710,6 @@ export const onRequest: PagesFunction = async (context) => {
       const srcLabel =
         source === 'vsmov'
           ? 'VSMov'
-          : source === 'nguonc'
-          ? 'NguonC'
           : source === 'cobephim'
           ? 'CoBePhim'
           : source === 'k20'
@@ -780,21 +739,6 @@ export const onRequest: PagesFunction = async (context) => {
         status: 400,
         headers: JSON_HEADERS,
       });
-    }
-
-    if (source === 'nguonc') {
-      try {
-        const detail = await handleNguoncDetail(slug);
-        return new Response(JSON.stringify(detail), {
-          status: 200,
-          headers: { ...JSON_HEADERS, 'Cache-Control': 'public, max-age=300, s-maxage=300' },
-        });
-      } catch (err: any) {
-        return new Response(
-          JSON.stringify({ error: err?.message || 'Không tải được chi tiết phim NguonC' }),
-          { status: 502, headers: JSON_HEADERS }
-        );
-      }
     }
 
     if (source === 'cobephim') {

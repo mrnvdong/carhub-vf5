@@ -224,7 +224,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     scheduleHideHud();
   }, [scheduleHideHud]);
 
-  // Nạp luồng HLS / MP4 cho tất cả 5 nguồn: KKPhim, VSMov (PNG-TS + VTT), NguonC, CoBePhim, K20 (4K/MP4/Live)
+  // Nạp luồng HLS / MP4 cho tất cả 4 nguồn sạch QC: KKPhim, VSMov (PNG-TS + VTT), CoBePhim, K20 (4K/Phim Xưa MP4)
   useEffect(() => {
     const isInitialVsmov = Boolean(!episode?.linkM3u8 && isVsmovEmbedUrl(episode?.linkEmbed));
     const isInitialCobephim = Boolean(!episode?.linkM3u8 && isCobephimEpRef(episode?.linkEmbed));
@@ -350,7 +350,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
           if (cb.isEncrypted4k) {
             setIsBuffering(false);
             setErrorMsg(
-              'Server 4K này dùng khóa mã hóa riêng của CoBePhim — vui lòng chọn server Phụ đề (KK) / Song Ngữ (VS) / Phụ đề (NC) ở ngay bên dưới!'
+              'Server 4K này dùng khóa mã hóa riêng của CoBePhim — vui lòng chọn server Phụ đề (KK) / Song Ngữ (VS) ở ngay bên dưới!'
             );
             return;
           }
@@ -379,7 +379,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
         }
       }
 
-      // B) Tách luồng K20 (k20-ep://...) -> ưu tiên Direct HLS 4K / MP4 / Sports Live
+      // B) Tách luồng K20 (k20-ep://...) -> ưu tiên Direct HLS 4K / MP4 Phim Xưa
       if (isInitialK20 && resolvedMediaUrl) {
         try {
           const k20 = await resolveK20Stream(resolvedMediaUrl);
@@ -451,8 +451,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
         loadSubtitlesAsBlobs(k20InlineSubs);
       }
 
-      const isK20ManagedHls =
-        /sc\.k-20\.xyz|sports\.k-20\.xyz/i.test(resolvedMediaUrl);
+      const isK20ManagedHls = /sc\.k-20\.xyz/i.test(resolvedMediaUrl);
 
       const ua = navigator.userAgent || '';
       const isIosDevice =
@@ -462,7 +461,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
       // 1) Ưu tiên hls.js:
       //    - KKPhim: lọc QC M3U8 client-side 100%
       //    - VSMov: bóc header PNG -> MPEG-TS sạch logo & QC (cả trên iOS 17.1+ ManagedMediaSource!)
-      //    - K20 / NguonC: nạp trực tiếp playlist đã sạch QC kèm phụ đề gốc!
+      //    - K20: nạp trực tiếp playlist 4K/HD đã sạch QC kèm phụ đề gốc!
       try {
         const mod = await import('hls.js');
         if (cancelled) return;

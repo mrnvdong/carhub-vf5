@@ -1,64 +1,15 @@
 // Shared multi-source movie engine helpers for /api/movie:
-// - NguonC   (https://phim.nguonc.com/api — 33,700+ phim, Direct HLS sạch QC qua K20)
-// - CoBePhim (https://cobephim.club + public /api/v1 — Song Ngữ, Đa Server KK/VS/NC)
-// - K20      (https://sc.k-20.xyz — Kho Phim 4K, CLB Phim Xưa MP4, Thể Thao Live Xôi Lạc/Vebo/SoCoLive, & Direct HLS cho IMDb!)
+// - CoBePhim (https://cobephim.club + public /api/v1 — Song Ngữ, Đa Server KK/VS)
+// - K20      (https://sc.k-20.xyz — Kho Phim 4K, CLB Phim Xưa MP4, Phim lẻ/bộ K20)
 
-export type ExtraMovieSource = 'nguonc' | 'cobephim' | 'k20';
+export type ExtraMovieSource = 'cobephim' | 'k20';
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
-export const NGUONC_API_BASE = 'https://phim.nguonc.com/api';
 export const COBEPHIM_SITE_BASE = 'https://cobephim.club';
 export const COBEPHIM_API_BASE = 'https://egluy2hhb21vaw5ndw9pbmhl.darkbytes.xyz/api/v1';
 export const K20_BASE = 'https://sc.k-20.xyz';
-
-export const NGUONC_GENRES = [
-  { name: 'Hành Động', slug: 'hanh-dong' },
-  { name: 'Phiêu Lưu', slug: 'phieu-luu' },
-  { name: 'Hoạt Hình', slug: 'hoat-hinh' },
-  { name: 'Phim Hài', slug: 'phim-hai' },
-  { name: 'Hình Sự', slug: 'hinh-su' },
-  { name: 'Tài Liệu', slug: 'tai-lieu' },
-  { name: 'Chính Kịch', slug: 'chinh-kich' },
-  { name: 'Gia Đình', slug: 'gia-dinh' },
-  { name: 'Giả Tưởng', slug: 'gia-tuong' },
-  { name: 'Lịch Sử', slug: 'lich-su' },
-  { name: 'Kinh Dị', slug: 'kinh-di' },
-  { name: 'Phim Nhạc', slug: 'phim-nhac' },
-  { name: 'Bí Ẩn', slug: 'bi-an' },
-  { name: 'Lãng Mạn', slug: 'lang-man' },
-  { name: 'Khoa Học Viễn Tưởng', slug: 'khoa-hoc-vien-tuong' },
-  { name: 'Gây Cấn', slug: 'gay-can' },
-  { name: 'Chiến Tranh', slug: 'chien-tranh' },
-  { name: 'Tâm Lý', slug: 'tam-ly' },
-  { name: 'Tình Cảm', slug: 'tinh-cam' },
-  { name: 'Cổ Trang', slug: 'co-trang' },
-  { name: 'Miền Tây', slug: 'mien-tay' },
-];
-
-export const NGUONC_COUNTRIES = [
-  { name: 'Việt Nam', slug: 'viet-nam' },
-  { name: 'Hàn Quốc', slug: 'han-quoc' },
-  { name: 'Trung Quốc', slug: 'trung-quoc' },
-  { name: 'Mỹ', slug: 'my' },
-  { name: 'Nhật Bản', slug: 'nhat-ban' },
-  { name: 'Thái Lan', slug: 'thai-lan' },
-  { name: 'Hồng Kông', slug: 'hong-kong' },
-  { name: 'Đài Loan', slug: 'dai-loan' },
-  { name: 'Anh', slug: 'anh' },
-  { name: 'Pháp', slug: 'phap' },
-  { name: 'Đức', slug: 'duc' },
-  { name: 'Ấn Độ', slug: 'an-do' },
-  { name: 'Canada', slug: 'canada' },
-  { name: 'Úc', slug: 'uc' },
-  { name: 'Tây Ban Nha', slug: 'tay-ban-nha' },
-  { name: 'Italy', slug: 'italy' },
-  { name: 'Nga', slug: 'nga' },
-  { name: 'Philippines', slug: 'philippines' },
-  { name: 'Brazil', slug: 'brazil' },
-  { name: 'Bỉ', slug: 'bi' },
-];
 
 function decodeEntities(raw: unknown): string {
   if (typeof raw !== 'string') return '';
@@ -178,73 +129,6 @@ function naturalEpNumber(name: string): number {
   return m ? parseFloat(m[1]) : Number.MAX_SAFE_INTEGER;
 }
 
-// =========================================================================
-// 1. NGUONC (https://phim.nguonc.com/api — 33,700+ phim)
-// =========================================================================
-function normalizeNguoncItem(raw: any) {
-  // NguonC: thumb_url = ảnh dọc 2:3 (580x820), poster_url = ảnh ngang 16:9 (1908x1080)
-  const posterUrl = String(raw?.thumb_url || raw?.thumb_url_webp || raw?.poster_url || '').trim();
-  const thumbUrl = String(raw?.poster_url || raw?.poster_url_webp || raw?.thumb_url || '').trim();
-  const yearMatch = String(raw?.year || '').match(/\d{4}/);
-  const tmdbScore = Number(raw?.tmdb?.vote_average) || 0;
-  const imdbScore = Number(raw?.imdb?.vote_average) || 0;
-
-  // NguonC category có thể là object nhóm {"1":{group,list}, "2":{group,list}}
-  const categories: Array<{ name: string; slug: string }> = [];
-  const countries: Array<{ name: string; slug: string }> = [];
-  let year = yearMatch ? Number(yearMatch[0]) : 0;
-
-  if (raw?.category && typeof raw.category === 'object' && !Array.isArray(raw.category)) {
-    for (const grp of Object.values(raw.category) as any[]) {
-      const gName = String(grp?.group?.name || '').toLowerCase();
-      const list = Array.isArray(grp?.list) ? grp.list : [];
-      if (gName.includes('thể loại')) {
-        for (const item of list) {
-          const n = decodeEntities(item?.name);
-          const matched = NGUONC_GENRES.find((g) => g.name.toLowerCase() === n.toLowerCase());
-          if (n) categories.push({ name: n, slug: matched?.slug || slugifyVn(n) });
-        }
-      } else if (gName.includes('quốc gia')) {
-        for (const item of list) {
-          const n = decodeEntities(item?.name);
-          const matched = NGUONC_COUNTRIES.find((c) => c.name.toLowerCase() === n.toLowerCase());
-          if (n) countries.push({ name: n, slug: matched?.slug || slugifyVn(n) });
-        }
-      } else if (gName.includes('năm') && !year && list[0]?.name) {
-        const ym = String(list[0].name).match(/\d{4}/);
-        if (ym) year = Number(ym[0]);
-      }
-    }
-  }
-
-  return {
-    id: String(raw?.id || raw?.slug || ''),
-    source: 'nguonc',
-    name: decodeEntities(raw?.name),
-    originName: decodeEntities(raw?.original_name || raw?.origin_name),
-    slug: String(raw?.slug || '').trim(),
-    type: String(raw?.tmdb?.type || ''),
-    posterUrl,
-    thumbUrl,
-    year,
-    quality: decodeEntities(raw?.quality) || 'HD',
-    lang: decodeEntities(raw?.language) || 'Vietsub',
-    time: decodeEntities(raw?.time),
-    episodeCurrent: decodeEntities(raw?.current_episode),
-    episodeTotal: raw?.total_episodes ? String(raw.total_episodes) : '',
-    chieurap: false,
-    subDocQuyen: false,
-    rating:
-      tmdbScore > 0
-        ? Math.round(tmdbScore * 10) / 10
-        : imdbScore > 0
-        ? Math.round(imdbScore * 10) / 10
-        : 0,
-    categories,
-    countries,
-  };
-}
-
 function slugifyVn(s: string): string {
   return s
     .normalize('NFD')
@@ -253,144 +137,6 @@ function slugifyVn(s: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-}
-
-export async function handleNguoncList(opts: {
-  type: string;
-  category: string;
-  country: string;
-  year: string;
-  sortLang: string;
-  page: number;
-}) {
-  const { type, category, country, year, sortLang, page } = opts;
-  let endpoint = `${NGUONC_API_BASE}/films/phim-moi-cap-nhat`;
-
-  if (category && isSafeSlug(category)) {
-    endpoint = `${NGUONC_API_BASE}/films/the-loai/${category}`;
-  } else if (country && isSafeSlug(country)) {
-    endpoint = `${NGUONC_API_BASE}/films/quoc-gia/${country}`;
-  } else if (year && /^\d{4}$/.test(year)) {
-    endpoint = `${NGUONC_API_BASE}/films/nam-phat-hanh/${year}`;
-  } else if (sortLang && isSafeSlug(sortLang)) {
-    endpoint = `${NGUONC_API_BASE}/films/ngon-ngu/${sortLang}`;
-  } else if (type === 'phim-thuyet-minh') {
-    endpoint = `${NGUONC_API_BASE}/films/ngon-ngu/thuyet-minh`;
-  } else if (type === 'phim-long-tieng') {
-    endpoint = `${NGUONC_API_BASE}/films/ngon-ngu/long-tieng`;
-  } else if (type === 'phim-vietsub') {
-    endpoint = `${NGUONC_API_BASE}/films/ngon-ngu/vietsub`;
-  } else if (['phim-le', 'phim-bo', 'tv-shows', 'phim-dang-chieu'].includes(type)) {
-    endpoint = `${NGUONC_API_BASE}/films/danh-sach/${type}`;
-  }
-
-  // NguonC trả 10 phim/trang -> ghép 2 trang liên tiếp (20 phim/lần) để lưới poster đầy đặn chuẩn 20-24 phim!
-  const p1 = (page - 1) * 2 + 1;
-  const p2 = p1 + 1;
-  const [r1, r2] = await Promise.allSettled([
-    fetchJson(`${endpoint}?page=${p1}`),
-    fetchJson(`${endpoint}?page=${p2}`),
-  ]);
-
-  if (r1.status !== 'fulfilled') {
-    throw new Error((r1 as PromiseRejectedResult).reason?.message || 'NguonC API lỗi');
-  }
-
-  const raw1 = Array.isArray(r1.value?.items) ? r1.value.items : [];
-  const raw2 = r2.status === 'fulfilled' && Array.isArray(r2.value?.items) ? r2.value.items : [];
-  const seen = new Set<string>();
-  const items: any[] = [];
-  for (const it of [...raw1, ...raw2]) {
-    const norm = normalizeNguoncItem(it);
-    if (norm.slug && !seen.has(norm.slug)) {
-      seen.add(norm.slug);
-      items.push(norm);
-    }
-  }
-
-  const pag = r1.value?.paginate || {};
-  const rawTotalPages = Number(pag.total_page) || 1;
-  return {
-    source: 'nguonc',
-    title: 'Kho Phim NguonC',
-    page,
-    totalPages: Math.max(1, Math.ceil(rawTotalPages / 2)),
-    totalItems: Number(pag.total_items) || items.length,
-    items,
-  };
-}
-
-export async function handleNguoncSearch(keyword: string, page: number) {
-  const url = `${NGUONC_API_BASE}/films/search?keyword=${encodeURIComponent(keyword)}&page=${page}`;
-  let res: any;
-  try {
-    res = await fetchJson(url, 12000);
-  } catch {
-    res = await fetchJson(url, 12000);
-  }
-  const rawItems = Array.isArray(res?.items) ? res.items : [];
-  const items = rawItems.map(normalizeNguoncItem).filter((x: any) => x.slug);
-  const pag = res?.paginate || {};
-  return {
-    source: 'nguonc',
-    title: `Tìm kiếm NguonC: "${keyword}"`,
-    keyword,
-    page: Number(pag.current_page) || page,
-    totalPages: Number(pag.total_page) || 1,
-    totalItems: Number(pag.total_items) || items.length,
-    items,
-  };
-}
-
-export async function handleNguoncDetail(slug: string) {
-  const res = await fetchJson(`${NGUONC_API_BASE}/film/${slug}`);
-  const m = res?.movie;
-  if (!m || typeof m !== 'object') {
-    throw new Error('Không tìm thấy thông tin phim trên NguonC');
-  }
-  const baseItem = normalizeNguoncItem(m);
-  const rawServers = Array.isArray(m.episodes) ? m.episodes : [];
-  const servers = rawServers
-    .map((srv: any) => ({
-      serverName: decodeEntities(srv?.server_name) || 'Server NguonC',
-      episodes: Array.isArray(srv?.items)
-        ? srv.items
-            .map((ep: any) => {
-              const embed = typeof ep?.embed === 'string' ? ep.embed.trim() : '';
-              const directM3u8 = typeof ep?.m3u8 === 'string' ? ep.m3u8.trim() : '';
-              return {
-                name: normalizeEpisodeLabel(ep?.name),
-                slug: String(ep?.slug || '').trim() || slugifyVn(String(ep?.name || 'full')),
-                filename: `${baseItem.name} • ${normalizeEpisodeLabel(ep?.name)}`,
-                linkEmbed: embed,
-                linkM3u8: directM3u8,
-              };
-            })
-            .filter((ep: any) => ep.linkM3u8 || ep.linkEmbed)
-        : [],
-    }))
-    .filter((srv: any) => srv.episodes.length > 0);
-
-  const castsStr = typeof m.casts === 'string' ? m.casts : '';
-  const dirStr = typeof m.director === 'string' ? m.director : '';
-  return {
-    ...baseItem,
-    content: decodeEntities(m.description),
-    status: decodeEntities(m.current_episode),
-    trailerUrl: '',
-    notify: '',
-    showtimes: '',
-    view: 0,
-    actors: castsStr
-      .split(',')
-      .map((s) => decodeEntities(s))
-      .filter((s) => s && s !== 'Đang cập nhật'),
-    directors: dirStr
-      .split(',')
-      .map((s) => decodeEntities(s))
-      .filter((s) => s && s !== 'Đang cập nhật'),
-    servers,
-  };
 }
 
 // =========================================================================
@@ -682,11 +428,11 @@ function classifyCobephimLink(rawType: string, rawLink: string): {
 function cobephimServerPriority(name: string): number {
   const low = name.toLowerCase();
   if (low.includes('4k')) return 50; // 4K thường dùng %%CHOPHIM_KEY%% nên xếp sau các server mở
+  if (low.includes('(nc)')) return 40; // Server NC (NguonC embed nhiều QC) luôn xếp chót
   if (low.includes('(kk)')) return 1;
   if (low.includes('song ngữ')) return 2;
   if (low.includes('(vs)')) return 3;
-  if (low.includes('(nc)')) return 4;
-  if (low.includes('thuyết minh')) return 5;
+  if (low.includes('thuyết minh')) return 4;
   return 10;
 }
 
@@ -744,7 +490,18 @@ export async function handleCobephimDetail(slug: string) {
     byServer.set(srvName, list);
   }
 
-  const sortedServerNames = Array.from(byServer.keys()).sort(
+  const allServerNames = Array.from(byServer.keys());
+  const cleanNonNcServers = allServerNames.filter((n) => {
+    const low = n.toLowerCase();
+    return !low.includes('(nc)') && !low.includes('4k');
+  });
+  // Ẩn server (NC) (streamc.xyz nhiều QC) khi bộ phim đã có ít nhất 1 server sạch (KK / VS / Song Ngữ)
+  const filteredServerNames =
+    cleanNonNcServers.length > 0
+      ? allServerNames.filter((n) => !n.toLowerCase().includes('(nc)'))
+      : allServerNames;
+
+  const sortedServerNames = filteredServerNames.sort(
     (a, b) => cobephimServerPriority(a) - cobephimServerPriority(b)
   );
 
@@ -842,19 +599,19 @@ export async function handleResolveCobephim(slug: string, epId: string) {
 }
 
 // =========================================================================
-// 3. K20 (https://sc.k-20.xyz — Phim 4K, CLB Phim Xưa MP4, Thể Thao Live, Direct HLS cho IMDb!)
+// 2. K20 (https://sc.k-20.xyz — Phim 4K Direct HLS, CLB Phim Xưa MP4, Phim lẻ/bộ K20)
 // =========================================================================
 function encodeK20Slug(stremioType: string, stremioId: string): string {
   // Chuyển 'vsmov:tan-the-z' -> 'movie--vsmov--tan-the-z' (an toàn cho URL & isSafeSlug)
-  const cleanType = ['movie', 'series', 'tv'].includes(stremioType) ? stremioType : 'movie';
+  const cleanType = stremioType === 'series' ? 'series' : 'movie';
   const encodedId = stremioId.replace(/:/g, '--');
   return `${cleanType}--${encodedId}`;
 }
 
-function decodeK20Slug(slug: string): { stremioType: 'movie' | 'series' | 'tv'; stremioId: string } | null {
-  const m = slug.match(/^(movie|series|tv)--(.+)$/i);
+function decodeK20Slug(slug: string): { stremioType: 'movie' | 'series'; stremioId: string } | null {
+  const m = slug.match(/^(movie|series)--(.+)$/i);
   if (!m) return null;
-  const stremioType = m[1].toLowerCase() as 'movie' | 'series' | 'tv';
+  const stremioType = m[1].toLowerCase() as 'movie' | 'series';
   const stremioId = m[2].replace(/--/g, ':');
   if (!/^[a-z0-9:._-]+$/i.test(stremioId)) return null;
   return { stremioType, stremioId };
@@ -864,7 +621,6 @@ function normalizeK20MetaItem(m: any, fallbackType = 'movie', badgeQuality = 'HD
   const id = String(m?.id || '').trim();
   const type = String(m?.type || fallbackType);
   const yearMatch = String(m?.releaseInfo || '').match(/\d{4}/);
-  const isSports = id.startsWith('sports:') || type === 'tv';
   const is4k = badgeQuality === '4K';
   const isClbpx = id.startsWith('clbpx:');
 
@@ -878,10 +634,10 @@ function normalizeK20MetaItem(m: any, fallbackType = 'movie', badgeQuality = 'HD
     posterUrl: String(m?.poster || m?.background || '').trim(),
     thumbUrl: String(m?.background || m?.poster || '').trim(),
     year: yearMatch ? Number(yearMatch[0]) : 0,
-    quality: isSports ? 'LIVE' : is4k ? '4K' : isClbpx ? '720p' : 'HD',
-    lang: isSports ? 'Trực Tiếp' : isClbpx ? 'Lồng Tiếng' : 'Vietsub/TM',
+    quality: is4k ? '4K' : isClbpx ? '720p' : 'HD',
+    lang: isClbpx ? 'Lồng Tiếng' : 'Vietsub/TM',
     time: '',
-    episodeCurrent: isSports ? '🔴 Đang phát' : is4k ? '4K UHD' : isClbpx ? 'Phim Xưa' : 'HD',
+    episodeCurrent: is4k ? '4K UHD' : isClbpx ? 'Phim Xưa' : 'HD',
     episodeTotal: '',
     chieurap: is4k,
     subDocQuyen: false,
@@ -904,10 +660,6 @@ export async function handleK20List(opts: { type: string; page: number; limit: n
     url = `${K20_BASE}/catalog/movie/clbpx-movie${skipSeg}.json`;
     fallbackType = 'movie';
     badgeQuality = '720p';
-  } else if (type === 'the-thao') {
-    url = `${K20_BASE}/catalog/tv/sports-live/genre=${encodeURIComponent('Thể loại: Tất Cả Thể Thao')}.json`;
-    fallbackType = 'tv';
-    badgeQuality = 'LIVE';
   } else if (type === 'phim-le') {
     url = `${K20_BASE}/catalog/movie/kkphim-movie${skipSeg}.json`;
     fallbackType = 'movie';
@@ -925,10 +677,10 @@ export async function handleK20List(opts: { type: string; page: number; limit: n
     .map((m: any) => normalizeK20MetaItem(m, fallbackType, badgeQuality))
     .filter((x: any) => x.id);
 
-  const hasMore = type !== 'the-thao' && raw.length >= Math.min(limit, 18);
+  const hasMore = raw.length >= Math.min(limit, 18);
   return {
     source: 'k20',
-    title: 'Kho K20 (4K • Phim Xưa • Thể Thao Live)',
+    title: 'Kho K20 (Phim 4K • CLB Phim Xưa)',
     page,
     totalPages: hasMore ? Math.max(page + 1, 15) : page,
     totalItems: hasMore ? Math.max(page + 1, 15) * limit : skip + items.length,
@@ -1012,7 +764,7 @@ function normalizeK20StreamList(rawStreams: any[]) {
 }
 
 export async function handleResolveK20(mediaType: string, rawId: string) {
-  const cleanType = ['movie', 'series', 'tv'].includes(mediaType) ? mediaType : 'movie';
+  const cleanType = mediaType === 'series' ? 'series' : 'movie';
   if (!rawId || !/^[a-z0-9:._-]+$/i.test(rawId) || rawId.length > 200) {
     throw new Error('ID luồng K20 không hợp lệ');
   }
@@ -1030,50 +782,8 @@ export async function handleK20Detail(slug: string) {
     throw new Error('Slug K20 không hợp lệ');
   }
   const { stremioType, stremioId } = parsed;
-  const isSports = stremioId.startsWith('sports:') || stremioType === 'tv';
 
-  // 1) Kênh Thể Thao Live (Xôi Lạc, Cà Khịa, SoCoLive, Vebo, 90 Phút...)
-  if (isSports) {
-    const [metaRes, streamRes] = await Promise.allSettled([
-      fetchJson(`${K20_BASE}/meta/tv/${encodeURIComponent(stremioId)}.json`, 12000),
-      fetchJson(`${K20_BASE}/stream/tv/${encodeURIComponent(stremioId)}.json`, 16000),
-    ]);
-    const meta = metaRes.status === 'fulfilled' ? metaRes.value?.meta || {} : {};
-    const streams =
-      streamRes.status === 'fulfilled'
-        ? normalizeK20StreamList(streamRes.value?.streams || [])
-        : [];
-    const baseItem = normalizeK20MetaItem({ ...meta, id: stremioId, type: 'tv' }, 'tv', 'LIVE');
-    const episodes = streams.map((st, idx) => ({
-      name: st.label.length > 36 ? st.label.slice(0, 35) + '…' : st.label,
-      slug: `live-${idx + 1}`,
-      filename: st.label,
-      linkM3u8: st.url,
-      linkEmbed: '',
-    }));
-
-    return {
-      ...baseItem,
-      episodeCurrent: `${episodes.length} trận/kênh đang phát`,
-      episodeTotal: `${episodes.length} luồng`,
-      content:
-        decodeEntities(meta?.description) ||
-        'Trực tiếp bóng đá & thể thao HD từ cụm K20 Sports (phát thẳng HLS, không quảng cáo popup).',
-      status: 'LIVE',
-      trailerUrl: '',
-      notify: '',
-      showtimes: '',
-      view: 0,
-      actors: [],
-      directors: [],
-      servers:
-        episodes.length > 0
-          ? [{ serverName: '🔴 Trực Tiếp HD (K20 Sports)', episodes }]
-          : [],
-    };
-  }
-
-  // 2) Phim 4K / CLB Phim Xưa / Phim K20
+  // Phim 4K / CLB Phim Xưa / Phim K20
   const metaRes = await fetchJson(
     `${K20_BASE}/meta/${stremioType}/${encodeURIComponent(stremioId)}.json`,
     10000
@@ -1089,7 +799,7 @@ export async function handleK20Detail(slug: string) {
   const servers: Array<{ serverName: string; episodes: any[] }> = [];
 
   if (videos.length > 0) {
-    // Phim nhiều tập (vd CLB Phim Xưa 35 tập, phim bộ NguonC/VSMov)
+    // Phim nhiều tập (vd CLB Phim Xưa 35 tập, phim bộ KKPhim/VSMov)
     const epType = meta.type === 'series' || stremioType === 'series' ? 'series' : 'movie';
     const sortedVids = [...videos].sort(
       (a, b) => (Number(a?.episode) || 0) - (Number(b?.episode) || 0)

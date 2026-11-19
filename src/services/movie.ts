@@ -35,17 +35,6 @@ export const VSMOV_TABS: MovieTabOption[] = [
   { id: 'hoat-hinh', label: 'Hoạt hình', icon: '🎨' },
 ];
 
-export const NGUONC_TABS: MovieTabOption[] = [
-  { id: 'moi-cap-nhat', label: 'Mới cập nhật', icon: '🔥' },
-  { id: 'phim-thuyet-minh', label: 'Thuyết minh', icon: '🎙️' },
-  { id: 'phim-long-tieng', label: 'Lồng tiếng', icon: '🗣️' },
-  { id: 'phim-le', label: 'Phim lẻ', icon: '🎬' },
-  { id: 'phim-bo', label: 'Phim bộ', icon: '📺' },
-  { id: 'phim-dang-chieu', label: 'Đang chiếu', icon: '⚡' },
-  { id: 'tv-shows', label: 'TV Shows', icon: '🌟' },
-  { id: 'phim-vietsub', label: 'Vietsub', icon: '📝' },
-];
-
 export const COBEPHIM_TABS: MovieTabOption[] = [
   { id: 'moi-cap-nhat', label: 'Hot & Song Ngữ', icon: '🔥' },
   { id: 'phim-le', label: 'Phim lẻ', icon: '🎬' },
@@ -59,14 +48,12 @@ export const COBEPHIM_TABS: MovieTabOption[] = [
 export const K20_TABS: MovieTabOption[] = [
   { id: 'moi-cap-nhat', label: 'Phim 4K', icon: '💎' },
   { id: 'phim-xua', label: 'CLB Phim Xưa', icon: '📼' },
-  { id: 'the-thao', label: 'Thể Thao Live', icon: '⚽' },
   { id: 'phim-le', label: 'Phim lẻ K20', icon: '🎬' },
   { id: 'phim-bo', label: 'Phim bộ K20', icon: '📺' },
 ];
 
 export function getMovieTabsForSource(source: MovieSource): MovieTabOption[] {
   if (source === 'vsmov') return VSMOV_TABS;
-  if (source === 'nguonc') return NGUONC_TABS;
   if (source === 'cobephim') return COBEPHIM_TABS;
   if (source === 'k20') return K20_TABS;
   return KKPHIM_TABS;
