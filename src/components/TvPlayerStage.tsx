@@ -1,7 +1,12 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Radio, Loader2, AlertCircle, RefreshCw, ChevronRight } from 'lucide-react';
 import { TvChannel, TvResolvedStream } from '../types';
-import { resolveTvStream } from '../services/tv';
+import {
+  buildTvProxyUrl,
+  probeChannelDirectInBrowser,
+  resolveTvStream,
+  resolveTvStreamViaServer,
+} from '../services/tv';
 import { TvPlayerStatus } from '../hooks/useTvLive';
 import { getCarTheme } from '../utils/theme';
 
@@ -25,12 +30,10 @@ interface TvPlayerStageProps {
 function parseClearKeyMap(rawKey?: string): Record<string, string> | null {
   if (!rawKey) return null;
   const trimmed = rawKey.trim();
-  // Dạng chuẩn hex kid:key (phổ biến nhất trong M3U Kodi/VLC)
   const colonMatch = trimmed.match(/^([0-9a-fA-F]{16,64}):([0-9a-fA-F]{16,64})$/);
   if (colonMatch) {
     return { [colonMatch[1].toLowerCase()]: colonMatch[2].toLowerCase() };
   }
-  // Dạng JSON {"kid":"key"} hoặc JWK keys array
   if (trimmed.startsWith('{')) {
     try {
       const parsed = JSON.parse(trimmed);
@@ -56,6 +59,14 @@ function parseClearKeyMap(rawKey?: string): Record<string, string> | null {
     }
   }
   return null;
+}
+
+function supportsNativeHls(video: HTMLVideoElement | null): boolean {
+  if (!video) return false;
+  return Boolean(
+    video.canPlayType('application/vnd.apple.mpegurl') ||
+      video.canPlayType('application/x-mpegurl')
+  );
 }
 
 export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
@@ -84,7 +95,17 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
   const hlsRef = useRef<any>(null);
   const shakaRef = useRef<any>(null);
   const resolveAbortRef = useRef<AbortController | null>(null);
-  const didAutoFallbackRef = useRef<boolean>(false);
+  const retryTimerRef = useRef<number | null>(null);
+  const stallTimerRef = useRef<number | null>(null);
+  const activeChannelIdRef = useRef<string | null>(null);
+
+  // Theo dõi số lần tự phục hồi chuẩn VLC cho từng phiên phát kênh
+  const netRetryCountRef = useRef<number>(0);
+  const mediaRetryCountRef = useRef<number>(0);
+  const didTokenRefreshRef = useRef<boolean>(false);
+  const didProxyFallbackRef = useRef<boolean>(false);
+  const didProxyReconnectRef = useRef<boolean>(false);
+  const activeStreamInfoRef = useRef<TvResolvedStream | null>(null);
 
   const onPauseMusicRef = useRef(onPauseMusic);
   onPauseMusicRef.current = onPauseMusic;
@@ -111,12 +132,24 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
       isBuffering,
       isResolving,
       streamMode,
-      canSwitchDirect: Boolean(resolvedStream?.directUrl),
+      canSwitchDirect: Boolean(resolvedStream?.directUrl || channel?.url.startsWith('https://')),
       error: playError,
     });
-  }, [isPlaying, isBuffering, isResolving, streamMode, resolvedStream, playError]);
+  }, [isPlaying, isBuffering, isResolving, streamMode, resolvedStream, channel?.url, playError]);
+
+  const clearTimers = useCallback(() => {
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    if (stallTimerRef.current !== null) {
+      window.clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+  }, []);
 
   const cleanupEngines = useCallback(async () => {
+    clearTimers();
     if (hlsRef.current) {
       try {
         hlsRef.current.destroy();
@@ -129,40 +162,94 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
       } catch {}
       shakaRef.current = null;
     }
-  }, []);
+  }, [clearTimers]);
+
+  const attachStreamRef = useRef<
+    (ch: TvChannel, streamInfo: TvResolvedStream) => Promise<void>
+  >(async () => {});
+
+  // Tự phục hồi luồng sống (Giống VLC --http-reconnect): làm mới token trực tiếp -> chuyển Proxy tự động!
+  const recoverChannelPlayback = useCallback(
+    async (ch: TvChannel, currentInfo: TvResolvedStream): Promise<boolean> => {
+      if (activeChannelIdRef.current !== ch.id) return false;
+      const signal = resolveAbortRef.current?.signal;
+
+      // Bước 1: Nếu đang chạy Trực tiếp và chưa thử làm mới token -> xin lại token mới ngay từ IP Việt Nam!
+      if (currentInfo.mode === 'direct' && !didTokenRefreshRef.current) {
+        didTokenRefreshRef.current = true;
+        const fresh = await probeChannelDirectInBrowser(ch, signal, 4500);
+        if (signal?.aborted || activeChannelIdRef.current !== ch.id) return true;
+        if (fresh.ok && fresh.finalUrl && fresh.streamType && fresh.finalUrl !== currentInfo.playUrl) {
+          const nextInfo: TvResolvedStream = {
+            mode: 'direct',
+            streamType: fresh.streamType,
+            playUrl: fresh.finalUrl,
+            directUrl: fresh.finalUrl,
+            proxyUrl: buildTvProxyUrl(ch, fresh.finalUrl),
+          };
+          setResolvedStream(nextInfo);
+          setStreamMode('direct');
+          await attachStreamRef.current(ch, nextInfo);
+          return true;
+        }
+      }
+
+      // Bước 2: Chuyển tự động sang Proxy (nhờ Cloudflare phân giải sạch URL + UA/Referer)
+      if (!didProxyFallbackRef.current) {
+        didProxyFallbackRef.current = true;
+        setStreamMode('proxy');
+        setIsBuffering(true);
+        const viaServer = await resolveTvStreamViaServer(ch, signal, true);
+        if (signal?.aborted || activeChannelIdRef.current !== ch.id) return true;
+
+        const proxyInfo: TvResolvedStream = viaServer.stream || {
+          ...currentInfo,
+          mode: 'proxy',
+          playUrl: currentInfo.proxyUrl || buildTvProxyUrl(ch),
+          proxyUrl: currentInfo.proxyUrl || buildTvProxyUrl(ch),
+        };
+        setResolvedStream(proxyInfo);
+        setStreamMode('proxy');
+        await attachStreamRef.current(ch, proxyInfo);
+        return true;
+      }
+
+      // Bước 3: Nếu đang chạy chế độ Proxy mà rớt sóng giữa chừng -> làm mới luồng Proxy 1 lần (chống đứng hình 4G!)
+      if (currentInfo.mode === 'proxy' && !didProxyReconnectRef.current) {
+        didProxyReconnectRef.current = true;
+        setIsBuffering(true);
+        const refreshed = await resolveTvStreamViaServer(ch, signal, true);
+        if (signal?.aborted || activeChannelIdRef.current !== ch.id) return true;
+        if (refreshed.stream) {
+          setResolvedStream(refreshed.stream);
+          setStreamMode('proxy');
+          await attachStreamRef.current(ch, refreshed.stream);
+          return true;
+        }
+      }
+
+      return false;
+    },
+    []
+  );
 
   const attachStream = useCallback(
-    async (
-      ch: TvChannel,
-      playUrl: string,
-      streamInfo: TvResolvedStream,
-      isFallbackAttempt: boolean
-    ) => {
+    async (ch: TvChannel, streamInfo: TvResolvedStream) => {
       const video = videoRef.current;
       if (!video) return;
 
       await cleanupEngines();
+      activeStreamInfoRef.current = streamInfo;
+      netRetryCountRef.current = 0;
+      mediaRetryCountRef.current = 0;
+
       setIsBuffering(true);
       setPlayError(null);
       video.muted = isMutedRef.current;
 
-      const tryProxyFallback = () => {
-        if (
-          !isFallbackAttempt &&
-          !didAutoFallbackRef.current &&
-          streamInfo.mode === 'direct' &&
-          streamInfo.proxyUrl &&
-          streamInfo.proxyUrl !== playUrl
-        ) {
-          didAutoFallbackRef.current = true;
-          setStreamMode('proxy');
-          attachStream(ch, streamInfo.proxyUrl, { ...streamInfo, mode: 'proxy' }, true);
-          return true;
-        }
-        return false;
-      };
+      const playUrl = streamInfo.playUrl;
 
-      // 1. Luồng DASH (.mpd) + ClearKey DRM -> dùng Shaka Player (tự nạp động khi mở kênh MPD!)
+      // 1. Luồng DASH (.mpd) + ClearKey DRM -> Shaka Player
       if (streamInfo.streamType === 'mpd' || ch.manifestType === 'mpd') {
         try {
           const shakaMod: any = await import('shaka-player');
@@ -173,7 +260,7 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
             setIsBuffering(false);
             setIsPlaying(false);
             setPlayError(
-              'Kênh này dùng định dạng DASH ClearKey (.mpd) — trình duyệt iOS Safari chưa hỗ trợ giải mã ClearKey (chạy tốt trên Chrome/Edge/Android).'
+              'Kênh này dùng định dạng DASH ClearKey (.mpd) — iOS Safari chưa hỗ trợ giải mã ClearKey (chạy tốt trên Chrome/Edge/Android).'
             );
             return;
           }
@@ -183,13 +270,19 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
           shakaRef.current = player;
 
           const clearKeys = parseClearKeyMap(ch.clearKey);
-          if (clearKeys) {
-            player.configure({
-              drm: {
-                clearKeys,
+          player.configure({
+            streaming: {
+              retryParameters: {
+                maxAttempts: 4,
+                baseDelay: 800,
+                backoffFactor: 1.8,
+                timeout: 15000,
               },
-            });
-          }
+              bufferingGoal: 20,
+              rebufferingGoal: 2,
+            },
+            ...(clearKeys ? { drm: { clearKeys } } : {}),
+          });
 
           if (streamInfo.mode === 'proxy') {
             const netEngine = player.getNetworkingEngine?.();
@@ -198,20 +291,15 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
               request.uris = request.uris.map((u: string) => {
                 if (u.startsWith('http://') || u.startsWith('https://')) {
                   if (u.includes('/api/tv?')) return u;
-                  const params = new URLSearchParams();
-                  params.set('action', 'proxy');
-                  params.set('url', u);
-                  if (ch.ua) params.set('ua', ch.ua);
-                  if (ch.referer) params.set('ref', ch.referer);
-                  return `/api/tv?${params.toString()}`;
+                  return buildTvProxyUrl(ch, u);
                 }
                 return u;
               });
             });
           }
 
-          player.addEventListener('error', () => {
-            if (tryProxyFallback()) return;
+          player.addEventListener('error', async () => {
+            if (await recoverChannelPlayback(ch, streamInfo)) return;
             setIsBuffering(false);
             setIsPlaying(false);
             setPlayError(
@@ -225,7 +313,7 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
           video.play().catch(() => {});
           return;
         } catch (err: any) {
-          if (tryProxyFallback()) return;
+          if (await recoverChannelPlayback(ch, streamInfo)) return;
           setIsBuffering(false);
           setIsPlaying(false);
           const msg = String(err?.message || '');
@@ -246,13 +334,8 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
         return;
       }
 
-      // 3. Luồng HLS (.m3u8) -> ưu tiên Native Apple HLS trên iOS/CarPlay, còn lại dùng hls.js
-      const canNativeHls = Boolean(
-        video.canPlayType('application/vnd.apple.mpegurl') ||
-          video.canPlayType('application/x-mpegurl')
-      );
-
-      if (canNativeHls) {
+      // 3. Luồng HLS (.m3u8) -> Ưu tiên Apple Native HLS trên iOS/CarPlay, còn lại dùng hls.js cấu hình siêu bền 4G!
+      if (supportsNativeHls(video)) {
         video.src = playUrl;
         video.load();
         video.play().catch(() => {});
@@ -272,11 +355,21 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: false,
-          backBufferLength: 30,
-          maxBufferLength: 24,
-          manifestLoadingTimeOut: 10000,
-          levelLoadingTimeOut: 10000,
-          fragLoadingTimeOut: 12000,
+          backBufferLength: 20,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          maxBufferHole: 0.8,
+          liveSyncDurationCount: 3,
+          liveMaxLatencyDurationCount: 10,
+          manifestLoadingTimeOut: 12000,
+          manifestLoadingMaxRetry: 4,
+          manifestLoadingRetryDelay: 800,
+          levelLoadingTimeOut: 12000,
+          levelLoadingMaxRetry: 4,
+          levelLoadingRetryDelay: 800,
+          fragLoadingTimeOut: 15000,
+          fragLoadingMaxRetry: 6,
+          fragLoadingRetryDelay: 800,
         });
         hlsRef.current = hls;
 
@@ -285,30 +378,62 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
           video.play().catch(() => {});
         });
 
+        hls.on(Hls.Events.FRAG_LOADED, () => {
+          netRetryCountRef.current = 0;
+        });
+
         hls.on(Hls.Events.ERROR, (_ev: any, data: any) => {
           if (!data?.fatal) return;
+
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            if (tryProxyFallback()) return;
-            setIsBuffering(false);
-            setIsPlaying(false);
-            setPlayError('Kênh hiện không phát được (CDN chặn hoặc đang offline).');
-            onPingUpdateRef.current?.(ch.id, 'dead', 'Lỗi mạng');
-            cleanupEngines();
+            // Thử tự kết nối lại 2 lần trước (giống VLC khi rớt sóng 4G qua hầm/cầu!)
+            if (netRetryCountRef.current < 2) {
+              netRetryCountRef.current += 1;
+              setIsBuffering(true);
+              retryTimerRef.current = window.setTimeout(() => {
+                if (hlsRef.current === hls) {
+                  try {
+                    hls.startLoad();
+                  } catch {}
+                }
+              }, 1100);
+              return;
+            }
+
+            recoverChannelPlayback(ch, streamInfo).then((recovered) => {
+              if (recovered) return;
+              setIsBuffering(false);
+              setIsPlaying(false);
+              setPlayError('Tín hiệu kênh đang gián đoạn — chạm Tải lại hoặc chuyển kênh kế.');
+              onPingUpdateRef.current?.(ch.id, 'dead', 'Lỗi mạng');
+              cleanupEngines();
+            });
           } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            try {
-              hls.recoverMediaError();
-            } catch {
+            mediaRetryCountRef.current += 1;
+            if (mediaRetryCountRef.current <= 3) {
+              try {
+                if (mediaRetryCountRef.current === 2) {
+                  hls.swapAudioCodec();
+                }
+                hls.recoverMediaError();
+                return;
+              } catch {}
+            }
+            recoverChannelPlayback(ch, streamInfo).then((recovered) => {
+              if (recovered) return;
               setIsBuffering(false);
               setPlayError('Lỗi giải mã tín hiệu kênh.');
               cleanupEngines();
-            }
+            });
           } else {
-            if (tryProxyFallback()) return;
-            setIsBuffering(false);
-            setIsPlaying(false);
-            setPlayError('Không phát được tín hiệu kênh này.');
-            onPingUpdateRef.current?.(ch.id, 'dead', 'Lỗi phát');
-            cleanupEngines();
+            recoverChannelPlayback(ch, streamInfo).then((recovered) => {
+              if (recovered) return;
+              setIsBuffering(false);
+              setIsPlaying(false);
+              setPlayError('Không phát được tín hiệu kênh này.');
+              onPingUpdateRef.current?.(ch.id, 'dead', 'Lỗi phát');
+              cleanupEngines();
+            });
           }
         });
 
@@ -320,17 +445,23 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
         video.play().catch(() => {});
       }
     },
-    [cleanupEngines, videoRef]
+    [cleanupEngines, recoverChannelPlayback, videoRef]
   );
 
-  // Tự động phân giải & phát khi đổi kênh / đổi chế độ Proxy / bấm Tải lại
+  attachStreamRef.current = attachStream;
+
+  // Tự động bắt sóng TRỰC TIẾP (giống VLC) -> Tự chuyển Proxy khi cần
   useEffect(() => {
     if (!channel) return;
 
     resolveAbortRef.current?.abort();
     const controller = new AbortController();
     resolveAbortRef.current = controller;
-    didAutoFallbackRef.current = forceProxy;
+    activeChannelIdRef.current = channel.id;
+    didTokenRefreshRef.current = false;
+    didProxyFallbackRef.current = forceProxy;
+    didProxyReconnectRef.current = false;
+    activeStreamInfoRef.current = null;
 
     onPauseMusicRef.current();
     cleanupEngines();
@@ -348,9 +479,14 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
     setPlayError(null);
     setResolvedStream(null);
 
+    const canNative = supportsNativeHls(videoRef.current);
+
     (async () => {
-      const { stream, error } = await resolveTvStream(channel, controller.signal);
-      if (controller.signal.aborted) return;
+      const { stream, error } = await resolveTvStream(channel, controller.signal, {
+        forceProxy,
+        allowNativeNoCors: canNative,
+      });
+      if (controller.signal.aborted || activeChannelIdRef.current !== channel.id) return;
 
       setIsResolving(false);
       if (!stream) {
@@ -361,20 +497,23 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
       }
 
       setResolvedStream(stream);
-      const chosenMode: 'direct' | 'proxy' = forceProxy ? 'proxy' : stream.mode;
-      const chosenUrl = forceProxy ? stream.proxyUrl : stream.playUrl;
-      setStreamMode(chosenMode);
-      attachStream(channel, chosenUrl, { ...stream, mode: chosenMode }, forceProxy);
+      setStreamMode(stream.mode);
+      if (stream.mode === 'proxy') {
+        didProxyFallbackRef.current = true;
+      }
+      await attachStream(channel, stream);
     })();
 
     return () => {
       controller.abort();
+      clearTimers();
     };
-  }, [channel, forceProxy, reloadNonce, cleanupEngines, attachStream, videoRef]);
+  }, [channel, forceProxy, reloadNonce, cleanupEngines, clearTimers, attachStream, videoRef]);
 
   // Dọn dẹp triệt để khi unmount (không ngốn 4G ngầm!)
   useEffect(() => {
     return () => {
+      activeChannelIdRef.current = null;
       resolveAbortRef.current?.abort();
       cleanupEngines();
       if (videoRef.current) {
@@ -398,6 +537,28 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
     }
   };
 
+  // Watchdog chống treo buffering trên Apple Native HLS (Safari / CarPlay)
+  const armNativeStallWatchdog = () => {
+    if (stallTimerRef.current !== null) {
+      window.clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+    if (!channel || !activeStreamInfoRef.current) return;
+    if (hlsRef.current || shakaRef.current) return; // hls.js / Shaka tự có retry riêng
+
+    const snapTime = videoRef.current?.currentTime || 0;
+    const snapChannel = channel;
+    const snapInfo = activeStreamInfoRef.current;
+
+    stallTimerRef.current = window.setTimeout(() => {
+      const v = videoRef.current;
+      if (!v || v.paused || activeChannelIdRef.current !== snapChannel.id) return;
+      if (Math.abs((v.currentTime || 0) - snapTime) < 0.2) {
+        recoverChannelPlayback(snapChannel, snapInfo).catch(() => {});
+      }
+    }, 12000);
+  };
+
   return (
     <div
       className={`media-stage relative w-full h-full flex items-center justify-center rounded-2xl overflow-hidden bg-black border shadow-inner ${
@@ -411,24 +572,41 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
         controls={false}
         onClick={handleTogglePlay}
         onPlaying={() => {
+          if (stallTimerRef.current !== null) {
+            window.clearTimeout(stallTimerRef.current);
+            stallTimerRef.current = null;
+          }
           setIsPlaying(true);
           setIsBuffering(false);
           setPlayError(null);
           if (channel) onPingUpdateRef.current?.(channel.id, 'live');
         }}
-        onPause={() => setIsPlaying(false)}
-        onWaiting={() => setIsBuffering(true)}
+        onPause={() => {
+          if (stallTimerRef.current !== null) {
+            window.clearTimeout(stallTimerRef.current);
+            stallTimerRef.current = null;
+          }
+          setIsPlaying(false);
+        }}
+        onWaiting={() => {
+          setIsBuffering(true);
+          armNativeStallWatchdog();
+        }}
+        onStalled={() => {
+          setIsBuffering(true);
+          armNativeStallWatchdog();
+        }}
         onError={() => {
-          if (
-            channel &&
-            resolvedStream &&
-            streamMode === 'direct' &&
-            !didAutoFallbackRef.current &&
-            resolvedStream.proxyUrl
-          ) {
-            didAutoFallbackRef.current = true;
-            setStreamMode('proxy');
-            attachStream(channel, resolvedStream.proxyUrl, { ...resolvedStream, mode: 'proxy' }, true);
+          // Nếu hls.js hoặc Shaka đang quản lý luồng thì để engine tự xử lý recovery
+          if (hlsRef.current || shakaRef.current) return;
+          if (channel && activeStreamInfoRef.current) {
+            recoverChannelPlayback(channel, activeStreamInfoRef.current).then((recovered) => {
+              if (recovered) return;
+              setIsBuffering(false);
+              setIsPlaying(false);
+              setPlayError('Tín hiệu kênh bị gián đoạn — Thử Proxy hoặc đổi kênh khác.');
+              onPingUpdateRef.current?.(channel.id, 'dead', 'Lỗi phát');
+            });
             return;
           }
           setIsBuffering(false);
@@ -516,7 +694,7 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
         <div className="absolute inset-0 bg-black/55 backdrop-blur-xs flex flex-col items-center justify-center gap-1.5 pointer-events-none">
           <Loader2 className={`${compact ? 'w-6 h-6' : 'w-8 h-8'} text-sky-400 animate-spin`} />
           <span className={`${compact ? 'text-[11px]' : 'text-xs'} font-extrabold text-white/90`}>
-            {isResolving ? 'Đang bắt sóng kênh...' : 'Đang tải luồng...'}
+            {isResolving ? 'Đang bắt sóng trực tiếp...' : 'Đang nạp tín hiệu...'}
           </span>
         </div>
       )}

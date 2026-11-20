@@ -19,11 +19,72 @@ const JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Range',
 };
 
 const DEFAULT_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+const VLC_FALLBACK_UA = 'VLC/3.0.20 LibVLC/3.0.20';
+
+async function fetchStreamUpstream(
+  targetUrl: string,
+  opts: {
+    ua?: string;
+    referer?: string;
+    origin?: string;
+    range?: string | null;
+    timeoutMs?: number;
+  }
+): Promise<{ response: Response; finalUrl: string; usedUa: string }> {
+  const buildHeaders = (userAgent: string): Record<string, string> => {
+    const h: Record<string, string> = {
+      'User-Agent': userAgent,
+      Accept: '*/*',
+    };
+    if (opts.referer && isSafeExternalUrl(opts.referer)) {
+      h['Referer'] = opts.referer;
+    }
+    if (opts.origin) {
+      h['Origin'] = opts.origin;
+    }
+    if (opts.range) {
+      h['Range'] = opts.range;
+    }
+    return h;
+  };
+
+  const primaryUa = opts.ua || DEFAULT_UA;
+  const first = await safeFetchExternal(
+    targetUrl,
+    {
+      headers: buildHeaders(primaryUa),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 12000),
+    },
+    6
+  );
+
+  // Nếu nguồn IPTV từ chối UA trình duyệt (403/404) và kênh không chỉ định UA riêng -> thử lại ngay bằng UA chuẩn VLC!
+  if (
+    !opts.ua &&
+    (first.response.status === 403 || first.response.status === 404) &&
+    primaryUa !== VLC_FALLBACK_UA
+  ) {
+    try {
+      await first.response.body?.cancel();
+    } catch {}
+    const second = await safeFetchExternal(
+      targetUrl,
+      {
+        headers: buildHeaders(VLC_FALLBACK_UA),
+        signal: AbortSignal.timeout(opts.timeoutMs ?? 12000),
+      },
+      6
+    );
+    return { response: second.response, finalUrl: second.finalUrl, usedUa: VLC_FALLBACK_UA };
+  }
+
+  return { response: first.response, finalUrl: first.finalUrl, usedUa: primaryUa };
+}
 
 const PRIORITY_GROUPS: string[] = [
   'VTV',
@@ -248,18 +309,11 @@ async function pingSingleChannel(ch: {
     return { id: ch?.id || '', status: 'dead', latencyMs: 0, reason: 'URL không hợp lệ' };
   }
 
-  const headers: Record<string, string> = {
-    'User-Agent': ch.ua || DEFAULT_UA,
-    Accept: '*/*',
-  };
-  if (ch.referer && isSafeExternalUrl(ch.referer)) {
-    headers['Referer'] = ch.referer;
-  }
-
   try {
-    const { response: res, finalUrl } = await safeFetchExternal(ch.url, {
-      headers,
-      signal: AbortSignal.timeout(5000),
+    const { response: res, finalUrl } = await fetchStreamUpstream(ch.url, {
+      ua: ch.ua,
+      referer: ch.referer,
+      timeoutMs: 5500,
     });
     const latencyMs = Date.now() - t0;
 
@@ -535,22 +589,16 @@ export async function onRequestGet(context: any) {
       );
     }
 
-    const headers: Record<string, string> = {
-      'User-Agent': ua || DEFAULT_UA,
-      Accept: '*/*',
-    };
-    if (referer && isSafeExternalUrl(referer)) {
-      headers['Referer'] = referer;
-    }
+    const probeOrigin = getTrustedCorsOrigin(request);
 
     try {
-      const upstream = await fetch(targetUrl, {
-        headers,
-        redirect: 'follow',
-        signal: AbortSignal.timeout(12000),
+      const { response: upstream, finalUrl, usedUa } = await fetchStreamUpstream(targetUrl, {
+        ua,
+        referer,
+        origin: probeOrigin,
+        timeoutMs: 12000,
       });
 
-      const finalUrl = upstream.url || targetUrl;
       if (/\/error\.mp4(\?|$)/i.test(finalUrl)) {
         try {
           await upstream.body?.cancel();
@@ -580,11 +628,15 @@ export async function onRequestGet(context: any) {
       const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
       const acao = (upstream.headers.get('access-control-allow-origin') || '').trim();
       const isHttps = finalUrl.startsWith('https://');
-      const hasOpenCors = acao === '*';
+      const hasOpenCors =
+        acao === '*' ||
+        (Boolean(acao) && acao.toLowerCase() === probeOrigin.toLowerCase());
       const isHlsContentType = contentType.includes('mpegurl');
       const isDirectAudio =
         !isHlsContentType &&
         (contentType.includes('audio/') || contentType.includes('aacp'));
+
+      const effectiveUa = ua || (usedUa === VLC_FALLBACK_UA ? VLC_FALLBACK_UA : undefined);
 
       if (isDirectAudio) {
         try {
@@ -596,9 +648,9 @@ export async function onRequestGet(context: any) {
             success: true,
             mode,
             streamType: 'audio',
-            playUrl: mode === 'direct' ? finalUrl : buildProxyUrl(finalUrl, ua, referer),
-            directUrl: finalUrl,
-            proxyUrl: buildProxyUrl(finalUrl, ua, referer),
+            playUrl: mode === 'direct' ? finalUrl : buildProxyUrl(finalUrl, effectiveUa, referer),
+            directUrl: isHttps ? finalUrl : null,
+            proxyUrl: buildProxyUrl(finalUrl, effectiveUa, referer),
           }),
           { headers: { ...JSON_HEADERS, 'Cache-Control': 'no-store' } }
         );
@@ -644,7 +696,7 @@ export async function onRequestGet(context: any) {
       }
 
       const canPlayDirect = isHttps && hasOpenCors && !referer;
-      const proxyUrl = buildProxyUrl(finalUrl, ua, referer);
+      const proxyUrl = buildProxyUrl(finalUrl, effectiveUa, referer);
 
       return new Response(
         JSON.stringify({
@@ -691,21 +743,18 @@ export async function onRequestGet(context: any) {
       return new Response('Invalid URL', { status: 400 });
     }
 
-    const headers: Record<string, string> = {
-      'User-Agent': ua || DEFAULT_UA,
-      Accept: '*/*',
-    };
-    if (referer && isSafeExternalUrl(referer)) {
-      headers['Referer'] = referer;
-    }
+    const incomingRange = request.headers.get('Range');
 
     try {
-      const { response: upstream, finalUrl } = await safeFetchExternal(targetUrl, {
-        headers,
-        signal: AbortSignal.timeout(9000),
+      const { response: upstream, finalUrl, usedUa } = await fetchStreamUpstream(targetUrl, {
+        ua,
+        referer,
+        range: incomingRange,
+        timeoutMs: 15000,
       });
+      const effectiveUa = ua || (usedUa === VLC_FALLBACK_UA ? VLC_FALLBACK_UA : undefined);
 
-      if (!upstream.ok) {
+      if (!upstream.ok && upstream.status !== 206) {
         return new Response(`Upstream error ${upstream.status}`, {
           status: upstream.status,
           headers: { 'Access-Control-Allow-Origin': corsOrigin, Vary: 'Origin' },
@@ -723,7 +772,7 @@ export async function onRequestGet(context: any) {
       if (looksLikeM3u8) {
         const text = await upstream.text();
         if (text.trimStart().startsWith('#EXTM3U')) {
-          const rewritten = rewriteHlsPlaylist(text, finalUrl, ua, referer);
+          const rewritten = rewriteHlsPlaylist(text, finalUrl, effectiveUa, referer);
           return new Response(rewritten, {
             status: 200,
             headers: {
@@ -768,10 +817,15 @@ export async function onRequestGet(context: any) {
       const respHeaders = new Headers();
       respHeaders.set('Content-Type', upstream.headers.get('content-type') || 'video/mp2t');
       respHeaders.set('Access-Control-Allow-Origin', corsOrigin);
+      respHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
       respHeaders.set('Vary', 'Origin');
-      respHeaders.set('Cache-Control', 'public, max-age=30');
+      respHeaders.set('Cache-Control', 'public, max-age=15');
       const contentLength = upstream.headers.get('content-length');
       if (contentLength) respHeaders.set('Content-Length', contentLength);
+      const contentRange = upstream.headers.get('content-range');
+      if (contentRange) respHeaders.set('Content-Range', contentRange);
+      const acceptRanges = upstream.headers.get('accept-ranges');
+      if (acceptRanges) respHeaders.set('Accept-Ranges', acceptRanges);
 
       return new Response(upstream.body, {
         status: upstream.status,
