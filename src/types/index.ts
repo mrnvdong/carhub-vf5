@@ -346,3 +346,45 @@ export interface MovieWatchHistoryItem {
   duration: number;
   updatedAt: number;
 }
+
+export type CustomHazardKind = 'camera' | 'police' | 'pothole' | 'speedbump' | 'custom';
+
+export interface CustomHazardPin {
+  id: string;
+  kind: CustomHazardKind;
+  label: string;
+  lat: number;
+  lon: number;
+  createdAt: number;
+}
+
+export type RemoteCommandAction =
+  | 'playTrack'
+  | 'queueTrack'
+  | 'openMovie'
+  | 'playPause'
+  | 'next'
+  | 'prev';
+
+export interface RemoteControlCommand {
+  id: string;
+  action: RemoteCommandAction;
+  payload?: any;
+  sentAt: string;
+}
+
+export interface TripStats {
+  distanceKm: number;
+  elapsedSec: number;
+  avgSpeedKmh: number;
+  maxSpeedKmh: number;
+  startedAt: number;
+}
+
+export type EqPresetId = 'flat' | 'vf5-bass' | 'vocal' | 'bolero' | 'edm' | 'custom';
+
+export interface EqSettings {
+  preset: EqPresetId;
+  gains: [number, number, number, number, number]; // 60Hz, 230Hz, 910Hz, 3.6kHz, 14kHz (-10..+10 dB)
+  speedVolumeEnabled: boolean;
+}

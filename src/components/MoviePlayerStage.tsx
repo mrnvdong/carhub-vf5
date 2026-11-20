@@ -115,6 +115,8 @@ interface MoviePlayerStageProps {
   onBeforePlay: () => void;
   onProgressSave: (currentTime: number, duration: number) => void;
   onNotifyToast?: (msg: string) => void;
+  drivingVideoLock?: boolean;
+  currentSpeedKmh?: number | null;
 }
 
 export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
@@ -131,6 +133,8 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
   onBeforePlay,
   onProgressSave,
   onNotifyToast,
+  drivingVideoLock = false,
+  currentSpeedKmh = null,
 }) => {
   const stageRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -166,8 +170,10 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
   const [resolvedEmbedOverride, setResolvedEmbedOverride] = useState<string>('');
   const [k20Options, setK20Options] = useState<K20ResolvedOption[]>([]);
   const [k20OptionIdx, setK20OptionIdx] = useState<number>(0);
+  const [passengerUnlocked, setPassengerUnlocked] = useState<boolean>(false);
 
   const hudTimerRef = useRef<number | null>(null);
+  const seekFlashTimerRef = useRef<number | null>(null);
   const lastTapRef = useRef<{ time: number; side: 'left' | 'right' | 'center' }>({
     time: 0,
     side: 'center',
@@ -598,6 +604,14 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     return () => window.clearTimeout(id);
   }, [nextCountdown]);
 
+  // Dọn timer HUD & hiệu ứng tua khi unmount để tránh memory leak
+  useEffect(() => {
+    return () => {
+      if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current);
+      if (seekFlashTimerRef.current) window.clearTimeout(seekFlashTimerRef.current);
+    };
+  }, []);
+
   // Theo dõi trạng thái Fullscreen chuẩn
   useEffect(() => {
     const onFsChange = () => {
@@ -628,7 +642,8 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
       v.currentTime = next;
       setCurrentTime(next);
       setSeekFlash(delta < 0 ? 'back' : 'forward');
-      window.setTimeout(() => setSeekFlash(null), 500);
+      if (seekFlashTimerRef.current) window.clearTimeout(seekFlashTimerRef.current);
+      seekFlashTimerRef.current = window.setTimeout(() => setSeekFlash(null), 500);
       revealHud();
     },
     [revealHud]
@@ -734,6 +749,15 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     );
   }
 
+  const safeEmbedUrl =
+    resolvedEmbedOverride ||
+    (episode.linkEmbed && !isCobephimEpRef(episode.linkEmbed) ? episode.linkEmbed : '');
+  const isDrivingBlocked =
+    Boolean(drivingVideoLock) &&
+    !passengerUnlocked &&
+    typeof currentSpeedKmh === 'number' &&
+    currentSpeedKmh > 15;
+
   return (
     <div
       ref={stageRef}
@@ -743,12 +767,12 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
         isFullscreen ? 'h-screen rounded-none' : 'aspect-video rounded-2xl sm:rounded-3xl'
       }`}
     >
-      {/* TRÌNH PHÁT EMBED */}
-      {playerMode === 'embed' && (resolvedEmbedOverride || episode.linkEmbed) ? (
+      {/* TRÌNH PHÁT EMBED (chỉ dùng URL HTTP/HTTPS hợp lệ, tuyệt đối không gán cobephim-ep://!) */}
+      {playerMode === 'embed' && safeEmbedUrl ? (
         <div className="absolute inset-0 w-full h-full">
           <iframe
-            key={resolvedEmbedOverride || episode.linkEmbed}
-            src={resolvedEmbedOverride || episode.linkEmbed}
+            key={safeEmbedUrl}
+            src={safeEmbedUrl}
             title={`${movieTitle} - ${episode.name}`}
             allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
             allowFullScreen
@@ -832,13 +856,17 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
               }
             }}
             onError={() => {
-              if (playerMode === 'clean' && !isVsmovEmbedUrl(episode.linkEmbed)) {
+              if (
+                playerMode === 'clean' &&
+                !isVsmovEmbedUrl(episode.linkEmbed) &&
+                !isCobephimEpRef(episode.linkEmbed)
+              ) {
                 setPlayerMode('direct');
-              } else if (episode.linkEmbed) {
+              } else if (safeEmbedUrl) {
                 setPlayerMode('embed');
               } else {
                 setIsBuffering(false);
-                setErrorMsg('Luồng phát gặp sự cố — thử đổi sang Trực tiếp hoặc Embed');
+                setErrorMsg('Luồng phát gặp sự cố — thử bấm Thử lại hoặc đổi Server khác');
               }
             }}
           >
@@ -878,6 +906,30 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
           )}
 
           {/* Vòng xoay đang tải / lỗi */}
+          {isDrivingBlocked && (
+            <div className="absolute inset-0 z-40 bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center gap-3 p-5 text-center">
+              <ShieldCheck className="w-11 h-11 text-emerald-400" />
+              <div className="space-y-1 max-w-md">
+                <p className="text-sm sm:text-base font-black text-white">
+                  🛡️ An toàn lái xe • Xe đang chạy {currentSpeedKmh} km/h
+                </p>
+                <p className="text-xs font-semibold text-slate-300">
+                  Hình ảnh tạm ẩn để bảo vệ tài xế — âm thanh phim vẫn phát bình thường.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPassengerUnlocked(true);
+                }}
+                className="min-h-[2.6rem] px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black active:scale-95 transition shadow-lg"
+              >
+                Tôi là hành khách • Mở lại hình ảnh
+              </button>
+            </div>
+          )}
+
           {isBuffering && !errorMsg && (
             <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center gap-2 bg-black/35">
               <Loader2 className="w-10 h-10 text-violet-400 animate-spin" />

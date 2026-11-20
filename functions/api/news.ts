@@ -4,6 +4,8 @@
 // - GET action=article     : Lấy chi tiết bài báo + mảng voices (.m4a Nam/Nữ Bắc/Nam) + nội dung sạch không quảng cáo
 // - GET action=audio-proxy : Proxy dự phòng hỗ trợ HTTP Range cho file .m4a trên bmcdn.me nếu trình duyệt/WebView bị chặn redirect
 
+import { getTrustedCorsOrigin, isTrustedAppRequest } from '../_lib/security';
+
 const MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
 
@@ -780,6 +782,13 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
   //    + Cloudflare Edge Cache 24h TRƯỚC khi cắt HTTP 206 Range để iOS không bị trừ 2 lần ký tự!)
   // =========================================================================
   if (action === 'tts') {
+    const corsOrigin = getTrustedCorsOrigin(request);
+    if (!isTrustedAppRequest(request, { allowAppleMediaUa: true })) {
+      return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
+        status: 403,
+        headers: { ...JSON_HEADERS, 'Access-Control-Allow-Origin': corsOrigin, Vary: 'Origin' },
+      });
+    }
     const rawText = (reqUrl.searchParams.get('q') || '').trim().replace(/\s+/g, ' ');
     if (!rawText) {
       return new Response(JSON.stringify({ error: 'Thiếu văn bản cần đọc' }), {
@@ -905,7 +914,8 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
             'Content-Length': String(slice.byteLength),
             'Content-Range': `bytes ${start}-${end}/${total}`,
             'Accept-Ranges': 'bytes',
-            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Origin': corsOrigin,
+            Vary: 'Origin',
             'X-TTS-Provider': actualProvider,
             'X-TTS-Cache': cacheStatus,
             'Cache-Control': 'public, max-age=86400, s-maxage=86400',
@@ -920,7 +930,8 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
         'Content-Type': contentType,
         'Content-Length': String(total),
         'Accept-Ranges': 'bytes',
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': corsOrigin,
+        Vary: 'Origin',
         'X-TTS-Provider': actualProvider,
         'X-TTS-Cache': cacheStatus,
         'Cache-Control': 'public, max-age=86400, s-maxage=86400',

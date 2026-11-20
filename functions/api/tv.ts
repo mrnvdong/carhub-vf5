@@ -2,8 +2,16 @@
 // Live TV & Radio M3U8/DASH engine for VinFast VF5 CarPlay:
 // - GET  action=playlist : Fetches & parses ALL channels from M3U/M3U8 (default https://tinyurl.com/vmt47), 5m Edge Cache
 // - GET  action=resolve  : Follows 302/307 redirects with channel User-Agent/Referer -> direct CORS URL or proxy URL
-// - GET  action=proxy    : SSRF-safe CORS proxy for non-CORS / HTTP / custom-header HLS/DASH manifests & segments
-// - POST action=ping     : Fast parallel live-status ping for up to 16 channels at once (live/dead + latencyMs)
+// - GET  action=proxy    : Same-Origin + SSRF-safe CORS proxy for non-CORS / HTTP / custom-header HLS/DASH manifests & segments
+// - POST action=ping     : Fast parallel live-status ping for up to 14 channels at once (Same-Origin guarded)
+
+import {
+  getTrustedCorsOrigin,
+  isSafePublicHttpUrl,
+  isTrustedAppRequest,
+  readJsonBodyLimited,
+  safeFetchExternal,
+} from '../_lib/security';
 
 const DEFAULT_PLAYLIST_URL = 'https://tinyurl.com/vmt47';
 
@@ -38,38 +46,7 @@ const PRIORITY_GROUPS: string[] = [
 ];
 
 function isSafeExternalUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-    const host = u.hostname.toLowerCase();
-    if (
-      host === 'localhost' ||
-      host === '0.0.0.0' ||
-      host === '::1' ||
-      host.endsWith('.local') ||
-      host.endsWith('.internal')
-    ) {
-      return false;
-    }
-    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (ipv4) {
-      const a = Number(ipv4[1]);
-      const b = Number(ipv4[2]);
-      if (
-        a === 10 ||
-        a === 127 ||
-        a === 0 ||
-        (a === 169 && b === 254) ||
-        (a === 172 && b >= 16 && b <= 31) ||
-        (a === 192 && b === 168)
-      ) {
-        return false;
-      }
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  return isSafePublicHttpUrl(raw);
 }
 
 interface ParsedChannel {
@@ -280,13 +257,11 @@ async function pingSingleChannel(ch: {
   }
 
   try {
-    const res = await fetch(ch.url, {
+    const { response: res, finalUrl } = await safeFetchExternal(ch.url, {
       headers,
-      redirect: 'follow',
       signal: AbortSignal.timeout(5000),
     });
     const latencyMs = Date.now() - t0;
-    const finalUrl = res.url || ch.url;
 
     if (/\/error\.mp4(\?|$)/i.test(finalUrl)) {
       try {
@@ -372,8 +347,29 @@ export async function onRequestPost(context: any) {
     });
   }
 
+  if (!isTrustedAppRequest(request)) {
+    return new Response(JSON.stringify({ success: false, error: 'Forbidden origin' }), {
+      status: 403,
+      headers: {
+        ...JSON_HEADERS,
+        'Access-Control-Allow-Origin': getTrustedCorsOrigin(request),
+      },
+    });
+  }
+
+  const parsedBody = await readJsonBodyLimited(request, 32768);
+  if (!parsedBody.ok) {
+    return new Response(JSON.stringify({ success: false, error: parsedBody.error }), {
+      status: parsedBody.status,
+      headers: {
+        ...JSON_HEADERS,
+        'Access-Control-Allow-Origin': getTrustedCorsOrigin(request),
+      },
+    });
+  }
+
   try {
-    const body: any = await request.json();
+    const body: any = parsedBody.data;
     const rawList: any[] = Array.isArray(body?.channels) ? body.channels : [];
     const batch = rawList.slice(0, 14).map((c) => ({
       id: String(c?.id || ''),
@@ -400,7 +396,11 @@ export async function onRequestPost(context: any) {
     }
 
     return new Response(JSON.stringify({ success: true, results }), {
-      headers: { ...JSON_HEADERS, 'Cache-Control': 'no-store' },
+      headers: {
+        ...JSON_HEADERS,
+        'Access-Control-Allow-Origin': getTrustedCorsOrigin(request),
+        'Cache-Control': 'no-store',
+      },
     });
   } catch {
     return new Response(JSON.stringify({ success: false, error: 'Invalid ping payload' }), {
@@ -672,9 +672,17 @@ export async function onRequestGet(context: any) {
   }
 
   // =========================================================================
-  // 3. PROXY: Chuyển tiếp HLS/DASH manifest & segment với CORS:*
+  // 3. PROXY: Chuyển tiếp HLS/DASH manifest & segment (Chỉ phục vụ Same-Origin CarHub VF5 + Chống SSRF redirect!)
   // =========================================================================
   if (action === 'proxy') {
+    const corsOrigin = getTrustedCorsOrigin(request);
+    if (!isTrustedAppRequest(request, { allowAppleMediaUa: true })) {
+      return new Response('Forbidden', {
+        status: 403,
+        headers: { 'Access-Control-Allow-Origin': corsOrigin, Vary: 'Origin' },
+      });
+    }
+
     const targetUrl = (reqUrl.searchParams.get('url') || '').trim();
     const ua = (reqUrl.searchParams.get('ua') || '').trim() || undefined;
     const referer = (reqUrl.searchParams.get('ref') || '').trim() || undefined;
@@ -692,20 +700,18 @@ export async function onRequestGet(context: any) {
     }
 
     try {
-      const upstream = await fetch(targetUrl, {
+      const { response: upstream, finalUrl } = await safeFetchExternal(targetUrl, {
         headers,
-        redirect: 'follow',
         signal: AbortSignal.timeout(9000),
       });
 
       if (!upstream.ok) {
         return new Response(`Upstream error ${upstream.status}`, {
           status: upstream.status,
-          headers: { 'Access-Control-Allow-Origin': '*' },
+          headers: { 'Access-Control-Allow-Origin': corsOrigin, Vary: 'Origin' },
         });
       }
 
-      const finalUrl = upstream.url || targetUrl;
       const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
       const looksLikeM3u8 =
         contentType.includes('mpegurl') ||
@@ -722,7 +728,8 @@ export async function onRequestGet(context: any) {
             status: 200,
             headers: {
               'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
-              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Origin': corsOrigin,
+              Vary: 'Origin',
               'Cache-Control': 'no-store',
             },
           });
@@ -731,7 +738,8 @@ export async function onRequestGet(context: any) {
           status: 200,
           headers: {
             'Content-Type': contentType || 'text/plain; charset=utf-8',
-            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Origin': corsOrigin,
+            Vary: 'Origin',
             'Cache-Control': 'no-store',
           },
         });
@@ -750,7 +758,8 @@ export async function onRequestGet(context: any) {
           status: 200,
           headers: {
             'Content-Type': 'application/dash+xml; charset=utf-8',
-            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Origin': corsOrigin,
+            Vary: 'Origin',
             'Cache-Control': 'no-store',
           },
         });
@@ -758,7 +767,8 @@ export async function onRequestGet(context: any) {
 
       const respHeaders = new Headers();
       respHeaders.set('Content-Type', upstream.headers.get('content-type') || 'video/mp2t');
-      respHeaders.set('Access-Control-Allow-Origin', '*');
+      respHeaders.set('Access-Control-Allow-Origin', corsOrigin);
+      respHeaders.set('Vary', 'Origin');
       respHeaders.set('Cache-Control', 'public, max-age=30');
       const contentLength = upstream.headers.get('content-length');
       if (contentLength) respHeaders.set('Content-Length', contentLength);
@@ -770,7 +780,7 @@ export async function onRequestGet(context: any) {
     } catch {
       return new Response('Proxy timeout', {
         status: 504,
-        headers: { 'Access-Control-Allow-Origin': '*' },
+        headers: { 'Access-Control-Allow-Origin': corsOrigin, Vary: 'Origin' },
       });
     }
   }

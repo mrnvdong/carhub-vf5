@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import QRCode from 'qrcode';
 import {
   X,
   CloudUpload,
@@ -12,9 +13,19 @@ import {
   Delete,
   Sparkles,
   Trash2,
+  Smartphone,
 } from 'lucide-react';
-import { SavedPlace, UserPlaylist, VideoItem } from '../types';
+import {
+  CustomHazardPin,
+  MovieItem,
+  MovieWatchHistoryItem,
+  SavedPlace,
+  UserPlaylist,
+  VideoItem,
+} from '../types';
 import { normalizeSyncCode, pushSyncData, pullSyncData } from '../services/sync';
+import { loadMovieFavorites, loadMovieHistory } from '../services/movie';
+import { loadCustomHazards } from '../services/vf5Tools';
 import { getCarTheme } from '../utils/theme';
 
 interface PlaylistSyncModalProps {
@@ -36,7 +47,12 @@ interface PlaylistSyncModalProps {
     favorites: VideoItem[],
     playlists: UserPlaylist[],
     savedPlaces: SavedPlace[],
-    code: string
+    code: string,
+    extras?: {
+      movieFavorites?: MovieItem[];
+      movieHistory?: MovieWatchHistoryItem[];
+      customHazards?: CustomHazardPin[];
+    }
   ) => void;
   isLightTheme?: boolean;
 }
@@ -71,6 +87,8 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [copiedCoPilot, setCopiedCoPilot] = useState<boolean>(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [confirmEmptyPush, setConfirmEmptyPush] = useState<boolean>(false);
 
   const [newPlName, setNewPlName] = useState<string>('');
@@ -81,9 +99,34 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
       setCodeDigits(syncCode || '');
       setStatusMsg(null);
       setCopiedLink(false);
+      setCopiedCoPilot(false);
       setConfirmEmptyPush(false);
     }
   }, [isOpen, syncCode]);
+
+  const cleanCodeForQr = normalizeSyncCode(codeDigits);
+  useEffect(() => {
+    if (!isOpen || cleanCodeForQr.length < 4 || typeof window === 'undefined') {
+      setQrDataUrl('');
+      return;
+    }
+    let cancelled = false;
+    const copilotUrl = `${window.location.origin}/?copilot=${encodeURIComponent(cleanCodeForQr)}`;
+    QRCode.toDataURL(copilotUrl, {
+      width: 148,
+      margin: 1,
+      color: { dark: '#0f172a', light: '#ffffff' },
+    })
+      .then((url) => {
+        if (!cancelled) setQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setQrDataUrl('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, cleanCodeForQr]);
 
   if (!isOpen) return null;
 
@@ -122,14 +165,18 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
     setConfirmEmptyPush(false);
     setIsSyncing(true);
     setStatusMsg(null);
-    const res = await pushSyncData(cleanCode, favorites, playlists, savedPlaces);
+    const res = await pushSyncData(cleanCode, favorites, playlists, savedPlaces, {
+      movieFavorites: loadMovieFavorites(),
+      movieHistory: loadMovieHistory(),
+      customHazards: loadCustomHazards(),
+    });
     setIsSyncing(false);
 
     if (res.success) {
       onSaveSyncCode(cleanCode);
       setStatusMsg({
         type: 'ok',
-        text: `Đã lưu thành công lên mã VF5-${cleanCode}! Mở APTV / asCar trên xe nhập mã ${cleanCode} để tải nhạc, điểm ghim & nhận dẫn đường từ điện thoại.`,
+        text: `Đã lưu thành công lên mã VF5-${cleanCode} (Nhạc, Phim xem dở, Điểm ghim & Camera)!`,
       });
     } else {
       setStatusMsg({ type: 'err', text: res.error || 'Không thể đẩy dữ liệu.' });
@@ -152,17 +199,34 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
         res.data.favorites || [],
         res.data.playlists || [],
         res.data.savedPlaces || [],
-        cleanCode
+        cleanCode,
+        {
+          movieFavorites: res.data.movieFavorites || [],
+          movieHistory: res.data.movieHistory || [],
+          customHazards: res.data.customHazards || [],
+        }
       );
       setStatusMsg({
         type: 'ok',
         text: `Đã đồng bộ về xe: ${res.data.favorites?.length || 0} bài Yêu thích, ${
           res.data.playlists?.length || 0
-        } Playlist & ${res.data.savedPlaces?.length || 0} điểm bản đồ!`,
+        } Playlist, ${res.data.movieHistory?.length || 0} Phim xem dở & ${
+          res.data.customHazards?.length || 0
+        } Camera!`,
       });
     } else {
       setStatusMsg({ type: 'err', text: res.error || 'Không tìm thấy mã xe này.' });
     }
+  };
+
+  const handleCopyCoPilotUrl = async () => {
+    if (cleanCode.length < 4 || typeof window === 'undefined') return;
+    try {
+      const u = `${window.location.origin}/?copilot=${encodeURIComponent(cleanCode)}`;
+      await navigator.clipboard.writeText(u);
+      setCopiedCoPilot(true);
+      window.setTimeout(() => setCopiedCoPilot(false), 2500);
+    } catch {}
   };
 
   const handleCopyAutoSyncUrl = async () => {
@@ -375,27 +439,50 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                 </div>
 
                 {cleanCode.length >= 4 && (
-                  <button
-                    type="button"
-                    onClick={handleCopyAutoSyncUrl}
-                    className={`min-h-[42px] px-3.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 active:scale-95 transition ${theme.iconBtn}`}
-                  >
-                    {copiedLink ? (
-                      <>
-                        <Check className="w-4 h-4 text-emerald-500" />
-                        <span className={isLightTheme ? 'text-emerald-700' : 'text-emerald-300'}>
-                          Đã chép Link tự đồng bộ (?sync={cleanCode}) cho APTV / asCar!
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <Link2
-                          className={`w-4 h-4 ${isLightTheme ? 'text-blue-600' : 'text-sky-300'}`}
-                        />
-                        <span>Chép Link mở tự động trên APTV / asCar (?sync={cleanCode})</span>
-                      </>
+                  <div className={`rounded-2xl border p-3 flex items-center gap-3 ${theme.card}`}>
+                    {qrDataUrl && (
+                      <img
+                        src={qrDataUrl}
+                        alt={`QR Co-Pilot VF5-${cleanCode}`}
+                        className="w-24 h-24 rounded-xl bg-white p-1 shrink-0 shadow"
+                      />
                     )}
-                  </button>
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <p className={`text-xs font-black flex items-center gap-1.5 ${theme.text}`}>
+                        <Smartphone className="w-4 h-4 text-sky-400 shrink-0" />
+                        <span>Co-Pilot Hàng Ghế Sau (Quét QR)</span>
+                      </p>
+                      <p className={`text-[11px] font-semibold leading-snug ${theme.textSub}`}>
+                        Người ngồi sau quét mã QR này để chọn nhạc, mở phim &amp; gửi dẫn đường trực tiếp lên màn VF5!
+                      </p>
+                      <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={handleCopyCoPilotUrl}
+                          className={`min-h-[32px] px-2.5 rounded-lg border text-[11px] font-extrabold flex items-center gap-1 active:scale-95 ${theme.iconBtn}`}
+                        >
+                          {copiedCoPilot ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <Smartphone className="w-3.5 h-3.5 text-sky-400" />
+                          )}
+                          <span>{copiedCoPilot ? 'Đã chép link Co-Pilot' : 'Link Co-Pilot'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCopyAutoSyncUrl}
+                          className={`min-h-[32px] px-2.5 rounded-lg border text-[11px] font-extrabold flex items-center gap-1 active:scale-95 ${theme.iconBtn}`}
+                        >
+                          {copiedLink ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <Link2 className="w-3.5 h-3.5 text-violet-400" />
+                          )}
+                          <span>{copiedLink ? 'Đã chép ?sync' : 'Link ?sync APTV'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 {statusMsg && (

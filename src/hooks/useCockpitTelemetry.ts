@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { CustomHazardPin, TripStats } from '../types';
 import {
   playSpeedWarningBeep,
   speakVietnamese,
@@ -40,6 +41,10 @@ export interface CockpitTelemetry {
   speedAlertSound: boolean;
   onToggleSpeedAlertSound: () => void;
   requestGps: () => void;
+  tripStats: TripStats;
+  resetTrip: () => void;
+  fatigueWarning: boolean;
+  nearbyCustomHazard: { pin: CustomHazardPin; distanceM: number } | null;
 }
 
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -91,7 +96,10 @@ function decodeWeatherCode(code: number, isDay: boolean): {
   return { label: 'Thời tiết ổn định', icon: '🌤️', isRainy: false };
 }
 
-export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
+export function useCockpitTelemetry(
+  active: boolean,
+  customHazards: CustomHazardPin[] = []
+): CockpitTelemetry {
   const [speedKmh, setSpeedKmh] = useState<number | null>(null);
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'active' | 'denied' | 'unsupported'>('idle');
   const [weatherCoords, setWeatherCoords] = useState<{ lat: number; lon: number }>(() => {
@@ -125,6 +133,38 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
 
   const [weather, setWeather] = useState<WeatherInfo | null>(null);
   const [roadInfo, setRoadInfo] = useState<RoadInfraInfo | null>(null);
+  const [tripStats, setTripStats] = useState<TripStats>(() => ({
+    distanceKm: 0,
+    elapsedSec: 0,
+    avgSpeedKmh: 0,
+    maxSpeedKmh: 0,
+    startedAt: Date.now(),
+  }));
+  const [nearbyCustomHazard, setNearbyCustomHazard] = useState<{
+    pin: CustomHazardPin;
+    distanceM: number;
+  } | null>(null);
+
+  const customHazardsRef = useRef<CustomHazardPin[]>(customHazards);
+  customHazardsRef.current = customHazards;
+  const tripDistanceMRef = useRef<number>(0);
+  const tripMaxSpeedRef = useRef<number>(0);
+  const tripStartedAtRef = useRef<number>(Date.now());
+  const fatigueAnnouncedRef = useRef<boolean>(false);
+
+  const resetTrip = useCallback(() => {
+    tripDistanceMRef.current = 0;
+    tripMaxSpeedRef.current = 0;
+    tripStartedAtRef.current = Date.now();
+    fatigueAnnouncedRef.current = false;
+    setTripStats({
+      distanceKm: 0,
+      elapsedSec: 0,
+      avgSpeedKmh: 0,
+      maxSpeedKmh: 0,
+      startedAt: tripStartedAtRef.current,
+    });
+  }, []);
 
   const [speedAlertSound, setSpeedAlertSound] = useState<boolean>(() => {
     try {
@@ -200,6 +240,11 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
           );
           const dtSec = (now - prevFixRef.current.time) / 1000;
 
+          // Cộng dồn quãng đường hành trình (lọc nhiễu GPS < 12m và lọc nhảy sai > 65 m/s ≈ 234 km/h)
+          if (accuracy <= 60 && distM >= 12 && dtSec > 0.3 && distM / dtSec <= 65) {
+            tripDistanceMRef.current += distM;
+          }
+
           if (computedHeading === null && distM >= 6) {
             computedHeading = bearingDegrees(
               prevFixRef.current.lat,
@@ -229,9 +274,45 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
           const clean = rawKmh < 2.6 ? 0 : Math.min(200, rawKmh);
           smoothedSpeedRef.current =
             clean === 0 ? 0 : smoothedSpeedRef.current * 0.35 + clean * 0.65;
-          setSpeedKmh(Math.round(smoothedSpeedRef.current));
+          const roundedKmh = Math.round(smoothedSpeedRef.current);
+          setSpeedKmh(roundedKmh);
+          if (roundedKmh > tripMaxSpeedRef.current) {
+            tripMaxSpeedRef.current = roundedKmh;
+          }
         } else {
           setSpeedKmh((prev) => (prev === null ? 0 : prev));
+        }
+
+        // Kiểm tra điểm Camera / Điểm đen cá nhân đã ghim trong bán kính 350m
+        const pins = customHazardsRef.current;
+        if (pins.length > 0) {
+          let closestPin: CustomHazardPin | null = null;
+          let closestDist = Infinity;
+          for (const pin of pins) {
+            const d = haversineMeters(latitude, longitude, pin.lat, pin.lon);
+            if (d < closestDist) {
+              closestDist = d;
+              closestPin = pin;
+            }
+          }
+          if (closestPin && closestDist <= 350) {
+            const roundedM = Math.max(10, Math.round(closestDist / 10) * 10);
+            setNearbyCustomHazard({ pin: closestPin, distanceM: roundedM });
+            const key = `custom-hz:${closestPin.id}`;
+            const lastAt = announcedCameraKeysRef.current.get(key) || 0;
+            if (Date.now() - lastAt > 90000) {
+              announcedCameraKeysRef.current.set(key, Date.now());
+              speakVietnamese(`Chú ý phía trước ${roundedM} mét có ${closestPin.label}`, {
+                dedupeKey: key,
+                cooldownMs: 85000,
+                chime: true,
+              });
+            }
+          } else {
+            setNearbyCustomHazard(null);
+          }
+        } else {
+          setNearbyCustomHazard(null);
         }
 
         // Cập nhật hạ tầng đường bộ lần đầu hoặc khi xe di chuyển >= 65m (và cách >= 4s)
@@ -413,6 +494,40 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
     };
   }, [weatherCoords.lat, weatherCoords.lon]);
 
+  // Cập nhật Đồng Hồ Hành Trình (mỗi 5s) + nhắc nghỉ ngơi nếu lái liên tục >= 120 phút
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const elapsedSec = Math.max(1, Math.floor((Date.now() - tripStartedAtRef.current) / 1000));
+      const distanceKm = Math.round((tripDistanceMRef.current / 1000) * 100) / 100;
+      const avgSpeedKmh =
+        distanceKm >= 0.2 ? Math.round((distanceKm / (elapsedSec / 3600)) * 10) / 10 : 0;
+      setTripStats({
+        distanceKm,
+        elapsedSec,
+        avgSpeedKmh: Math.min(180, Math.round(avgSpeedKmh)),
+        maxSpeedKmh: tripMaxSpeedRef.current,
+        startedAt: tripStartedAtRef.current,
+      });
+
+      if (
+        !fatigueAnnouncedRef.current &&
+        elapsedSec >= 7200 &&
+        distanceKm >= 40 &&
+        speedAlertSound
+      ) {
+        fatigueAnnouncedRef.current = true;
+        speakVietnamese('Bạn đã lái xe liên tục 2 tiếng, hãy nghỉ ngơi vài phút cho an toàn', {
+          dedupeKey: 'fatigue-2h',
+          cooldownMs: 3600000,
+          chime: true,
+        });
+      }
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [speedAlertSound]);
+
+  const fatigueWarning = tripStats.elapsedSec >= 7200 && tripStats.distanceKm >= 20;
+
   // Bọc useMemo để tránh tạo object mới gây re-render CarCockpitMap 4 lần/giây khi YouTube cập nhật currentTime!
   return useMemo(
     () => ({
@@ -424,6 +539,10 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
       speedAlertSound,
       onToggleSpeedAlertSound: handleToggleSpeedAlertSound,
       requestGps: startWatch,
+      tripStats,
+      resetTrip,
+      fatigueWarning,
+      nearbyCustomHazard,
     }),
     [
       speedKmh,
@@ -434,6 +553,10 @@ export function useCockpitTelemetry(active: boolean): CockpitTelemetry {
       speedAlertSound,
       handleToggleSpeedAlertSound,
       startWatch,
+      tripStats,
+      resetTrip,
+      fatigueWarning,
+      nearbyCustomHazard,
     ]
   );
 }

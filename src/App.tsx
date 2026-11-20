@@ -3,6 +3,8 @@ import { RefreshCw, Search, Mic, WifiOff } from 'lucide-react';
 import { VideoPlayer } from './components/VideoPlayer';
 import { CarSearchModal } from './components/CarSearchModal';
 import { PlaylistSyncModal } from './components/PlaylistSyncModal';
+import { CoPilotRemoteView } from './components/CoPilotRemoteView';
+import type { MovieExternalCommand } from './components/MoviesView';
 import {
   VideoItem,
   StreamData,
@@ -17,6 +19,9 @@ import {
   SavedPlace,
   PendingNavTarget,
   MusicSource,
+  MovieItem,
+  MovieWatchHistoryItem,
+  CustomHazardPin,
 } from './types';
 import { getCarTheme, isLightMapTheme } from './utils/theme';
 import { getCategoryQuery } from './constants/categories';
@@ -25,9 +30,18 @@ import {
   pullSyncData,
   pushSyncData,
   normalizeSyncCode,
-  pollPendingNav,
+  pollCarRemoteState,
   clearPendingNav,
+  clearRemoteCommand,
 } from './services/sync';
+import {
+  loadMovieFavorites,
+  loadMovieHistory,
+  replaceMovieFavoritesStorage,
+  replaceMovieHistoryStorage,
+} from './services/movie';
+import { loadCustomHazards, saveCustomHazards } from './services/vf5Tools';
+import { VoiceCommandIntent } from './services/voiceCommands';
 import { useCarHardwareControls } from './hooks/useCarHardwareControls';
 
 const DEFAULT_PLAYLISTS: UserPlaylist[] = [
@@ -89,6 +103,26 @@ export const App: React.FC = () => {
     }
   });
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Co-Pilot Remote mode (?copilot=CODE cho hành khách ngồi ghế sau quét QR!)
+  const [copilotCode, setCopilotCode] = useState<string>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const c = normalizeSyncCode(new URLSearchParams(window.location.search).get('copilot') || '');
+        if (c.length >= 4) return c;
+      }
+    } catch {}
+    return '';
+  });
+
+  // Lệnh điều phối toàn app từ Trợ lý giọng nói & Co-Pilot ghế sau
+  const [syncPullNonce, setSyncPullNonce] = useState<number>(0);
+  const [movieCommand, setMovieCommand] = useState<MovieExternalCommand | null>(null);
+  const [tvChannelCommand, setTvChannelCommand] = useState<{ nonce: number; query: string } | null>(null);
+  const [newsAutoPlayNonce, setNewsAutoPlayNonce] = useState<number>(0);
+  const [hudOpenNonce, setHudOpenNonce] = useState<number>(0);
+  const [remoteTogglePlayNonce, setRemoteTogglePlayNonce] = useState<number>(0);
+  const lastSeenCmdIdRef = useRef<string>('');
 
   // Search Modal state
   const [isSearchModalOpen, setIsSearchModalOpen] = useState<boolean>(false);
@@ -494,13 +528,18 @@ export const App: React.FC = () => {
     }
   }, [videos]);
 
-  // Upgrade #2: Đồng bộ chuẩn xác (hỗ trợ xóa bài/playlist + đồng bộ điểm ghim bản đồ + không tự đẩy ngược sau khi tải!)
+  // Upgrade #2 + #8: Đồng bộ chuẩn xác Nhạc + Điểm ghim + Phim xem dở + Camera cá nhân!
   const applyPulledSync = useCallback(
     (
       pulledFavs: VideoItem[],
       pulledPlaylists: UserPlaylist[],
       pulledPlaces: SavedPlace[],
-      code: string
+      code: string,
+      extras?: {
+        movieFavorites?: MovieItem[];
+        movieHistory?: MovieWatchHistoryItem[];
+        customHazards?: CustomHazardPin[];
+      }
     ) => {
       suppressNextAutoPushRef.current = true;
       setSyncCode(code);
@@ -511,12 +550,24 @@ export const App: React.FC = () => {
       if (Array.isArray(pulledPlaces)) {
         setSavedPlaces(pulledPlaces);
       }
+      if (extras) {
+        if (Array.isArray(extras.movieFavorites) && extras.movieFavorites.length > 0) {
+          replaceMovieFavoritesStorage(extras.movieFavorites);
+        }
+        if (Array.isArray(extras.movieHistory) && extras.movieHistory.length > 0) {
+          replaceMovieHistoryStorage(extras.movieHistory);
+        }
+        if (Array.isArray(extras.customHazards) && extras.customHazards.length > 0) {
+          saveCustomHazards(extras.customHazards);
+        }
+        setSyncPullNonce((n) => n + 1);
+      }
     },
     []
   );
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || copilotCode) return;
     const params = new URLSearchParams(window.location.search);
     const urlSync = normalizeSyncCode(params.get('sync') || '');
     const targetCode = urlSync || syncCode;
@@ -528,7 +579,12 @@ export const App: React.FC = () => {
               res.data.favorites || [],
               res.data.playlists || [],
               res.data.savedPlaces || [],
-              targetCode
+              targetCode,
+              {
+                movieFavorites: res.data.movieFavorites,
+                movieHistory: res.data.movieHistory,
+                customHazards: res.data.customHazards,
+              }
             );
             if (res.data.pendingNav) {
               let isSelfSent = false;
@@ -550,7 +606,7 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Tự động đẩy ngầm lên mây khi người dùng sửa Yêu thích / Playlist / Điểm ghim (bỏ qua nếu vừa tải về từ mây!)
+  // Tự động đẩy ngầm lên mây khi người dùng sửa Yêu thích / Playlist / Điểm ghim (kèm Phim & Camera)
   const isInitialMountRef = useRef(true);
   useEffect(() => {
     if (isInitialMountRef.current) {
@@ -561,38 +617,84 @@ export const App: React.FC = () => {
       suppressNextAutoPushRef.current = false;
       return;
     }
-    if (syncCode.length < 4) return;
+    if (syncCode.length < 4 || copilotCode) return;
     const timer = window.setTimeout(() => {
-      pushSyncData(syncCode, favorites, playlists, savedPlaces).catch(() => {});
+      pushSyncData(syncCode, favorites, playlists, savedPlaces, {
+        movieFavorites: loadMovieFavorites(),
+        movieHistory: loadMovieHistory(),
+        customHazards: loadCustomHazards(),
+      }).catch(() => {});
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [favorites, playlists, savedPlaces, syncCode]);
+  }, [favorites, playlists, savedPlaces, syncCode, copilotCode]);
 
-  // Send-to-Car Polling nhẹ (12s/lần khi tab đang bật & đã gắn Mã Xe): nhận điểm đến từ điện thoại lên màn VF5!
+  // Send-to-Car & Co-Pilot Polling tiết kiệm KV (25s/lần, chỉ chạy khi tab hiển thị & không ở chế độ Co-Pilot):
+  // Nhận đồng thời điểm đến dẫn đường (pendingNav) VÀ lệnh Co-Pilot ghế sau (remoteCmd) trong cùng 1 request!
   useEffect(() => {
-    if (syncCode.length < 4) return;
+    if (syncCode.length < 4 || copilotCode) return;
     let cancelled = false;
 
-    const checkNav = async () => {
+    const checkRemote = async () => {
       if (cancelled || document.visibilityState !== 'visible') return;
-      const pending = await pollPendingNav(syncCode);
-      if (cancelled || !pending || !pending.id) return;
-      if (lastSeenNavIdRef.current === pending.id) return;
-      try {
-        if (sessionStorage.getItem('carhub_self_sent_nav_id') === pending.id) return;
-      } catch {}
+      const { pendingNav, remoteCmd } = await pollCarRemoteState(syncCode);
+      if (cancelled) return;
 
-      const sentMs = Date.parse(pending.sentAt || '');
-      const isFresh = isNaN(sentMs) || Date.now() - sentMs < 20 * 60 * 1000;
-      if (!isFresh) return;
+      if (pendingNav && pendingNav.id && lastSeenNavIdRef.current !== pendingNav.id) {
+        let isSelfSent = false;
+        try {
+          isSelfSent = sessionStorage.getItem('carhub_self_sent_nav_id') === pendingNav.id;
+        } catch {}
+        const sentMs = Date.parse(pendingNav.sentAt || '');
+        const isFresh = isNaN(sentMs) || Date.now() - sentMs < 20 * 60 * 1000;
+        if (!isSelfSent && isFresh) {
+          lastSeenNavIdRef.current = pendingNav.id;
+          setIncomingNavTarget(pendingNav);
+        }
+      }
 
-      lastSeenNavIdRef.current = pending.id;
-      setIncomingNavTarget(pending);
+      if (remoteCmd && remoteCmd.id && lastSeenCmdIdRef.current !== remoteCmd.id) {
+        let isSelfCmd = false;
+        try {
+          isSelfCmd = sessionStorage.getItem('carhub_self_sent_cmd_id') === remoteCmd.id;
+        } catch {}
+        const cmdMs = Date.parse(remoteCmd.sentAt || '');
+        const isFreshCmd = isNaN(cmdMs) || Date.now() - cmdMs < 5 * 60 * 1000;
+        if (!isSelfCmd && isFreshCmd) {
+          lastSeenCmdIdRef.current = remoteCmd.id;
+          clearRemoteCommand(syncCode).catch(() => {});
+          if (remoteCmd.action === 'playTrack' && remoteCmd.payload?.id) {
+            const tr = remoteCmd.payload as VideoItem;
+            setVideos((prev) => mergeUniqueTracks([tr], prev));
+            playVideoRef.current?.(tr, 'explore');
+          } else if (remoteCmd.action === 'queueTrack' && remoteCmd.payload?.id) {
+            const tr = remoteCmd.payload as VideoItem;
+            setVideos((prev) => {
+              if (prev.some((x) => x.id === tr.id)) return prev;
+              return [...prev, tr];
+            });
+          } else if (remoteCmd.action === 'openMovie' && remoteCmd.payload?.slug) {
+            setRailSection('movies');
+            setMovieCommand({
+              nonce: Date.now(),
+              open: {
+                slug: remoteCmd.payload.slug,
+                source: remoteCmd.payload.source || 'kkphim',
+              },
+            });
+          } else if (remoteCmd.action === 'playPause') {
+            setRemoteTogglePlayNonce((n) => n + 1);
+          } else if (remoteCmd.action === 'next') {
+            handleNextRef.current?.();
+          } else if (remoteCmd.action === 'prev') {
+            handlePrevRef.current?.();
+          }
+        }
+      }
     };
 
-    const timer = window.setInterval(checkNav, 12000);
+    const timer = window.setInterval(checkRemote, 25000);
     const onVis = () => {
-      if (document.visibilityState === 'visible') checkNav();
+      if (document.visibilityState === 'visible') checkRemote();
     };
     document.addEventListener('visibilitychange', onVis);
 
@@ -601,7 +703,7 @@ export const App: React.FC = () => {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [syncCode]);
+  }, [syncCode, copilotCode]);
 
   const handleConsumeIncomingNav = useCallback(() => {
     setIncomingNavTarget(null);
@@ -1064,6 +1166,160 @@ export const App: React.FC = () => {
   const totalSavedCount =
     favorites.length + playlists.reduce((sum, p) => sum + p.items.length, 0);
 
+  // Refs trỏ tới hàm phát/chuyển bài mới nhất cho Co-Pilot polling
+  const playVideoRef = useRef(playVideo);
+  playVideoRef.current = playVideo;
+  const handleNextRef = useRef(handleNext);
+  handleNextRef.current = handleNext;
+  const handlePrevRef = useRef(handlePrev);
+  handlePrevRef.current = handlePrev;
+
+  // Trợ lý Giọng Nói Đa Năng Toàn App VF5
+  const handleVoiceCommand = useCallback(
+    (intent: VoiceCommandIntent): boolean => {
+      const getLastCoords = () => {
+        try {
+          const saved = localStorage.getItem('carhub_last_coords');
+          if (saved) {
+            const p = JSON.parse(saved);
+            if (typeof p.lat === 'number' && typeof p.lon === 'number') return p;
+          }
+        } catch {}
+        return { lat: 21.0285, lon: 105.8542 };
+      };
+
+      if (intent.type === 'navigate_home') {
+        const home = savedPlaces.find((p) => p.slot === 'home');
+        setRailSection('cockpit');
+        if (home) {
+          setIncomingNavTarget({
+            id: `voice-home-${Date.now()}`,
+            name: home.name || 'Nhà riêng',
+            subtitle: home.subtitle || 'Điểm đã ghim',
+            lat: home.lat,
+            lon: home.lon,
+            sentAt: new Date().toISOString(),
+          });
+        }
+        return true;
+      }
+
+      if (intent.type === 'navigate_work') {
+        const work = savedPlaces.find((p) => p.slot === 'work');
+        setRailSection('cockpit');
+        if (work) {
+          setIncomingNavTarget({
+            id: `voice-work-${Date.now()}`,
+            name: work.name || 'Cơ quan',
+            subtitle: work.subtitle || 'Điểm đã ghim',
+            lat: work.lat,
+            lon: work.lon,
+            sentAt: new Date().toISOString(),
+          });
+        }
+        return true;
+      }
+
+      if (intent.type === 'find_ev') {
+        setRailSection('cockpit');
+        const c = getLastCoords();
+        fetch(`/api/places?mode=ev&lat=${c.lat.toFixed(4)}&lon=${c.lon.toFixed(4)}`)
+          .then((r) => r.json())
+          .then((d) => {
+            const first = Array.isArray(d?.items) ? d.items[0] : null;
+            if (first) {
+              setIncomingNavTarget({
+                id: `voice-ev-${Date.now()}`,
+                name: first.name || 'Trạm sạc VinFast gần nhất',
+                subtitle: first.subtitle || '',
+                lat: first.lat,
+                lon: first.lon,
+                sentAt: new Date().toISOString(),
+              });
+            }
+          })
+          .catch(() => {});
+        return true;
+      }
+
+      if (intent.type === 'navigate_place') {
+        setRailSection('cockpit');
+        const c = getLastCoords();
+        fetch(
+          `/api/places?q=${encodeURIComponent(intent.query)}&lat=${c.lat.toFixed(4)}&lon=${c.lon.toFixed(4)}`
+        )
+          .then((r) => r.json())
+          .then((d) => {
+            const first = Array.isArray(d?.items) ? d.items[0] : null;
+            if (first) {
+              setIncomingNavTarget({
+                id: `voice-nav-${Date.now()}`,
+                name: first.name || intent.query,
+                subtitle: first.subtitle || '',
+                lat: first.lat,
+                lon: first.lon,
+                sentAt: new Date().toISOString(),
+              });
+            }
+          })
+          .catch(() => {});
+        return true;
+      }
+
+      if (intent.type === 'search_movie') {
+        setRailSection('movies');
+        if (intent.query) {
+          setMovieCommand({ nonce: Date.now(), search: intent.query });
+        }
+        return true;
+      }
+
+      if (intent.type === 'open_tv') {
+        setRailSection('tv');
+        if (intent.channelQuery) {
+          setTvChannelCommand({ nonce: Date.now(), query: intent.channelQuery });
+        }
+        return true;
+      }
+
+      if (intent.type === 'open_news') {
+        setRailSection('news');
+        setNewsAutoPlayNonce((n) => n + 1);
+        return true;
+      }
+
+      if (intent.type === 'open_hud') {
+        setHudOpenNonce((n) => n + 1);
+        return true;
+      }
+
+      if (intent.type === 'set_theme') {
+        setMapTheme(intent.theme === 'light' ? 'vector3d' : 'dark3d');
+        return true;
+      }
+
+      return false;
+    },
+    [savedPlaces]
+  );
+
+  // Chế độ Co-Pilot Hàng Ghế Sau (mở khi hành khách quét mã QR ?copilot=CODE)
+  if (copilotCode) {
+    return (
+      <CoPilotRemoteView
+        initialCode={copilotCode}
+        onExitCoPilot={() => {
+          setCopilotCode('');
+          try {
+            const u = new URL(window.location.href);
+            u.searchParams.delete('copilot');
+            window.history.replaceState({}, '', u.toString());
+          } catch {}
+        }}
+      />
+    );
+  }
+
   const theme = getCarTheme(isLightTheme);
 
   return (
@@ -1135,6 +1391,13 @@ export const App: React.FC = () => {
             onConsumeIncomingNav={handleConsumeIncomingNav}
             musicSource={musicSource}
             onChangeMusicSource={handleChangeMusicSource}
+            syncPullNonce={syncPullNonce}
+            movieCommand={movieCommand}
+            tvChannelCommand={tvChannelCommand}
+            newsAutoPlayNonce={newsAutoPlayNonce}
+            hudOpenNonce={hudOpenNonce}
+            remoteTogglePlayNonce={remoteTogglePlayNonce}
+            onStartRouteToTarget={setIncomingNavTarget}
           />
         ) : isLoadingVideos ? (
           <div
@@ -1207,6 +1470,7 @@ export const App: React.FC = () => {
           setStartVoiceOnOpen(false);
         }}
         onSearch={handleSearch}
+        onVoiceCommand={handleVoiceCommand}
         initialQuery={searchQuery}
         musicSource={musicSource}
         onChangeMusicSource={handleChangeMusicSource}

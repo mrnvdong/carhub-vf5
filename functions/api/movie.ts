@@ -16,6 +16,12 @@ import {
   handleResolveCobephim,
   handleResolveK20,
 } from '../_lib/movieSources';
+import {
+  getTrustedCorsOrigin,
+  isSafePublicHttpUrl,
+  isTrustedAppRequest,
+  safeFetchExternal,
+} from '../_lib/security';
 
 type MovieSource = 'kkphim' | 'vsmov' | 'cobephim' | 'k20';
 
@@ -176,38 +182,7 @@ function isSafeSlug(s: string): boolean {
 }
 
 function isSafeExternalHttpUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw);
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
-    const h = u.hostname.toLowerCase();
-    if (
-      h === 'localhost' ||
-      h === '0.0.0.0' ||
-      h === '::1' ||
-      h.endsWith('.local') ||
-      h.endsWith('.internal')
-    ) {
-      return false;
-    }
-    const ipv4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (ipv4) {
-      const a = Number(ipv4[1]);
-      const b = Number(ipv4[2]);
-      if (
-        a === 10 ||
-        a === 127 ||
-        a === 0 ||
-        (a === 169 && b === 254) ||
-        (a === 172 && b >= 16 && b <= 31) ||
-        (a === 192 && b === 168)
-      ) {
-        return false;
-      }
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  return isSafePublicHttpUrl(raw);
 }
 
 function resolveAbsoluteUrl(baseUrl: string, line: string): string {
@@ -835,30 +810,49 @@ export const onRequest: PagesFunction = async (context) => {
   }
 
   // =========================================================================
-  // 5. ACTION = CLEAN-M3U8 (Tự lọc quảng cáo chèn convertv*/ giữa phim — .ts vẫn chạy thẳng từ CDN gốc!)
+  // 5. ACTION = CLEAN-M3U8 (Tự lọc quảng cáo chèn convertv*/ giữa phim — Same-Origin + Anti-SSRF + max 2 MB!)
   // =========================================================================
   if (action === 'clean-m3u8') {
+    const corsOrigin = getTrustedCorsOrigin(request);
+    if (!isTrustedAppRequest(request, { allowAppleMediaUa: true })) {
+      return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
+        status: 403,
+        headers: { ...JSON_HEADERS, 'Access-Control-Allow-Origin': corsOrigin, Vary: 'Origin' },
+      });
+    }
+
     const targetUrl = (reqUrl.searchParams.get('url') || '').trim();
     if (!isSafeExternalHttpUrl(targetUrl)) {
       return new Response(JSON.stringify({ error: 'URL m3u8 không hợp lệ' }), {
         status: 400,
-        headers: JSON_HEADERS,
+        headers: { ...JSON_HEADERS, 'Access-Control-Allow-Origin': corsOrigin, Vary: 'Origin' },
       });
     }
 
     try {
+      const MAX_M3U8_BYTES = 2 * 1024 * 1024;
       const fetchM3u8 = async (u: string): Promise<{ text: string; finalUrl: string }> => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 9000);
         try {
-          const r = await fetch(u, {
+          const { response: r, finalUrl } = await safeFetchExternal(u, {
             method: 'GET',
-            redirect: 'follow',
             signal: controller.signal,
             headers: { 'User-Agent': UA },
           });
           if (!r.ok) throw new Error(`M3U8 HTTP ${r.status}`);
-          return { text: await r.text(), finalUrl: r.url || u };
+          const cl = Number(r.headers.get('Content-Length') || '0');
+          if (Number.isFinite(cl) && cl > MAX_M3U8_BYTES) {
+            throw new Error('Playlist quá lớn');
+          }
+          const text = await r.text();
+          if (text.length > MAX_M3U8_BYTES) {
+            throw new Error('Playlist quá lớn');
+          }
+          if (!text.trimStart().startsWith('#EXTM3U')) {
+            throw new Error('Không phải luồng HLS M3U8 hợp lệ');
+          }
+          return { text, finalUrl };
         } finally {
           clearTimeout(timer);
         }
@@ -889,14 +883,15 @@ export const onRequest: PagesFunction = async (context) => {
           }
         }
 
-        if (bestUrl) {
+        if (bestUrl && isSafeExternalHttpUrl(bestUrl)) {
           const variant = await fetchM3u8(bestUrl);
           const cleaned = cleanVariantPlaylist(variant.text, variant.finalUrl);
           return new Response(cleaned.text, {
             status: 200,
             headers: {
               'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
-              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Origin': corsOrigin,
+              Vary: 'Origin',
               'X-Ad-Segments-Stripped': String(cleaned.strippedCount),
               'Cache-Control': 'public, max-age=600, s-maxage=600',
             },
@@ -909,7 +904,8 @@ export const onRequest: PagesFunction = async (context) => {
         status: 200,
         headers: {
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
-          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Origin': corsOrigin,
+          Vary: 'Origin',
           'X-Ad-Segments-Stripped': String(cleaned.strippedCount),
           'Cache-Control': 'public, max-age=600, s-maxage=600',
         },
@@ -917,7 +913,10 @@ export const onRequest: PagesFunction = async (context) => {
     } catch (err: any) {
       return new Response(
         JSON.stringify({ error: err?.message || 'Không lọc được luồng m3u8' }),
-        { status: 502, headers: JSON_HEADERS }
+        {
+          status: 502,
+          headers: { ...JSON_HEADERS, 'Access-Control-Allow-Origin': corsOrigin, Vary: 'Origin' },
+        }
       );
     }
   }

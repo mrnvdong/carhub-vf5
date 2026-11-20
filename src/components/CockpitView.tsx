@@ -153,6 +153,10 @@ interface CockpitViewProps {
   onOpenFullNews: () => void;
   uiScale: UiScale;
   onChangeUiScale: (scale: UiScale) => void;
+  batterySoc?: number;
+  kmPerPct?: number;
+  onOpenVf5Tools?: (tab?: 'ev' | 'eq' | 'hazards' | 'safety') => void;
+  onQuickPinCamera?: () => void;
 }
 
 export const CockpitView: React.FC<CockpitViewProps> = React.memo(
@@ -219,6 +223,10 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     onOpenFullNews,
     uiScale,
     onChangeUiScale,
+    batterySoc = 78,
+    kmPerPct = 2.85,
+    onOpenVf5Tools,
+    onQuickPinCamera,
   }) => {
     const theme = getCarTheme(isLightTheme);
     const splitContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1217,22 +1225,71 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   )}
                 </div>
 
-                {primaryHazard && (
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[0.68rem] font-black flex items-center gap-1 shrink-0 border shadow ${
-                      primaryHazard.type === 'camera'
-                        ? 'bg-rose-600 border-rose-300 text-white animate-pulse'
-                        : 'bg-amber-500 border-amber-200 text-slate-950'
-                    }`}
-                  >
-                    {primaryHazard.type === 'camera' ? (
-                      <CameraIcon className="w-3 h-3 shrink-0" />
-                    ) : (
+                <div className="flex items-center gap-1 shrink-0">
+                  {telemetry.nearbyCustomHazard ? (
+                    <span className="px-2 py-0.5 rounded-full text-[0.68rem] font-black flex items-center gap-1 shrink-0 border shadow bg-amber-500 border-amber-200 text-slate-950 animate-pulse">
                       <AlertTriangle className="w-3 h-3 shrink-0" />
-                    )}
-                    <span className="truncate max-w-[8rem]">{primaryHazard.label}</span>
-                  </span>
-                )}
+                      <span className="truncate max-w-[8rem]">
+                        {telemetry.nearbyCustomHazard.pin.label} ({telemetry.nearbyCustomHazard.distanceM}m)
+                      </span>
+                    </span>
+                  ) : (
+                    primaryHazard && (
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[0.68rem] font-black flex items-center gap-1 shrink-0 border shadow ${
+                          primaryHazard.type === 'camera'
+                            ? 'bg-rose-600 border-rose-300 text-white animate-pulse'
+                            : 'bg-amber-500 border-amber-200 text-slate-950'
+                        }`}
+                      >
+                        {primaryHazard.type === 'camera' ? (
+                          <CameraIcon className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <AlertTriangle className="w-3 h-3 shrink-0" />
+                        )}
+                        <span className="truncate max-w-[8rem]">{primaryHazard.label}</span>
+                      </span>
+                    )
+                  )}
+
+                  {onOpenVf5Tools && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenVf5Tools('ev');
+                      }}
+                      title="Pin VF5, Hành trình, DSP Loa & HUD kính lái"
+                      className={`px-2 py-0.5 rounded-full border text-[0.66rem] font-black tabular-nums flex items-center gap-1 active:scale-95 transition ${
+                        batterySoc <= 20
+                          ? 'bg-rose-600 border-rose-300 text-white'
+                          : isLightTheme
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                          : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300 hover:bg-emerald-500/30'
+                      }`}
+                    >
+                      <span>⚡</span>
+                      <span>
+                        {batterySoc}% • ~{Math.round(batterySoc * kmPerPct)}km
+                      </span>
+                    </button>
+                  )}
+
+                  {onQuickPinCamera && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onQuickPinCamera();
+                      }}
+                      title="Ghim nhanh Camera phạt nguội tại vị trí hiện tại"
+                      className={`px-1.5 py-0.5 rounded-full border text-[0.66rem] font-black flex items-center gap-0.5 active:scale-95 transition ${theme.iconBtn}`}
+                    >
+                      <span>📷</span>
+                      <span className="cq-hide-md">+Cam</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Hàng 3 (Chỉ hiện khi đang Dẫn đường): Thẻ hướng dẫn rẽ, đích đến & nút điều khiển chỉ đường */}

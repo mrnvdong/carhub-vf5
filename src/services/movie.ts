@@ -471,3 +471,15 @@ export function toggleMovieFavoriteStorage(movie: MovieItem): {
   }
   return { list, isFav: !exists };
 }
+
+export function replaceMovieHistoryStorage(list: MovieWatchHistoryItem[]): void {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 40)));
+  } catch {}
+}
+
+export function replaceMovieFavoritesStorage(list: MovieItem[]): void {
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(list.slice(0, 80)));
+  } catch {}
+}

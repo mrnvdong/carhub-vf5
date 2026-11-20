@@ -13,11 +13,17 @@ import {
 } from 'lucide-react';
 import { MusicSource, ViewMode } from '../types';
 import { getCarTheme } from '../utils/theme';
+import {
+  VOICE_COMMAND_HINTS,
+  VoiceCommandIntent,
+  parseVietnameseVoiceCommand,
+} from '../services/voiceCommands';
 
 interface CarSearchModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSearch: (query: string, sourceOverride?: MusicSource) => void;
+  onVoiceCommand?: (intent: VoiceCommandIntent) => boolean;
   initialQuery?: string;
   musicSource: MusicSource;
   onChangeMusicSource: (source: MusicSource) => void;
@@ -59,6 +65,7 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
   isOpen,
   onClose,
   onSearch,
+  onVoiceCommand,
   initialQuery = '',
   musicSource,
   onChangeMusicSource: _onChangeMusicSource,
@@ -85,10 +92,12 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
   const submittedRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const onSearchRef = useRef(onSearch);
+  const onVoiceCommandRef = useRef(onVoiceCommand);
   const onCloseRef = useRef(onClose);
 
   useEffect(() => {
     onSearchRef.current = onSearch;
+    onVoiceCommandRef.current = onVoiceCommand;
     onCloseRef.current = onClose;
   });
 
@@ -109,7 +118,13 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
         recognitionRef.current.abort();
       } catch {}
     }
-    onSearchRef.current(clean, modalSourceRef.current);
+    const intent = parseVietnameseVoiceCommand(clean);
+    if (intent.type !== 'search_music' && onVoiceCommandRef.current?.(intent)) {
+      onCloseRef.current();
+      return;
+    }
+    const finalMusicQuery = intent.type === 'search_music' ? intent.query : clean;
+    onSearchRef.current(finalMusicQuery, modalSourceRef.current);
     onCloseRef.current();
   }, []);
 
@@ -440,18 +455,45 @@ export const CarSearchModal: React.FC<CarSearchModalProps> = ({
                   <span
                     className={`text-[11px] font-extrabold uppercase tracking-wider ${theme.textSub}`}
                   >
-                    {isListening ? 'ĐANG NGHE TIẾNG VIỆT...' : 'TÌM NHANH BẰNG GIỌNG NÓI'}
+                    {isListening
+                      ? 'ĐANG NGHE TRỢ LÝ GIỌNG NÓI VF5...'
+                      : 'TRỢ LÝ GIỌNG NÓI ĐA NĂNG VF5'}
                   </span>
                 </div>
                 <p className={`text-sm sm:text-base font-extrabold mt-0.5 line-clamp-2 ${theme.text}`}>
                   {voiceNotice ||
                     interimTranscript ||
                     (isListening
-                      ? 'Hãy đọc tên bài hát hoặc ca sĩ...'
-                      : 'Chạm vào đây rồi đọc tên bài hát (không cần gõ phím)')}
+                      ? 'Nói: "Dẫn đường về nhà", "Tìm trạm sạc", "Mở phim...", "Bật VOV" hoặc tên bài hát...'
+                      : 'Chạm rồi nói lệnh bất kỳ: Dẫn đường, Trạm sạc, Mở phim, VOV, Đọc báo, hoặc tên bài hát')}
                 </p>
               </div>
             </button>
+          )}
+
+          {/* LỆNH NHANH 1 CHẠM CHO TRỢ LÝ VF5 */}
+          {!query && onVoiceCommand && (
+            <div className={`p-3 rounded-2xl border ${theme.card}`}>
+              <h4
+                className={`text-xs font-extrabold uppercase tracking-wider mb-2 px-1 flex items-center gap-1.5 ${theme.textSub}`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Lệnh nhanh toàn xe VF5 (1 chạm hoặc đọc giọng nói)</span>
+              </h4>
+              <div className="flex flex-wrap gap-1.5">
+                {VOICE_COMMAND_HINTS.map((hint) => (
+                  <button
+                    key={hint.cmd}
+                    type="button"
+                    onClick={() => executeSearch(hint.cmd)}
+                    className={`min-h-[38px] px-3 rounded-full border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition ${theme.chipIdle}`}
+                  >
+                    <span>{hint.icon}</span>
+                    <span>{hint.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           {/* REAL-TIME AUTO-COMPLETE SUGGESTIONS */}

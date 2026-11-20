@@ -1,12 +1,12 @@
 {
-  "name": "CarHub VF5 — CarPlay HUD & Nhạc 3D",
+  "name": "CarHub VF5 - Giải trí & Dẫn đường Ô tô",
   "short_name": "CarHub VF5",
-  "description": "Trình nghe nhạc, Video, Bản đồ 3D dẫn đường & Biển báo tốc độ chuyên biệt cho VinFast VF5 (Apple CarPlay APTV & asCar)",
+  "description": "Cockpit 3D, Dẫn đường, Nhạc YouTube/SoundCloud, TV Live, Báo Audio & Rạp Phim 4 nguồn sạch QC cho VinFast VF5 & Apple CarPlay.",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "landscape",
-  "background_color": "#050507",
-  "theme_color": "#050507",
+  "orientation": "any",
+  "background_color": "#070a12",
+  "theme_color": "#070a12",
   "icons": [
     {
       "src": "/car-icon.svg",

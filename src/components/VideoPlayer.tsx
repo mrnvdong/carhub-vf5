@@ -5,6 +5,7 @@ import React, {
   useRef,
   useMemo,
   useCallback,
+  Suspense,
 } from 'react';
 import {
   Play,
@@ -64,6 +65,9 @@ import {
   PendingNavTarget,
   ActiveNavSummary,
   MusicSource,
+  CustomHazardKind,
+  CustomHazardPin,
+  EqSettings,
 } from '../types';
 import { MEDIA_CATEGORIES } from '../constants/categories';
 import { formatSeconds, resolveSoundCloudStream } from '../services/api';
@@ -74,11 +78,40 @@ import { useCockpitTelemetry } from '../hooks/useCockpitTelemetry';
 import { useTvLive } from '../hooks/useTvLive';
 import { useNewsAudio, NewsAudioController } from '../hooks/useNewsAudio';
 import { CockpitView, VideoSlotRect } from './CockpitView';
-import { TvLiveView } from './TvLiveView';
 import { TvPlayerStage } from './TvPlayerStage';
-import { NewsAudioView } from './NewsAudioView';
-import { MoviesView } from './MoviesView';
+import { Vf5ToolsModal } from './Vf5ToolsModal';
+import { HudOverlay } from './HudOverlay';
+import type { MovieExternalCommand } from './MoviesView';
 import { getCarTheme } from '../utils/theme';
+import {
+  getHazardKindMeta,
+  loadCustomHazards,
+  loadDrivingVideoLock,
+  loadMoviePreferDub,
+  loadVf5BatterySoc,
+  loadVf5KmPerPct,
+  saveCustomHazards,
+  saveDrivingVideoLock,
+  saveMoviePreferDub,
+  saveVf5BatterySoc,
+  saveVf5KmPerPct,
+} from '../services/vf5Tools';
+import {
+  attachAudioEq,
+  loadEqSettings,
+  updateGlobalEqSettings,
+  updateGlobalEqSpeed,
+} from '../services/audioEq';
+import { pushExtrasSyncData } from '../services/sync';
+
+// Lazy-load 3 tab nặng (TV Live / Báo Audio / Rạp Phim) để giảm ~35% JS nạp ban đầu khi mở Cockpit VF5!
+const LazyTvLiveView = React.lazy(() => import('./TvLiveView'));
+const LazyNewsAudioView = React.lazy(() =>
+  import('./NewsAudioView').then((m) => ({ default: m.NewsAudioView }))
+);
+const LazyMoviesView = React.lazy(() =>
+  import('./MoviesView').then((m) => ({ default: m.MoviesView }))
+);
 
 interface VideoPlayerProps {
   streamData: StreamData;
@@ -146,6 +179,14 @@ interface VideoPlayerProps {
   // Upgrade #7: Multi-Source (YouTube + SoundCloud)
   musicSource: MusicSource;
   onChangeMusicSource: (source: MusicSource) => void;
+  // Upgrade #8: VF5 Tools, Voice Assistant, Co-Pilot Remote & Sync Extras
+  syncPullNonce?: number;
+  movieCommand?: MovieExternalCommand | null;
+  tvChannelCommand?: { nonce: number; query: string } | null;
+  newsAutoPlayNonce?: number;
+  hudOpenNonce?: number;
+  remoteTogglePlayNonce?: number;
+  onStartRouteToTarget?: (target: PendingNavTarget) => void;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -208,6 +249,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onConsumeIncomingNav,
   musicSource,
   onChangeMusicSource,
+  syncPullNonce = 0,
+  movieCommand = null,
+  tvChannelCommand = null,
+  newsAutoPlayNonce = 0,
+  hudOpenNonce = 0,
+  remoteTogglePlayNonce = 0,
+  onStartRouteToTarget,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeWrapperRef = useRef<HTMLDivElement>(null);
@@ -516,8 +564,126 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [incomingNavTarget, isCockpitView, onChangeRailSection]);
 
-  // Giữ GPS & cảnh báo tốc độ / giọng nói chỉ đường chạy nền khi đang mở Cockpit HOẶC đang có lộ trình dẫn đường!
-  const telemetry = useCockpitTelemetry(isCockpitView || Boolean(activeNavSummary));
+  // VF5 Utility Hub: Pin EV, DSP Equalizer, Camera Cá Nhân, HUD Kính Lái, Khóa hình lái xe & Ưu tiên Phim Thuyết minh
+  const [batterySoc, setBatterySoc] = useState<number>(() => loadVf5BatterySoc());
+  const [kmPerPct, setKmPerPct] = useState<number>(() => loadVf5KmPerPct());
+  const [eqSettings, setEqSettings] = useState<EqSettings>(() => loadEqSettings());
+  const [customHazards, setCustomHazards] = useState<CustomHazardPin[]>(() => loadCustomHazards());
+  const [drivingVideoLock, setDrivingVideoLock] = useState<boolean>(() => loadDrivingVideoLock());
+  const [moviePreferDub, setMoviePreferDub] = useState<boolean>(() => loadMoviePreferDub());
+  const [showVf5Tools, setShowVf5Tools] = useState<boolean>(false);
+  const [vf5ToolsTab, setVf5ToolsTab] = useState<'ev' | 'eq' | 'hazards' | 'safety'>('ev');
+  const [showHud, setShowHud] = useState<boolean>(false);
+
+  // Giữ GPS & cảnh báo tốc độ / giọng nói chỉ đường / camera cá nhân chạy nền!
+  const telemetry = useCockpitTelemetry(
+    isCockpitView || Boolean(activeNavSummary) || showHud || drivingVideoLock,
+    customHazards
+  );
+
+  // Đồng bộ tốc độ xe vào DSP Speed-Sensitive Volume
+  useEffect(() => {
+    updateGlobalEqSpeed(telemetry.speedKmh, [audioRef.current]);
+  }, [telemetry.speedKmh]);
+
+  // Nạp lại điểm Camera cá nhân khi App vừa đồng bộ từ mây về
+  useEffect(() => {
+    if (syncPullNonce > 0) {
+      setCustomHazards(loadCustomHazards());
+    }
+  }, [syncPullNonce]);
+
+  // Tự đẩy điểm Camera cá nhân lên CARHUB_KV khi chỉnh sửa
+  const hazardsInitRef = useRef(true);
+  useEffect(() => {
+    if (hazardsInitRef.current) {
+      hazardsInitRef.current = false;
+      return;
+    }
+    saveCustomHazards(customHazards);
+    if (syncCode.length >= 4) {
+      const t = window.setTimeout(() => {
+        pushExtrasSyncData(syncCode, { customHazards }).catch(() => {});
+      }, 2000);
+      return () => window.clearTimeout(t);
+    }
+  }, [customHazards, syncCode]);
+
+  // Mở HUD kính lái khi Trợ lý giọng nói yêu cầu
+  useEffect(() => {
+    if (hudOpenNonce > 0) {
+      setShowHud(true);
+    }
+  }, [hudOpenNonce]);
+
+  const handleOpenVf5Tools = useCallback((tab: 'ev' | 'eq' | 'hazards' | 'safety' = 'ev') => {
+    setVf5ToolsTab(tab);
+    setShowVf5Tools(true);
+  }, []);
+
+  const handleChangeBatterySoc = useCallback((soc: number) => {
+    setBatterySoc(saveVf5BatterySoc(soc));
+  }, []);
+
+  const handleChangeKmPerPct = useCallback((eff: number) => {
+    setKmPerPct(saveVf5KmPerPct(eff));
+  }, []);
+
+  const handleChangeEqSettings = useCallback((next: EqSettings) => {
+    setEqSettings(next);
+    updateGlobalEqSettings(next, [audioRef.current]);
+  }, []);
+
+  const handleAddCustomHazard = useCallback(
+    (kind: CustomHazardKind, customLabel?: string) => {
+      const meta = getHazardKindMeta(kind);
+      const pin: CustomHazardPin = {
+        id: `hz-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        kind,
+        label: customLabel || meta.defaultLabel,
+        lat: telemetry.position.lat,
+        lon: telemetry.position.lon,
+        createdAt: Date.now(),
+      };
+      setCustomHazards((prev) => [pin, ...prev].slice(0, 50));
+      setHardwareNotice(`📍 Đã ghim "${pin.label}" tại vị trí hiện tại!`);
+      window.setTimeout(() => setHardwareNotice(null), 2400);
+    },
+    [telemetry.position.lat, telemetry.position.lon]
+  );
+
+  const handleRemoveCustomHazard = useCallback((id: string) => {
+    setCustomHazards((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const handleFindEvChargersQuick = useCallback(async () => {
+    onChangeRailSection('cockpit');
+    try {
+      const res = await fetch(
+        `/api/places?mode=ev&lat=${telemetry.position.lat.toFixed(4)}&lon=${telemetry.position.lon.toFixed(4)}`
+      );
+      const data = await res.json();
+      const first = Array.isArray(data?.items) ? data.items[0] : null;
+      if (first && onStartRouteToTarget) {
+        onStartRouteToTarget({
+          id: `ev-${Date.now()}`,
+          name: first.name || 'Trạm sạc VinFast gần nhất',
+          subtitle: first.subtitle || `Cách ${first.distanceKm?.toFixed?.(1) || '?'} km`,
+          lat: first.lat,
+          lon: first.lon,
+          sentAt: new Date().toISOString(),
+        });
+        setHardwareNotice(`⚡ Dẫn đường tới: ${first.name}`);
+        window.setTimeout(() => setHardwareNotice(null), 2500);
+      } else {
+        setHardwareNotice('⚡ Đang mở bản đồ Cockpit — hãy chạm nút tìm Trạm sạc');
+        window.setTimeout(() => setHardwareNotice(null), 2500);
+      }
+    } catch {
+      setHardwareNotice('⚡ Không dò được trạm sạc gần nhất lúc này');
+      window.setTimeout(() => setHardwareNotice(null), 2500);
+    }
+  }, [onChangeRailSection, onStartRouteToTarget, telemetry.position.lat, telemetry.position.lon]);
 
   const showToast = useCallback((label: string) => {
     setHardwareNotice(label);
@@ -1215,9 +1381,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [hasNext, hasPrev, onNext, onPrev, showToast, togglePlay, triggerDoubleTapHeart]
   );
 
-  // Điều khiển phím cứng vô lăng VF5 & Apple CarPlay MediaSession (nhường quyền cho Báo Audio khi đang nghe báo!)
+  // Nhận lệnh từ Trợ lý giọng nói: mở kênh TV / VOV Giao thông tương ứng
+  const handledTvCmdRef = useRef<number>(0);
+  useEffect(() => {
+    if (!tvChannelCommand || tvChannelCommand.nonce === handledTvCmdRef.current) return;
+    const channels = tvController.playlist?.channels || [];
+    if (channels.length === 0) return;
+    handledTvCmdRef.current = tvChannelCommand.nonce;
+    const q = (tvChannelCommand.query || '').toLowerCase().trim();
+    if (!q) return;
+    const matched = channels.find((c) => c.name.toLowerCase().includes(q));
+    if (matched) {
+      pauseAllMusicForTv();
+      setIsTvSessionActive(true);
+      tvController.setActiveChannel(matched);
+      showToast(`📺 Đang mở kênh: ${matched.name}`);
+    }
+  }, [tvChannelCommand, tvController, pauseAllMusicForTv, showToast]);
+
+  // Nhận lệnh từ Trợ lý giọng nói: mở & phát bản tin Báo Audio mới nhất
+  const handledNewsAutoRef = useRef<number>(0);
+  useEffect(() => {
+    if (newsAutoPlayNonce <= 0 || newsAutoPlayNonce === handledNewsAutoRef.current) return;
+    if (!newsController.items || newsController.items.length === 0) return;
+    handledNewsAutoRef.current = newsAutoPlayNonce;
+    newsController.selectArticle(newsController.items[0], true);
+  }, [newsAutoPlayNonce, newsController]);
+
+  // Nhận lệnh Co-Pilot ghế sau: Play / Pause nhạc trên màn xe
+  const handledRemoteToggleRef = useRef<number>(0);
+  useEffect(() => {
+    if (remoteTogglePlayNonce <= 0 || remoteTogglePlayNonce === handledRemoteToggleRef.current) return;
+    handledRemoteToggleRef.current = remoteTogglePlayNonce;
+    togglePlay();
+  }, [remoteTogglePlayNonce, togglePlay]);
+
+  // Điều khiển phím cứng vô lăng VF5 & Apple CarPlay MediaSession
+  // (VÁ LỖI: nhường quyền hoàn toàn khi đang nghe Báo Audio, xem Phim hoặc xem TV Live để bấm vô lăng không bật đè nhạc!)
   useCarHardwareControls({
-    enabled: !newsController.isPlaying,
+    enabled: !newsController.isPlaying && !isMoviesView && !isTvSessionActive,
     streamData,
     isPlaying,
     currentTime,
@@ -1314,14 +1516,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* AUDIO NATIVE DUY NHẤT CHO BÁO AUDIO BÁO MỚI (0ms reload khi chuyển giữa Báo Audio <-> Cockpit!) */}
       <audio ref={newsController.audioRef} playsInline preload="auto" className="hidden" />
 
-      {/* AUDIO NATIVE DUY NHẤT CHO SOUNDCLOUD (MP3 Progressive + iOS Native HLS + Lazy hls.js) */}
+      {/* AUDIO NATIVE DUY NHẤT CHO SOUNDCLOUD (MP3 Progressive + iOS Native HLS + Lazy hls.js + DSP Equalizer) */}
       <audio
         ref={audioRef}
+        crossOrigin="anonymous"
         playsInline
         preload="auto"
         className="hidden"
         onPlaying={() => {
           if (!isSoundCloudTrackRef.current) return;
+          attachAudioEq(audioRef.current);
           consecutiveErrorsRef.current = 0;
           setHasUnlockedAudio(true);
           setNeedsIframeTapHint(false);
@@ -1459,12 +1663,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
          ===================================================================== */}
       {!isFullscreen && (
         <aside
-          className={`relative z-30 order-last car:order-first flex car:flex-col items-center justify-between gap-1.5 px-2 py-1.5 car:py-2 car:px-1.5 car:w-[5.2rem] lg:w-[5.5rem] border-t car:border-t-0 car:border-r shrink-0 overflow-x-auto car:overflow-x-hidden car:overflow-y-auto no-scrollbar transition-colors ${theme.rail}`}
+          className={`relative z-30 order-last car:order-first flex car:flex-col items-center justify-between gap-1.5 px-2 py-1.5 car:py-2 car:px-1.5 car:w-[5.2rem] lg:w-[5.5rem] border-t car:border-t-0 car:border-r shrink-0 overflow-x-auto car:overflow-x-hidden car:overflow-y-hidden no-scrollbar transition-colors ${theme.rail}`}
         >
-          {/* Cụm điều hướng chính (Nút lớn >= 44px chuẩn cảm ứng ô tô!) */}
+          {/* Cụm điều hướng chính (Chỉ phần <nav> cuộn ở giữa — cụm công cụ 2x2 ghim cố định ở đáy không bao giờ bị khuất!) */}
           <nav
             aria-label="Điều hướng chính"
-            className="flex car:flex-col items-center gap-1 car:gap-1 car:w-full shrink-0"
+            className="flex car:flex-col items-center gap-1 car:gap-1 car:w-full car:flex-1 car:min-h-0 car:overflow-y-auto no-scrollbar shrink-0"
           >
             <button
               type="button"
@@ -1590,8 +1794,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           </nav>
 
-          {/* Cụm công cụ 2x2 gọn đẹp: [Mic | Sáng-Tối] + [Nhạc/Video | Cỡ chữ %] */}
-          <div className="flex car:grid car:grid-cols-2 items-center gap-1 car:w-full shrink-0">
+          {/* Cụm công cụ ghim cố định dưới đáy thanh trái: [⚡ VF5] + [Mic | Sáng-Tối] + [Nhạc/Video | Cỡ chữ %] */}
+          <div
+            className={`flex car:flex-col items-center gap-1 car:w-full shrink-0 car:pt-1.5 car:border-t ${theme.divider}`}
+          >
+            <button
+              type="button"
+              onClick={() => handleOpenVf5Tools('ev')}
+              aria-label="Mở Tiện ích VF5 (Pin EV, DSP Loa, Camera, HUD)"
+              title="Tiện ích VF5: Pin EV • DSP Loa • Camera • HUD"
+              className={`min-h-[2.2rem] px-2 car:px-0 car:w-full rounded-xl border text-[0.65rem] font-black flex items-center justify-center gap-1 active:scale-95 transition shrink-0 ${
+                isLightTheme
+                  ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800'
+                  : 'bg-emerald-500/20 hover:bg-emerald-500/35 border-emerald-400/45 text-emerald-300'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5 shrink-0" />
+              <span>VF5</span>
+            </button>
+            <div className="flex car:grid car:grid-cols-2 items-center gap-1 car:w-full shrink-0">
             <button
               type="button"
               onClick={() => onOpenSearchModal(true)}
@@ -1677,6 +1898,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             >
               {scaleLabel}
             </button>
+            </div>
           </div>
         </aside>
       )}
@@ -2663,42 +2885,79 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onOpenFullNews={handleOpenFullNews}
             uiScale={uiScale}
             onChangeUiScale={onChangeUiScale}
+            batterySoc={batterySoc}
+            kmPerPct={kmPerPct}
+            onOpenVf5Tools={handleOpenVf5Tools}
+            onQuickPinCamera={() => handleAddCustomHazard('camera', 'Camera phạt nguội')}
           />
         )}
 
         {/* -------------------------------------------------------------------
-            B2. MÀN HÌNH TRUYỀN HÌNH & RADIO TRỰC TIẾP M3U8 (VTV, VOV Giao thông, HTV, Thể thao...)
+            B2. MÀN HÌNH TRUYỀN HÌNH & RADIO TRỰC TIẾP M3U8 (Lazy-loaded giảm ~35% JS ban đầu!)
            ------------------------------------------------------------------- */}
         {isTvView && (
-          <TvLiveView
-            tv={tvController}
-            onPauseMusic={pauseAllMusicForTv}
-            onNotifyToast={showToast}
-            onTvSlotRectChange={handleTvPageSlotRectChange}
-            isLightTheme={isLightTheme}
-          />
+          <Suspense
+            fallback={
+              <div className="flex-1 flex items-center justify-center gap-2 text-sm font-bold opacity-70">
+                <Loader2 className="w-5 h-5 animate-spin text-sky-400" />
+                <span>Đang mở TV Live...</span>
+              </div>
+            }
+          >
+            <LazyTvLiveView
+              tv={tvController}
+              onPauseMusic={pauseAllMusicForTv}
+              onNotifyToast={showToast}
+              onTvSlotRectChange={handleTvPageSlotRectChange}
+              isLightTheme={isLightTheme}
+            />
+          </Suspense>
         )}
 
         {/* -------------------------------------------------------------------
-            B3. MÀN HÌNH ĐỌC BÁO & BÁO AUDIO TỪ BÁO MỚI (4 giọng đọc AI .m4a + Đọc báo sạch!)
+            B3. MÀN HÌNH ĐỌC BÁO & BÁO AUDIO TỪ BÁO MỚI (Lazy-loaded!)
            ------------------------------------------------------------------- */}
         {isNewsView && (
-          <NewsAudioView
-            news={newsController}
-            isLightTheme={isLightTheme}
-            onOpenCockpitWithNews={handleOpenCockpitWithNews}
-          />
+          <Suspense
+            fallback={
+              <div className="flex-1 flex items-center justify-center gap-2 text-sm font-bold opacity-70">
+                <Loader2 className="w-5 h-5 animate-spin text-amber-400" />
+                <span>Đang mở Báo Audio...</span>
+              </div>
+            }
+          >
+            <LazyNewsAudioView
+              news={newsController}
+              isLightTheme={isLightTheme}
+              onOpenCockpitWithNews={handleOpenCockpitWithNews}
+            />
+          </Suspense>
         )}
 
         {/* -------------------------------------------------------------------
-            B4. RẠP PHIM KKPHIM (30.000+ Phim Lẻ / Phim Bộ / Thuyết Minh / Lồng Tiếng • HLS 1080p Sạch QC!)
+            B4. RẠP PHIM 4 NGUỒN SẠCH QC (Lazy-loaded + Tìm gộp 4 nguồn + Đồng bộ Mã Xe + Khóa hình an toàn!)
            ------------------------------------------------------------------- */}
         {isMoviesView && (
-          <MoviesView
-            isLightTheme={isLightTheme}
-            onPauseOtherAudio={pauseAllOtherAudioForMovies}
-            onNotifyToast={showToast}
-          />
+          <Suspense
+            fallback={
+              <div className="flex-1 flex items-center justify-center gap-2 text-sm font-bold opacity-70">
+                <Loader2 className="w-5 h-5 animate-spin text-violet-400" />
+                <span>Đang mở Rạp Phim 4 nguồn...</span>
+              </div>
+            }
+          >
+            <LazyMoviesView
+              isLightTheme={isLightTheme}
+              onPauseOtherAudio={pauseAllOtherAudioForMovies}
+              onNotifyToast={showToast}
+              syncCode={syncCode}
+              syncPullNonce={syncPullNonce}
+              moviePreferDub={moviePreferDub}
+              drivingVideoLock={drivingVideoLock}
+              currentSpeedKmh={telemetry.speedKmh}
+              externalCommand={movieCommand}
+            />
+          </Suspense>
         )}
 
         {/* -------------------------------------------------------------------
@@ -3157,6 +3416,64 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         )}
       </div>
+
+      {/* MODAL TIỆN ÍCH VF5 (Pin EV • Hành trình • DSP Loa 5 băng tần • Camera cá nhân • An toàn & Health) */}
+      <Vf5ToolsModal
+        isOpen={showVf5Tools}
+        initialTab={vf5ToolsTab}
+        onClose={() => setShowVf5Tools(false)}
+        isLightTheme={isLightTheme}
+        telemetry={telemetry}
+        activeNavSummary={activeNavSummary}
+        batterySoc={batterySoc}
+        kmPerPct={kmPerPct}
+        onChangeBatterySoc={handleChangeBatterySoc}
+        onChangeKmPerPct={handleChangeKmPerPct}
+        onFindEvChargers={handleFindEvChargersQuick}
+        onOpenHud={() => setShowHud(true)}
+        eqSettings={eqSettings}
+        onChangeEqSettings={handleChangeEqSettings}
+        customHazards={customHazards}
+        onAddCustomHazard={handleAddCustomHazard}
+        onRemoveCustomHazard={handleRemoveCustomHazard}
+        drivingVideoLock={drivingVideoLock}
+        onToggleDrivingVideoLock={() => {
+          setDrivingVideoLock((v) => {
+            const next = !v;
+            saveDrivingVideoLock(next);
+            showToast(
+              next
+                ? '🛡️ Đã bật khóa hình Phim khi xe chạy > 15 km/h'
+                : '🔓 Đã tắt khóa hình Phim theo tốc độ'
+            );
+            return next;
+          });
+        }}
+        moviePreferDub={moviePreferDub}
+        onToggleMoviePreferDub={() => {
+          setMoviePreferDub((v) => {
+            const next = !v;
+            saveMoviePreferDub(next);
+            showToast(
+              next
+                ? '🎙️ Luôn ưu tiên bản Phim Thuyết Minh / Lồng Tiếng'
+                : '🎬 Chọn server mặc định khi mở phim'
+            );
+            return next;
+          });
+        }}
+      />
+
+      {/* CHẾ ĐỘ HUD CHIẾU KÍNH LÁI BAN ĐÊM */}
+      <HudOverlay
+        isOpen={showHud}
+        onClose={() => setShowHud(false)}
+        telemetry={telemetry}
+        activeNavSummary={activeNavSummary}
+        batterySoc={batterySoc}
+        rangeKm={Math.round(batterySoc * kmPerPct)}
+        clockTime={clockTime}
+      />
     </div>
   );
 };

@@ -44,13 +44,26 @@ import {
   toggleMovieFavoriteStorage,
 } from '../services/movie';
 import { formatSeconds } from '../services/api';
+import { pushExtrasSyncData } from '../services/sync';
 import { MoviePlayerStage } from './MoviePlayerStage';
 import { getCarTheme } from '../utils/theme';
+
+export interface MovieExternalCommand {
+  nonce: number;
+  search?: string;
+  open?: { slug: string; source: MovieSource };
+}
 
 interface MoviesViewProps {
   isLightTheme: boolean;
   onPauseOtherAudio: () => void;
   onNotifyToast: (msg: string) => void;
+  syncCode?: string;
+  syncPullNonce?: number;
+  moviePreferDub?: boolean;
+  drivingVideoLock?: boolean;
+  currentSpeedKmh?: number | null;
+  externalCommand?: MovieExternalCommand | null;
 }
 
 type LibraryMode = 'browse' | 'favorites' | 'history';
@@ -94,6 +107,12 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   isLightTheme,
   onPauseOtherAudio,
   onNotifyToast,
+  syncCode = '',
+  syncPullNonce = 0,
+  moviePreferDub = true,
+  drivingVideoLock = false,
+  currentSpeedKmh = null,
+  externalCommand = null,
 }) => {
   const theme = getCarTheme(isLightTheme);
   const browseScrollRef = useRef<HTMLDivElement>(null);
@@ -116,6 +135,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   const [activeTab, setActiveTab] = useState<MovieListType>('moi-cap-nhat');
   const [searchInput, setSearchInput] = useState<string>('');
   const [searchKeyword, setSearchKeyword] = useState<string>('');
+  const [searchAllSources, setSearchAllSources] = useState<boolean>(true);
   const [showFilters, setShowFilters] = useState<boolean>(false);
   const [selectedGenre, setSelectedGenre] = useState<string>('');
   const [selectedCountry, setSelectedCountry] = useState<string>('');
@@ -210,6 +230,57 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
       setIsLoadingList(true);
       setListError(null);
       try {
+        // Tìm gộp cả 4 kho phim song song (KKPhim + VSMov + CoBePhim + K20 4K) khi có từ khóa & bật chế độ gộp!
+        if (searchKeyword && searchAllSources) {
+          const sources: MovieSource[] = ['k20', 'kkphim', 'vsmov', 'cobephim'];
+          const settled = await Promise.allSettled(
+            sources.map((src) =>
+              fetchMovieList({
+                source: src,
+                type: 'moi-cap-nhat',
+                keyword: searchKeyword,
+                page: 1,
+                limit: 12,
+              })
+            )
+          );
+          if (cancelled) return;
+          const merged: MovieItem[] = [];
+          const seen = new Set<string>();
+          for (let i = 0; i < settled.length; i++) {
+            const r = settled[i];
+            const src = sources[i];
+            if (r.status !== 'fulfilled' || !Array.isArray(r.value.items)) continue;
+            for (const item of r.value.items) {
+              const withSrc: MovieItem = { ...item, source: item.source || src };
+              const k = getMovieKey(withSrc.source, withSrc.slug);
+              if (seen.has(k)) continue;
+              seen.add(k);
+              merged.push(withSrc);
+            }
+          }
+          // Ưu tiên 4K & Thuyết minh/Lồng tiếng lên đầu cho tài xế VF5!
+          const scoreMovie = (m: MovieItem): number => {
+            let s = 0;
+            if ((m.quality || '').toUpperCase().includes('4K')) s += 4;
+            const lowLang = (m.lang || '').toLowerCase();
+            if (lowLang.includes('thuyết minh') || lowLang.includes('lồng tiếng')) s += 3;
+            if (lowLang.includes('song ngữ')) s += 2;
+            if (m.source === 'k20') s += 1;
+            return s;
+          };
+          merged.sort((a, b) => scoreMovie(b) - scoreMovie(a));
+
+          setItems(merged);
+          setTotalPages(1);
+          setTotalItems(merged.length);
+          setUpdateToday(0);
+          if (browseScrollRef.current) {
+            browseScrollRef.current.scrollTop = 0;
+          }
+          return;
+        }
+
         const res = await fetchMovieList({
           source: movieSource,
           type: activeTab,
@@ -257,6 +328,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     selectedYear,
     selectedSortLang,
     searchKeyword,
+    searchAllSources,
     reloadNonce,
   ]);
 
@@ -329,6 +401,16 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
             const idx = normalizedDet.servers.findIndex((s) =>
               s.serverName.toLowerCase().includes('lồng tiếng')
             );
+            if (idx >= 0) targetSrv = idx;
+          } else if (moviePreferDub) {
+            // Tự động ưu tiên bản Thuyết Minh / Lồng Tiếng (tránh server 4K mã hóa CoBePhim) để nghe dễ trên xe VF5!
+            const idx = normalizedDet.servers.findIndex((s) => {
+              const low = s.serverName.toLowerCase();
+              return (
+                (low.includes('thuyết minh') || low.includes('lồng tiếng')) &&
+                !(src === 'cobephim' && low.includes('4k'))
+              );
+            });
             if (idx >= 0) targetSrv = idx;
           }
         }
@@ -465,6 +547,49 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
     },
     [movieDetail, activeServer, activeEpisode, serverIdx, activeTarget, movieSource]
   );
+
+  // Nạp lại Phim Yêu thích & Lịch sử xem mỗi khi App vừa đồng bộ từ mây về
+  useEffect(() => {
+    if (syncPullNonce > 0) {
+      setFavorites(loadMovieFavorites());
+      setHistory(loadMovieHistory());
+    }
+  }, [syncPullNonce]);
+
+  // Tự động đẩy Phim Yêu thích & Lịch sử xem dở lên Mã Xe CARHUB_KV (debounce 3s)
+  const movieSyncInitRef = useRef(true);
+  useEffect(() => {
+    if (movieSyncInitRef.current) {
+      movieSyncInitRef.current = false;
+      return;
+    }
+    if (!syncCode || syncCode.length < 4) return;
+    const t = window.setTimeout(() => {
+      pushExtrasSyncData(syncCode, {
+        movieFavorites: favorites,
+        movieHistory: history,
+      }).catch(() => {});
+    }, 3000);
+    return () => window.clearTimeout(t);
+  }, [favorites, history, syncCode]);
+
+  // Nhận lệnh từ Trợ lý giọng nói ("Mở phim ...") hoặc Co-Pilot ghế sau ("openMovie")
+  const handledCmdNonceRef = useRef<number>(0);
+  useEffect(() => {
+    if (!externalCommand || externalCommand.nonce === handledCmdNonceRef.current) return;
+    handledCmdNonceRef.current = externalCommand.nonce;
+    if (externalCommand.open) {
+      openMovie(externalCommand.open.slug, externalCommand.open.source);
+    } else if (externalCommand.search) {
+      setActiveTarget(null);
+      setMovieDetail(null);
+      setLibraryMode('browse');
+      setSearchAllSources(true);
+      setSearchInput(externalCommand.search);
+      setSearchKeyword(externalCommand.search);
+      setPage(1);
+    }
+  }, [externalCommand, openMovie]);
 
   const handleToggleFavorite = (movie: MovieItem) => {
     const withSource: MovieItem = { ...movie, source: movie.source || movieSource };
@@ -635,6 +760,8 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                 onBeforePlay={onPauseOtherAudio}
                 onProgressSave={handleProgressSave}
                 onNotifyToast={onNotifyToast}
+                drivingVideoLock={drivingVideoLock}
+                currentSpeedKmh={currentSpeedKmh}
               />
 
               {/* THANH CHUYỂN SERVER ÂM THANH / MÙA PHIM + NÚT TẬP TRƯỚC/SAU NHANH */}
@@ -1042,6 +1169,31 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           </form>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Bật/tắt Tìm gộp 4 kho phim cùng lúc */}
+            <button
+              type="button"
+              onClick={() => {
+                setSearchAllSources((prev) => {
+                  const next = !prev;
+                  onNotifyToast(
+                    next
+                      ? '🔎 Tìm kiếm gộp song song cả 4 kho phim (KKPhim + VSMov + CoBePhim + K20 4K)'
+                      : `🎯 Chỉ tìm riêng trong nguồn ${getSourceLabel(movieSource)}`
+                  );
+                  return next;
+                });
+              }}
+              title="Bật để 1 lần tìm quét cả 4 kho phim cùng lúc"
+              className={`h-10 px-2.5 rounded-xl border text-xs font-extrabold flex items-center gap-1 active:scale-95 transition shrink-0 ${
+                searchAllSources
+                  ? 'bg-amber-500 border-amber-400 text-slate-950 shadow'
+                  : theme.iconBtn
+              }`}
+            >
+              <span>🔎</span>
+              <span className="hidden sm:inline">{searchAllSources ? '4 nguồn' : '1 nguồn'}</span>
+            </button>
+
             {/* Bộ lọc nâng cao (ẩn trên K20 vì K20 dùng tab chuyên mục riêng) */}
             {movieSource !== 'k20' && (
               <button
@@ -1578,9 +1730,9 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
                           />
                           <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-black/45" />
 
-                          {/* Top badges: Source (ở tab Yêu thích) + Quality + Lang */}
+                          {/* Top badges: Source (khi Tìm gộp 4 nguồn hoặc Yêu thích) + Quality + Lang */}
                           <div className="absolute top-2 left-2 right-10 flex flex-wrap items-center gap-1">
-                            {libraryMode === 'favorites' && (
+                            {(libraryMode === 'favorites' || Boolean(searchKeyword && searchAllSources)) && (
                               <span
                                 className={`px-1.5 py-0.5 rounded-md text-[0.58rem] font-black leading-none uppercase shadow ${getSourceBadgeClass(
                                   mSrc

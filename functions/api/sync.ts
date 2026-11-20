@@ -1,9 +1,17 @@
 // Cloudflare Pages Function: /api/sync
-// Zero-login 4-8 char Car Code Sync (e.g., VF5-6868) for syncing:
-// - Favorites & Playlists
+// Zero-login Car Code Sync (4-8 ký tự, khuyến nghị 6+ ký tự, VD: VF5-686899) backed by Cloudflare KV (CARHUB_KV):
+// - Favorites & Playlists (YouTube + SoundCloud)
 // - Saved Map Places (Home, Work, EV Chargers)
-// - Send-to-Car Navigation Target (pendingNav: phone sends destination -> VF5 Cockpit auto-routes!)
-// Backed by Cloudflare KV (CARHUB_KV) + Edge Cache + local dev memory fallback.
+// - Movie Favorites & Movie Watch History (đồng bộ xem phim dở giữa Điện thoại <-> VF5!)
+// - Personal Camera / Road Hazard Pins (tự cảnh báo giọng nói khi đi qua!)
+// - Send-to-Car Navigation Target (pendingNav)
+// - Rear-Seat Co-Pilot Remote Command (remoteCmd: phát nhạc / thêm hàng đợi / mở phim / điều khiển từ hàng ghế sau!)
+
+import {
+  buildTrustedJsonHeaders,
+  isTrustedAppRequest,
+  readJsonBodyLimited,
+} from '../_lib/security';
 
 const memorySyncStore = new Map<string, string>();
 
@@ -19,15 +27,8 @@ function normalizeCode(raw: string | null): string | null {
 }
 
 function buildEdgeCacheKey(code: string): Request {
-  return new Request(`https://carhub-vf5-sync.internal/v2/code/${encodeURIComponent(code)}`);
+  return new Request(`https://carhub-vf5-sync.internal/v3/code/${encodeURIComponent(code)}`);
 }
-
-const CORS_HEADERS = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
 
 function sanitizeTrack(v: any) {
   if (!v || typeof v.id !== 'string' || !/^([a-zA-Z0-9_-]{11}|sc_\d{4,16})$/.test(v.id)) {
@@ -76,6 +77,108 @@ function sanitizePendingNav(nav: any) {
     lat,
     lon,
     sentAt: String(nav.sentAt || new Date().toISOString()).slice(0, 40),
+  };
+}
+
+const VALID_MOVIE_SOURCES = new Set(['kkphim', 'vsmov', 'cobephim', 'k20']);
+
+function sanitizeMovieItem(m: any) {
+  if (!m || typeof m.slug !== 'string' || !m.slug.trim()) return null;
+  const src = VALID_MOVIE_SOURCES.has(String(m.source)) ? String(m.source) : 'kkphim';
+  return {
+    id: String(m.id || m.slug).slice(0, 100),
+    source: src,
+    name: String(m.name || '').trim().slice(0, 160),
+    originName: String(m.originName || '').trim().slice(0, 160),
+    slug: String(m.slug).trim().slice(0, 160),
+    type: String(m.type || '').slice(0, 40),
+    posterUrl: String(m.posterUrl || '').slice(0, 350),
+    thumbUrl: String(m.thumbUrl || '').slice(0, 350),
+    year: Number(m.year) || 0,
+    quality: String(m.quality || 'HD').slice(0, 24),
+    lang: String(m.lang || 'Vietsub').slice(0, 40),
+    time: String(m.time || '').slice(0, 40),
+    episodeCurrent: String(m.episodeCurrent || '').slice(0, 50),
+    episodeTotal: String(m.episodeTotal || '').slice(0, 30),
+    chieurap: Boolean(m.chieurap),
+    subDocQuyen: Boolean(m.subDocQuyen),
+    rating: Number(m.rating) || 0,
+    categories: [],
+    countries: [],
+  };
+}
+
+function sanitizeMovieHistoryItem(h: any) {
+  if (!h || typeof h.slug !== 'string' || !h.slug.trim()) return null;
+  const src = VALID_MOVIE_SOURCES.has(String(h.source)) ? String(h.source) : 'kkphim';
+  return {
+    source: src,
+    slug: String(h.slug).trim().slice(0, 160),
+    name: String(h.name || '').trim().slice(0, 160),
+    originName: String(h.originName || '').trim().slice(0, 160),
+    posterUrl: String(h.posterUrl || '').slice(0, 350),
+    thumbUrl: String(h.thumbUrl || '').slice(0, 350),
+    year: Number(h.year) || 0,
+    quality: String(h.quality || 'HD').slice(0, 24),
+    lang: String(h.lang || '').slice(0, 40),
+    serverIndex: Math.max(0, Number(h.serverIndex) || 0),
+    serverName: String(h.serverName || '').slice(0, 80),
+    episodeSlug: String(h.episodeSlug || '').slice(0, 80),
+    episodeName: String(h.episodeName || '').slice(0, 60),
+    currentTime: Math.max(0, Number(h.currentTime) || 0),
+    duration: Math.max(0, Number(h.duration) || 0),
+    updatedAt: Number(h.updatedAt) || Date.now(),
+  };
+}
+
+function sanitizeCustomHazard(p: any) {
+  if (!p) return null;
+  const lat = Number(p.lat);
+  const lon = Number(p.lon);
+  if (isNaN(lat) || isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  const allowedKinds = new Set(['camera', 'police', 'pothole', 'speedbump', 'custom']);
+  const kind = allowedKinds.has(String(p.kind)) ? String(p.kind) : 'camera';
+  return {
+    id: String(p.id || `hz-${Date.now()}`).slice(0, 48),
+    kind,
+    label: String(p.label || 'Điểm cảnh báo').trim().slice(0, 100),
+    lat,
+    lon,
+    createdAt: Number(p.createdAt) || Date.now(),
+  };
+}
+
+function sanitizeRemoteCmd(cmd: any) {
+  if (!cmd || typeof cmd.action !== 'string') return null;
+  const allowedActions = new Set([
+    'playTrack',
+    'queueTrack',
+    'openMovie',
+    'playPause',
+    'next',
+    'prev',
+  ]);
+  if (!allowedActions.has(cmd.action)) return null;
+
+  let payload: any = null;
+  if (cmd.action === 'playTrack' || cmd.action === 'queueTrack') {
+    payload = sanitizeTrack(cmd.payload);
+    if (!payload) return null;
+  } else if (cmd.action === 'openMovie') {
+    const slug = String(cmd.payload?.slug || '').trim().slice(0, 160);
+    const source = VALID_MOVIE_SOURCES.has(String(cmd.payload?.source))
+      ? String(cmd.payload.source)
+      : 'kkphim';
+    const name = String(cmd.payload?.name || '').trim().slice(0, 160);
+    if (!slug) return null;
+    payload = { slug, source, name };
+  }
+
+  return {
+    id: String(cmd.id || `cmd-${Date.now()}`).slice(0, 64),
+    action: cmd.action,
+    payload,
+    sentAt: String(cmd.sentAt || new Date().toISOString()).slice(0, 40),
   };
 }
 
@@ -138,12 +241,13 @@ async function writeStoredRecord(code: string, payload: any, env: any): Promise<
   return storageUsed;
 }
 
-export async function onRequestOptions() {
-  return new Response(null, { status: 204, headers: CORS_HEADERS });
+export async function onRequestOptions(context: any) {
+  return new Response(null, { status: 204, headers: buildTrustedJsonHeaders(context.request) });
 }
 
 export async function onRequestGet(context: any) {
   const { request, env } = context;
+  const headers = buildTrustedJsonHeaders(request);
   const url = new URL(request.url);
   const code = normalizeCode(url.searchParams.get('code'));
   const navOnly = url.searchParams.get('navOnly') === '1';
@@ -151,7 +255,7 @@ export async function onRequestGet(context: any) {
   if (!code) {
     return new Response(
       JSON.stringify({ success: false, error: 'Mã đồng bộ phải có ít nhất 4 ký tự/chữ số.' }),
-      { status: 400, headers: CORS_HEADERS }
+      { status: 400, headers }
     );
   }
 
@@ -163,8 +267,9 @@ export async function onRequestGet(context: any) {
         success: true,
         code,
         pendingNav: record?.data?.pendingNav || null,
+        remoteCmd: record?.data?.remoteCmd || null,
       }),
-      { headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store' } }
+      { headers: { ...headers, 'Cache-Control': 'no-store' } }
     );
   }
 
@@ -179,10 +284,14 @@ export async function onRequestGet(context: any) {
           favorites: Array.isArray(record.data.favorites) ? record.data.favorites : [],
           playlists: Array.isArray(record.data.playlists) ? record.data.playlists : [],
           savedPlaces: Array.isArray(record.data.savedPlaces) ? record.data.savedPlaces : [],
+          movieFavorites: Array.isArray(record.data.movieFavorites) ? record.data.movieFavorites : [],
+          movieHistory: Array.isArray(record.data.movieHistory) ? record.data.movieHistory : [],
+          customHazards: Array.isArray(record.data.customHazards) ? record.data.customHazards : [],
           pendingNav: record.data.pendingNav || null,
+          remoteCmd: record.data.remoteCmd || null,
         },
       }),
-      { headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store' } }
+      { headers: { ...headers, 'Cache-Control': 'no-store' } }
     );
   }
 
@@ -191,77 +300,134 @@ export async function onRequestGet(context: any) {
       success: false,
       error: `Chưa tìm thấy dữ liệu cho mã VF5-${code}. Hãy bấm "Đẩy lên mây" từ điện thoại/máy tính trước.`,
     }),
-    { status: 404, headers: CORS_HEADERS }
+    { status: 404, headers }
   );
 }
 
 export async function onRequestPost(context: any) {
   const { request, env } = context;
+  const headers = buildTrustedJsonHeaders(request);
 
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return new Response(JSON.stringify({ success: false, error: 'Dữ liệu gửi lên không hợp lệ.' }), {
-      status: 400,
-      headers: CORS_HEADERS,
+  if (!isTrustedAppRequest(request)) {
+    return new Response(JSON.stringify({ success: false, error: 'Forbidden origin' }), {
+      status: 403,
+      headers,
     });
   }
+
+  const parsed = await readJsonBodyLimited(request, 262144);
+  if (!parsed.ok) {
+    return new Response(JSON.stringify({ success: false, error: parsed.error }), {
+      status: parsed.status,
+      headers,
+    });
+  }
+  const body = parsed.data;
 
   const code = normalizeCode(body?.code);
   if (!code) {
     return new Response(
       JSON.stringify({ success: false, error: 'Mã xe phải từ 4 đến 8 ký tự số hoặc chữ.' }),
-      { status: 400, headers: CORS_HEADERS }
+      { status: 400, headers }
     );
   }
 
   const action: string = body?.action || 'full';
   const existing = (await readStoredRecord(code, env))?.data || null;
 
-  // 1. Send-to-Car Navigation: update ONLY pendingNav without overwriting music playlists!
+  const baseRecord = {
+    updatedAt: existing?.updatedAt || new Date().toISOString(),
+    favorites: Array.isArray(existing?.favorites) ? existing.favorites : [],
+    playlists: Array.isArray(existing?.playlists) ? existing.playlists : [],
+    savedPlaces: Array.isArray(existing?.savedPlaces) ? existing.savedPlaces : [],
+    movieFavorites: Array.isArray(existing?.movieFavorites) ? existing.movieFavorites : [],
+    movieHistory: Array.isArray(existing?.movieHistory) ? existing.movieHistory : [],
+    customHazards: Array.isArray(existing?.customHazards) ? existing.customHazards : [],
+    pendingNav: existing?.pendingNav || null,
+    remoteCmd: existing?.remoteCmd || null,
+  };
+
+  // 1. Send-to-Car Navigation
   if (action === 'sendNav') {
     const cleanNav = sanitizePendingNav(body?.pendingNav);
     if (!cleanNav) {
       return new Response(
         JSON.stringify({ success: false, error: 'Tọa độ điểm đến gửi lên xe không hợp lệ.' }),
-        { status: 400, headers: CORS_HEADERS }
+        { status: 400, headers }
       );
     }
 
-    const nextPayload = {
-      updatedAt: existing?.updatedAt || new Date().toISOString(),
-      favorites: Array.isArray(existing?.favorites) ? existing.favorites : [],
-      playlists: Array.isArray(existing?.playlists) ? existing.playlists : [],
-      savedPlaces: Array.isArray(existing?.savedPlaces) ? existing.savedPlaces : [],
-      pendingNav: cleanNav,
-    };
+    const storageUsed = await writeStoredRecord(code, { ...baseRecord, pendingNav: cleanNav }, env);
+    return new Response(
+      JSON.stringify({ success: true, code, storage: storageUsed, pendingNav: cleanNav }),
+      { headers }
+    );
+  }
 
-    const storageUsed = await writeStoredRecord(code, nextPayload, env);
+  // 2. Clear pendingNav
+  if (action === 'clearNav') {
+    if (existing?.pendingNav) {
+      await writeStoredRecord(code, { ...baseRecord, pendingNav: null }, env);
+    }
+    return new Response(JSON.stringify({ success: true, code }), { headers });
+  }
+
+  // 3. Co-Pilot Remote Command (ghế sau điều khiển nhạc / phim trên màn xe VF5!)
+  if (action === 'sendCmd') {
+    const cleanCmd = sanitizeRemoteCmd(body?.remoteCmd);
+    if (!cleanCmd) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Lệnh điều khiển Co-Pilot không hợp lệ.' }),
+        { status: 400, headers }
+      );
+    }
+    const storageUsed = await writeStoredRecord(code, { ...baseRecord, remoteCmd: cleanCmd }, env);
+    return new Response(
+      JSON.stringify({ success: true, code, storage: storageUsed, remoteCmd: cleanCmd }),
+      { headers }
+    );
+  }
+
+  // 4. Clear remoteCmd after execution
+  if (action === 'clearCmd') {
+    if (existing?.remoteCmd) {
+      await writeStoredRecord(code, { ...baseRecord, remoteCmd: null }, env);
+    }
+    return new Response(JSON.stringify({ success: true, code }), { headers });
+  }
+
+  // 5. Partial sync for Movies & Custom Hazards (không ghi đè nhạc nếu chỉ sửa phim/camera!)
+  if (action === 'syncExtras') {
+    const movieFavorites = Array.isArray(body?.movieFavorites)
+      ? body.movieFavorites.map(sanitizeMovieItem).filter(Boolean).slice(0, 60)
+      : baseRecord.movieFavorites;
+    const movieHistory = Array.isArray(body?.movieHistory)
+      ? body.movieHistory.map(sanitizeMovieHistoryItem).filter(Boolean).slice(0, 40)
+      : baseRecord.movieHistory;
+    const customHazards = Array.isArray(body?.customHazards)
+      ? body.customHazards.map(sanitizeCustomHazard).filter(Boolean).slice(0, 50)
+      : baseRecord.customHazards;
+
+    const payload = {
+      ...baseRecord,
+      updatedAt: new Date().toISOString(),
+      movieFavorites,
+      movieHistory,
+      customHazards,
+    };
+    const storageUsed = await writeStoredRecord(code, payload, env);
     return new Response(
       JSON.stringify({
         success: true,
         code,
         storage: storageUsed,
-        pendingNav: cleanNav,
+        updatedAt: payload.updatedAt,
       }),
-      { headers: CORS_HEADERS }
+      { headers }
     );
   }
 
-  // 2. Clear pendingNav once the VF5 Cockpit has received and started routing
-  if (action === 'clearNav') {
-    if (existing && existing.pendingNav) {
-      const nextPayload = {
-        ...existing,
-        pendingNav: null,
-      };
-      await writeStoredRecord(code, nextPayload, env);
-    }
-    return new Response(JSON.stringify({ success: true, code }), { headers: CORS_HEADERS });
-  }
-
-  // 3. Full Sync (Favorites + Playlists + Saved Places)
+  // 6. Full Sync (Favorites + Playlists + Saved Places + Movies + Custom Hazards)
   const rawFavorites = Array.isArray(body?.favorites) ? body.favorites : [];
   const favorites = rawFavorites.map(sanitizeTrack).filter(Boolean).slice(0, 200);
 
@@ -285,17 +451,29 @@ export async function onRequestPost(context: any) {
 
   const rawSavedPlaces = Array.isArray(body?.savedPlaces)
     ? body.savedPlaces
-    : Array.isArray(existing?.savedPlaces)
-    ? existing.savedPlaces
-    : [];
+    : baseRecord.savedPlaces;
   const savedPlaces = rawSavedPlaces.map(sanitizePlace).filter(Boolean).slice(0, 20);
+
+  const movieFavorites = Array.isArray(body?.movieFavorites)
+    ? body.movieFavorites.map(sanitizeMovieItem).filter(Boolean).slice(0, 60)
+    : baseRecord.movieFavorites;
+  const movieHistory = Array.isArray(body?.movieHistory)
+    ? body.movieHistory.map(sanitizeMovieHistoryItem).filter(Boolean).slice(0, 40)
+    : baseRecord.movieHistory;
+  const customHazards = Array.isArray(body?.customHazards)
+    ? body.customHazards.map(sanitizeCustomHazard).filter(Boolean).slice(0, 50)
+    : baseRecord.customHazards;
 
   const payload = {
     updatedAt: new Date().toISOString(),
     favorites,
     playlists,
     savedPlaces,
-    pendingNav: existing?.pendingNav || null,
+    movieFavorites,
+    movieHistory,
+    customHazards,
+    pendingNav: baseRecord.pendingNav,
+    remoteCmd: baseRecord.remoteCmd,
   };
 
   const storageUsed = await writeStoredRecord(code, payload, env);
@@ -309,7 +487,10 @@ export async function onRequestPost(context: any) {
       favoritesCount: favorites.length,
       playlistsCount: playlists.length,
       savedPlacesCount: savedPlaces.length,
+      movieFavoritesCount: movieFavorites.length,
+      movieHistoryCount: movieHistory.length,
+      customHazardsCount: customHazards.length,
     }),
-    { headers: CORS_HEADERS }
+    { headers }
   );
 }
