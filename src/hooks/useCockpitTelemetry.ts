@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CustomHazardPin, TripStats } from '../types';
 import {
+  cancelVietnameseSpeech,
   playSpeedWarningBeep,
   speakVietnamese,
   unlockCarAudio,
@@ -179,14 +180,18 @@ export function useCockpitTelemetry(
     });
   }, []);
 
+  // Mặc định TẮT âm thanh/giọng nói cảnh báo (chỉ hiển thị biển báo P.127, P.130, Camera) để không ngắt nhạc!
+  // Người dùng có thể bật bất cứ lúc nào (khi bật, nói xong sẽ tự động phát tiếp nhạc).
   const [speedAlertSound, setSpeedAlertSound] = useState<boolean>(() => {
     try {
-      const saved = localStorage.getItem('carhub_speed_beep');
-      return saved === null ? true : saved === 'true';
+      const saved = localStorage.getItem('carhub_voice_alert_v2');
+      return saved === 'true';
     } catch {
-      return true;
+      return false;
     }
   });
+  const speedAlertSoundRef = useRef<boolean>(speedAlertSound);
+  speedAlertSoundRef.current = speedAlertSound;
 
   const watchIdRef = useRef<number | null>(null);
   const prevFixRef = useRef<{ lat: number; lon: number; time: number } | null>(null);
@@ -201,10 +206,12 @@ export function useCockpitTelemetry(
     setSpeedAlertSound((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem('carhub_speed_beep', String(next));
+        localStorage.setItem('carhub_voice_alert_v2', String(next));
       } catch {}
       if (next) {
         playSpeedWarningBeep();
+      } else {
+        cancelVietnameseSpeech();
       }
       return next;
     });
@@ -313,7 +320,7 @@ export function useCockpitTelemetry(
             setNearbyCustomHazard({ pin: closestPin, distanceM: roundedM });
             const key = `custom-hz:${closestPin.id}`;
             const lastAt = announcedCameraKeysRef.current.get(key) || 0;
-            if (Date.now() - lastAt > 90000) {
+            if (speedAlertSoundRef.current && Date.now() - lastAt > 90000) {
               announcedCameraKeysRef.current.set(key, Date.now());
               speakVietnamese(`Chú ý phía trước ${roundedM} mét có ${closestPin.label}`, {
                 dedupeKey: key,

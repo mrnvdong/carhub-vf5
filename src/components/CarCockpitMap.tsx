@@ -1716,9 +1716,20 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
+                const nextOn = !speedAlertSound;
                 onToggleSpeedAlertSound();
+                onNotifyToast?.(
+                  nextOn
+                    ? '🔔 Đã bật giọng nói cảnh báo (nói xong tự phát tiếp nhạc)'
+                    : '🔇 Đã tắt giọng nói cảnh báo (chỉ hiện biển báo, không ngắt nhạc)'
+                );
               }}
-              aria-label="Bật hoặc tắt chuông cảnh báo quá tốc độ"
+              aria-label="Bật hoặc tắt giọng nói cảnh báo tốc độ, camera và cấm dừng đỗ"
+              title={
+                speedAlertSound
+                  ? 'Đang BẬT giọng nói cảnh báo • Bấm để tắt'
+                  : 'Đang TẮT giọng nói cảnh báo (chỉ hiện biển báo) • Bấm để bật'
+              }
               className={`p-0.5 rounded-full ${
                 isDangerOverLimit
                   ? 'text-white'

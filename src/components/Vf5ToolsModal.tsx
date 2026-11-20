@@ -652,12 +652,37 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
           {/* TAB 3: GHIM CAMERA PHẠT NGUỘI & ĐIỂM ĐEN CÁ NHÂN */}
           {tab === 'hazards' && (
             <div className="space-y-3">
+              {/* Công tắc Tắt / Bật giọng nói cảnh báo (Camera • Cấm dừng đỗ P.130 • Tốc độ) */}
+              <div className={`rounded-2xl border p-3.5 flex items-center justify-between gap-3 ${theme.card}`}>
+                <div className="min-w-0">
+                  <p className={`text-xs sm:text-sm font-black ${theme.text}`}>
+                    🔔 Giọng nói cảnh báo (Camera • P.130 • Tốc độ)
+                  </p>
+                  <p className={`text-[11px] font-semibold mt-0.5 ${theme.textSub}`}>
+                    {telemetry.speedAlertSound
+                      ? 'Đang BẬT giọng đọc cảnh báo — đọc xong sẽ tự động phát tiếp nhạc đang nghe.'
+                      : 'Đang TẮT âm thanh — chỉ hiển thị biển báo trên bản đồ & màn hình để không ngắt nhạc.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={telemetry.onToggleSpeedAlertSound}
+                  className={`min-h-[2.6rem] px-3.5 rounded-xl text-xs font-black shrink-0 active:scale-95 transition ${
+                    telemetry.speedAlertSound
+                      ? 'bg-emerald-500 text-slate-950 shadow'
+                      : theme.iconBtn
+                  }`}
+                >
+                  {telemetry.speedAlertSound ? 'ĐANG BẬT' : 'CHỈ BIỂN BÁO'}
+                </button>
+              </div>
+
               <div className={`rounded-2xl border p-3.5 space-y-2.5 ${theme.card}`}>
                 <h3 className={`text-sm font-black ${theme.text}`}>
                   📍 Ghim nhanh tại vị trí GPS hiện tại
                 </h3>
                 <p className={`text-xs font-semibold ${theme.textSub}`}>
-                  Vị trí: {telemetry.position.lat.toFixed(5)}, {telemetry.position.lon.toFixed(5)} • Lần sau xe đi tới cách 350m sẽ tự động đọc cảnh báo bằng giọng nói!
+                  Vị trí: {telemetry.position.lat.toFixed(5)}, {telemetry.position.lon.toFixed(5)} • Lần sau xe đi tới cách 350m sẽ hiện cảnh báo trên màn hình{telemetry.speedAlertSound ? ' & đọc giọng nói' : ' (không ngắt nhạc)'}!
                 </p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {(
@@ -730,6 +755,28 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
             <div className="space-y-3">
               <div className={`rounded-2xl border p-3.5 space-y-2.5 ${theme.card}`}>
                 <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className={`text-xs sm:text-sm font-black ${theme.text}`}>
+                      🔔 Âm thanh &amp; Giọng nói cảnh báo (Camera • Cấm dừng đỗ • Tốc độ)
+                    </p>
+                    <p className={`text-[11px] font-semibold ${theme.textSub}`}>
+                      Mặc định TẮT để chỉ hiện biển báo trực quan, không làm ngắt nhạc. Khi BẬT, đọc xong sẽ tự phát tiếp nhạc/TV/Báo.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={telemetry.onToggleSpeedAlertSound}
+                    className={`min-h-[2.4rem] px-3.5 rounded-xl text-xs font-black shrink-0 active:scale-95 transition ${
+                      telemetry.speedAlertSound
+                        ? 'bg-emerald-500 text-slate-950'
+                        : theme.iconBtn
+                    }`}
+                  >
+                    {telemetry.speedAlertSound ? 'ĐANG BẬT' : 'CHỈ BIỂN BÁO'}
+                  </button>
+                </div>
+
+                <div className="border-t border-current/10 pt-2.5 flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className={`text-xs sm:text-sm font-black ${theme.text}`}>
                       🛡️ Khóa hình Phim khi xe đang chạy (&gt; 15 km/h)

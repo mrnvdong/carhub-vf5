@@ -1,12 +1,84 @@
 // Unified iOS WKWebView-safe Audio & Vietnamese Voice Engine for VinFast VF5
 // - Unlocks a single shared AudioContext on first touch/click so speed & turn chimes NEVER get muted by iOS CarPlay
 // - Speaks Vietnamese turn-by-turn navigation & camera/speed alerts via Web SpeechSynthesis (vi-VN)
+// - Automatically snapshots & resumes interrupted media (YouTube, SoundCloud, TV, News, Movies) on iOS/CarPlay after speech ends!
 
 let sharedAudioCtx: AudioContext | null = null;
 let unlockBound = false;
 let cachedViVoice: SpeechSynthesisVoice | null = null;
 let lastSpokenKey = '';
 let lastSpokenAt = 0;
+
+// Hook khôi phục nhạc/video/TV/báo tự động sau khi giọng nói cảnh báo/chỉ đường đọc xong trên iOS CarPlay
+type MediaResumeProvider = () => (() => void) | null;
+let mediaResumeProvider: MediaResumeProvider | null = null;
+let pendingResumeFn: (() => void) | null = null;
+let resumeTimerPrimary: number | null = null;
+let resumeTimerRetry: number | null = null;
+let speechWatchdogTimer: number | null = null;
+let activeSpeechSeq = 0;
+
+export function registerMediaResumeHandler(provider: MediaResumeProvider): () => void {
+  mediaResumeProvider = provider;
+  return () => {
+    if (mediaResumeProvider === provider) {
+      mediaResumeProvider = null;
+    }
+  };
+}
+
+function clearResumeTimers(): void {
+  if (resumeTimerPrimary !== null) {
+    window.clearTimeout(resumeTimerPrimary);
+    resumeTimerPrimary = null;
+  }
+  if (resumeTimerRetry !== null) {
+    window.clearTimeout(resumeTimerRetry);
+    resumeTimerRetry = null;
+  }
+  if (speechWatchdogTimer !== null) {
+    window.clearTimeout(speechWatchdogTimer);
+    speechWatchdogTimer = null;
+  }
+}
+
+function flushPendingMediaResume(expectedSeq?: number): void {
+  if (expectedSeq !== undefined && expectedSeq !== activeSpeechSeq) return;
+  if (speechWatchdogTimer !== null) {
+    window.clearTimeout(speechWatchdogTimer);
+    speechWatchdogTimer = null;
+  }
+  const resume = pendingResumeFn;
+  if (!resume) return;
+  pendingResumeFn = null;
+
+  // Chờ 220ms để iOS AVAudioSession nhả quyền âm thanh từ SpeechSynthesis rồi phát tiếp nhạc mượt mà
+  resumeTimerPrimary = window.setTimeout(() => {
+    resumeTimerPrimary = null;
+    try {
+      resume();
+    } catch {}
+    // Nhịp dự phòng +650ms riêng cho YouTube iframe trên iOS Safari nếu bị khựng ở nhịp đầu
+    resumeTimerRetry = window.setTimeout(() => {
+      resumeTimerRetry = null;
+      try {
+        resume();
+      } catch {}
+    }, 650);
+  }, 220);
+}
+
+export function cancelVietnameseSpeech(): void {
+  if (typeof window === 'undefined') return;
+  activeSpeechSeq += 1;
+  clearResumeTimers();
+  try {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+  } catch {}
+  flushPendingMediaResume();
+}
 
 function getOrCreateAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -157,6 +229,18 @@ export function speakVietnamese(
 
   if (!('speechSynthesis' in window)) return;
   try {
+    // Chụp lại luồng media đang chạy (Nhạc / Video / TV / Báo / Phim) TRƯỚC khi SpeechSynthesis chiếm kênh âm thanh iOS
+    if (!pendingResumeFn && mediaResumeProvider) {
+      try {
+        pendingResumeFn = mediaResumeProvider();
+      } catch {
+        pendingResumeFn = null;
+      }
+    }
+
+    clearResumeTimers();
+    const seq = ++activeSpeechSeq;
+
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(clean);
     utter.lang = 'vi-VN';
@@ -165,6 +249,26 @@ export function speakVietnamese(
     utter.volume = 0.95;
     const voice = pickVietnameseVoice();
     if (voice) utter.voice = voice;
+
+    utter.onend = () => flushPendingMediaResume(seq);
+    utter.onerror = () => flushPendingMediaResume(seq);
+
+    // Watchdog an toàn phòng iOS WebKit thỉnh thoảng bỏ quên sự kiện onend -> vẫn chắc chắn phát lại nhạc!
+    const maxEstimateMs = Math.min(12000, Math.max(2800, clean.length * 105 + 1000));
+    speechWatchdogTimer = window.setTimeout(() => {
+      if (seq !== activeSpeechSeq) return;
+      try {
+        if (window.speechSynthesis.speaking) {
+          // Chờ thêm 1.5s nếu câu dài vẫn đang đọc dở
+          speechWatchdogTimer = window.setTimeout(() => flushPendingMediaResume(seq), 1500);
+          return;
+        }
+      } catch {}
+      flushPendingMediaResume(seq);
+    }, maxEstimateMs);
+
     window.speechSynthesis.speak(utter);
-  } catch {}
+  } catch {
+    flushPendingMediaResume();
+  }
 }

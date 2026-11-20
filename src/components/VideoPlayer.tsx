@@ -79,6 +79,7 @@ import { MEDIA_CATEGORIES } from '../constants/categories';
 import { formatSeconds, resolveSoundCloudStream } from '../services/api';
 import { fetchSyncedLyrics, LyricsResult } from '../services/lyrics';
 import { fetchSponsorSegments, getSponsorCategoryLabel } from '../services/sponsorblock';
+import { registerMediaResumeHandler } from '../services/voiceAudio';
 import { useCarHardwareControls } from '../hooks/useCarHardwareControls';
 import { useCockpitTelemetry } from '../hooks/useCockpitTelemetry';
 import { useTvLive } from '../hooks/useTvLive';
@@ -314,6 +315,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   });
 
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const isPlayingRef = useRef<boolean>(isPlaying);
+  isPlayingRef.current = isPlaying;
+  const lastManualPauseAtRef = useRef<number>(0);
   const [isBuffering, setIsBuffering] = useState<boolean>(true);
   const [hasUnlockedAudio, setHasUnlockedAudio] = useState<boolean>(false);
   const hasUnlockedAudioRef = useRef<boolean>(false);
@@ -1286,6 +1290,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [isVideoMode, postEmbedCommand]);
 
   const handlePauseExplicit = useCallback(() => {
+    lastManualPauseAtRef.current = Date.now();
     if (isSoundCloudTrackRef.current) {
       audioRef.current?.pause();
       setIsPlaying(false);
@@ -1294,6 +1299,62 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     postEmbedCommand('pauseVideo');
     setIsPlaying(false);
   }, [postEmbedCommand]);
+
+  // Đăng ký cơ chế TỰ ĐỘNG PHÁT TIẾP Nhạc / Video / TV / Báo / Phim sau khi giọng nói cảnh báo đọc xong trên iOS CarPlay!
+  useEffect(() => {
+    return registerMediaResumeHandler(() => {
+      const capturedAt = Date.now();
+
+      if (isPlayingRef.current) {
+        if (isSoundCloudTrackRef.current && audioRef.current) {
+          const el = audioRef.current;
+          return () => {
+            if (lastManualPauseAtRef.current >= capturedAt) return;
+            if (el.paused) {
+              el.play().catch(() => {});
+            }
+          };
+        }
+        return () => {
+          if (lastManualPauseAtRef.current >= capturedAt) return;
+          if (!isPlayingRef.current) {
+            postEmbedCommand('playVideo');
+          }
+        };
+      }
+
+      const tvVid = tvController.videoRef.current;
+      if (tvVid && !tvVid.paused) {
+        return () => {
+          if (tvVid.paused) {
+            tvVid.play().catch(() => {});
+          }
+        };
+      }
+
+      const newsAudio = newsControllerRef.current?.audioRef.current;
+      if (newsAudio && !newsAudio.paused) {
+        return () => {
+          if (newsAudio.paused) {
+            newsAudio.play().catch(() => {});
+          }
+        };
+      }
+
+      const activeMovieVideo = Array.from(document.querySelectorAll('video')).find(
+        (v) => v !== tvVid && !v.paused && !v.ended
+      );
+      if (activeMovieVideo) {
+        return () => {
+          if (activeMovieVideo.paused) {
+            activeMovieVideo.play().catch(() => {});
+          }
+        };
+      }
+
+      return null;
+    });
+  }, [postEmbedCommand, tvController.videoRef]);
 
   const pauseAllMusicForTv = useCallback(() => {
     try {
