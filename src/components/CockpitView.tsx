@@ -152,6 +152,7 @@ interface CockpitViewProps {
   cockpitNewsMode: boolean;
   onChangeCockpitNewsMode: (active: boolean) => void;
   onOpenFullNews: () => void;
+  onOpenFullVideo?: () => void;
   uiScale: UiScale;
   onChangeUiScale: (scale: UiScale) => void;
   batterySoc?: number;
@@ -223,6 +224,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     cockpitNewsMode,
     onChangeCockpitNewsMode,
     onOpenFullNews,
+    onOpenFullVideo,
     uiScale,
     onChangeUiScale,
     batterySoc = 78,
@@ -1491,7 +1493,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       onChangeCockpitNewsMode(false);
                       setShowTvPicker(false);
                       setShowNewsPicker(false);
-                      if (isSoundCloudTrack) {
+                      if (isSoundCloudTrack || musicSource === 'soundcloud') {
                         onChangeMusicSource('youtube');
                         if (!isVideoMode) onToggleViewMode();
                       } else if (!isVideoMode) {
@@ -1745,35 +1747,52 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                   </div>
                 ) : (
                   <div className="flex items-center justify-between gap-1.5 min-w-0 h-9">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onChangeMusicSource(musicSource === 'soundcloud' ? 'youtube' : 'soundcloud')
-                      }
-                      title={
-                        musicSource === 'soundcloud'
-                          ? 'Đang dùng nguồn SoundCloud • Bấm để đổi sang YouTube'
-                          : 'Đang dùng nguồn YouTube • Bấm để đổi sang SoundCloud'
-                      }
-                      className={`h-9 px-2.5 rounded-xl border text-xs font-black flex items-center gap-1 whitespace-nowrap shrink-0 active:scale-95 transition ${
-                        musicSource === 'soundcloud' || isSoundCloudTrack
-                          ? 'bg-[#ff5500] border-orange-400 text-white shadow-sm'
-                          : theme.iconBtn
-                      }`}
-                    >
-                      {musicSource === 'soundcloud' || isSoundCloudTrack ? (
-                        <>
-                          <span>☁️</span>
-                          <span className="mc-hide-xs">SoundCloud</span>
-                          <span className="mc-show-xs">SC</span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-rose-500">▶</span>
-                          <span>YouTube</span>
-                        </>
-                      )}
-                    </button>
+                    {effectiveVideoMode ? (
+                      <button
+                        type="button"
+                        onClick={onOpenFullVideo}
+                        aria-label="Mở Video YouTube toàn màn hình"
+                        title="Phóng to Video toàn màn hình"
+                        className={`h-9 px-2.5 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 whitespace-nowrap shrink-0 active:scale-95 transition ${
+                          isLightTheme
+                            ? 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700'
+                            : 'bg-white/10 hover:bg-white/20 border-white/15 text-sky-300'
+                        }`}
+                      >
+                        <Maximize2 className="w-3.5 h-3.5 shrink-0" />
+                        <span>Toàn màn</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onChangeMusicSource(musicSource === 'soundcloud' ? 'youtube' : 'soundcloud')
+                        }
+                        title={
+                          musicSource === 'soundcloud'
+                            ? 'Đang dùng nguồn SoundCloud • Bấm để đổi sang YouTube'
+                            : 'Đang dùng nguồn YouTube • Bấm để đổi sang SoundCloud'
+                        }
+                        className={`h-9 px-2.5 rounded-xl border text-xs font-black flex items-center gap-1 whitespace-nowrap shrink-0 active:scale-95 transition ${
+                          musicSource === 'soundcloud' || isSoundCloudTrack
+                            ? 'bg-[#ff5500] border-orange-400 text-white shadow-sm'
+                            : theme.iconBtn
+                        }`}
+                      >
+                        {musicSource === 'soundcloud' || isSoundCloudTrack ? (
+                          <>
+                            <span>☁️</span>
+                            <span className="mc-hide-xs">SoundCloud</span>
+                            <span className="mc-show-xs">SC</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-rose-500">▶</span>
+                            <span>YouTube</span>
+                          </>
+                        )}
+                      </button>
+                    )}
 
                     <div className="flex items-center gap-1 shrink-0">
                       <button

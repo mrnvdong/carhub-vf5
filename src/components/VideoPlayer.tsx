@@ -433,6 +433,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onChangeRailSection('news');
   }, [onChangeRailSection]);
 
+  const handleOpenFullVideo = useCallback(() => {
+    setCockpitTvMode(false);
+    setCockpitNewsMode(false);
+    onChangeRailSection('nowPlaying');
+  }, [onChangeRailSection]);
+
   const handleOpenCockpitWithNews = useCallback(() => {
     setCockpitNewsMode(true);
     setCockpitTvMode(false);
@@ -2910,6 +2916,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             cockpitNewsMode={cockpitNewsMode}
             onChangeCockpitNewsMode={handleChangeCockpitNewsMode}
             onOpenFullNews={handleOpenFullNews}
+            onOpenFullVideo={handleOpenFullVideo}
             uiScale={uiScale}
             onChangeUiScale={onChangeUiScale}
             batterySoc={batterySoc}
