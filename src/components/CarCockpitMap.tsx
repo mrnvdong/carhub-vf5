@@ -38,6 +38,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
+import { ParkingSignSvg } from './TrafficSignBadge';
 import {
   ActiveNavSummary,
   CockpitNavControls,
@@ -418,6 +419,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
     speedAlertSound,
     onToggleSpeedAlertSound,
     requestGps,
+    customHazards,
   } = telemetry;
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -427,8 +429,41 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
   const destMarkerRef = useRef<MapLibreMarker | null>(null);
   const hazardMarkersRef = useRef<MapLibreMarker[]>([]);
   const sovereigntyMarkersRef = useRef<MapLibreMarker[]>([]);
+  const lastCamQueryRef = useRef<{ lat: number; lon: number } | null>(null);
   const suppressResizeRef = useRef<boolean>(suppressResizeObserver);
   suppressResizeRef.current = suppressResizeObserver;
+
+  // Lớp hiển thị Camera phạt nguội & Biển cấm dừng/đỗ P.130/P.131a trên bản đồ 3D (mặc định BẬT!)
+  const [showCamerasLayer, setShowCamerasLayer] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_cockpit_cameras');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [areaTrafficPoints, setAreaTrafficPoints] = useState<
+    Array<{
+      id: string;
+      kind: 'camera_speed' | 'camera_redlight' | 'camera_lane' | 'no_stopping' | 'no_parking';
+      name: string;
+      road: string;
+      lat: number;
+      lon: number;
+      speedLimit?: number;
+      signCode?: 'P.130' | 'P.131a';
+      hasCamera?: boolean;
+      note?: string;
+      distanceM: number;
+    }>
+  >([]);
+  const [mapReadyNonce, setMapReadyNonce] = useState<number>(0);
+  const [selectedMapAlert, setSelectedMapAlert] = useState<{
+    title: string;
+    subtitle: string;
+    kind: 'camera' | 'no_stopping' | 'no_parking' | 'other';
+    signCode?: 'P.130' | 'P.131a';
+  } | null>(null);
 
   // Lớp bản đồ & giao diện toàn hệ thống được đồng bộ từ App.tsx
   const appliedThemeRef = useRef<MapTheme>(mapTheme);
@@ -794,6 +829,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
 
       carMarkerRef.current = marker;
       mapRef.current = map;
+      setMapReadyNonce((n) => n + 1);
 
       window.requestAnimationFrame(() => map.resize());
       window.setTimeout(() => map.resize(), 250);
@@ -960,7 +996,51 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoute, syncRouteDataToMap]);
 
-  // Ghim biểu tượng Camera / Cảnh báo hạ tầng lên mặt bản đồ
+  // Tải lớp Camera Phạt Nguội & Biển Cấm dừng/đỗ P.130/P.131a quanh vị trí xe (bán kính 12 km, chỉ gọi lại khi di chuyển >= 3 km!)
+  useEffect(() => {
+    if (!showCamerasLayer) return;
+    const prev = lastCamQueryRef.current;
+    if (prev) {
+      const dLat = Math.abs(position.lat - prev.lat);
+      const dLon = Math.abs(position.lon - prev.lon);
+      if (dLat < 0.028 && dLon < 0.028) return; // < ~3km
+    }
+    lastCamQueryRef.current = { lat: position.lat, lon: position.lon };
+    let cancelled = false;
+    fetch(
+      `/api/road?mode=cameras&lat=${position.lat.toFixed(4)}&lon=${position.lon.toFixed(
+        4
+      )}&radiusKm=12`
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.success && Array.isArray(data.points)) {
+          setAreaTrafficPoints(data.points);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [position.lat, position.lon, showCamerasLayer]);
+
+  const handleToggleCamerasLayer = () => {
+    setShowCamerasLayer((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('carhub_cockpit_cameras', String(next));
+      } catch {}
+      if (!next) setSelectedMapAlert(null);
+      onNotifyToast?.(
+        next
+          ? '📷 Đã bật lớp Camera phạt nguội & Cấm dừng/đỗ (P.130/P.131a)'
+          : '📷 Đã ẩn lớp Camera & Biển cấm dừng/đỗ trên bản đồ'
+      );
+      return next;
+    });
+  };
+
+  // Ghim biểu tượng Camera Phạt Nguội, Biển P.130/P.131a (QCVN 41) & Điểm Ghim Cá Nhân lên mặt bản đồ 3D
   useEffect(() => {
     const map = mapRef.current;
     for (const m of hazardMarkersRef.current) {
@@ -968,36 +1048,168 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
     }
     hazardMarkersRef.current = [];
 
-    if (!map || !roadInfo?.hazards) return;
+    if (!map) return;
 
-    for (const hz of roadInfo.hazards) {
-      if (typeof hz.lat !== 'number' || typeof hz.lon !== 'number') continue;
+    const seenCoords = new Set<string>();
+    const addSignMarker = (opts: {
+      lat: number;
+      lon: number;
+      kind: 'camera' | 'no_stopping' | 'no_parking' | 'other';
+      badgeHtml: string;
+      title: string;
+      subtitle: string;
+      signCode?: 'P.130' | 'P.131a';
+    }) => {
+      const key = `${opts.kind}:${opts.lat.toFixed(4)},${opts.lon.toFixed(4)}`;
+      if (seenCoords.has(key)) return;
+      seenCoords.add(key);
+
       const el = document.createElement('div');
-      el.style.padding = '3px 7px';
-      el.style.borderRadius = '9999px';
-      el.style.background = hz.type === 'camera' ? '#be123c' : '#d97706';
-      el.style.color = '#ffffff';
-      el.style.fontWeight = '800';
-      el.style.fontSize = '11px';
-      el.style.border = '2px solid #ffffff';
-      el.style.boxShadow = '0 3px 10px rgba(0,0,0,0.6)';
-      el.textContent =
-        hz.type === 'camera'
-          ? '🎥 CAM'
-          : hz.type === 'signals'
-          ? '🚦'
-          : hz.type === 'toll'
-          ? '🛂 TRẠM'
-          : hz.type === 'railway'
-          ? '🚂 TÀU'
-          : '🏫';
+      el.style.cursor = 'pointer';
+      el.style.display = 'flex';
+      el.style.alignItems = 'center';
+      el.style.justifyContent = 'center';
+      el.innerHTML = opts.badgeHtml;
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        setSelectedMapAlert({
+          title: opts.title,
+          subtitle: opts.subtitle,
+          kind: opts.kind,
+          signCode: opts.signCode,
+        });
+      });
 
-      const m = new MapLibreMarker({ element: el, anchor: 'bottom' })
-        .setLngLat([hz.lon, hz.lat])
+      const m = new MapLibreMarker({ element: el, anchor: 'center' })
+        .setLngLat([opts.lon, opts.lat])
         .addTo(map);
       hazardMarkersRef.current.push(m);
+    };
+
+    const makeParkingSignHtml = (type: 'no_stopping' | 'no_parking', isUser = false) => {
+      const cross =
+        type === 'no_stopping'
+          ? '<line x1="49" y1="15" x2="15" y2="49" stroke="#e11d48" stroke-width="6.5"/>'
+          : '';
+      const ring = isUser ? 'box-shadow:0 0 0 2px #fbbf24, 0 3px 10px rgba(0,0,0,0.65);' : 'box-shadow:0 3px 10px rgba(0,0,0,0.65);';
+      return `<div style="width:28px;height:28px;border-radius:9999px;${ring}background:#1d4ed8;display:flex;align-items:center;justify-content:center;"><svg viewBox="0 0 64 64" width="28" height="28"><circle cx="32" cy="32" r="29" fill="#1d4ed8" stroke="#ffffff" stroke-width="3"/><circle cx="32" cy="32" r="24" fill="#1d4ed8" stroke="#e11d48" stroke-width="7"/><line x1="15" y1="15" x2="49" y2="49" stroke="#e11d48" stroke-width="6.5"/>${cross}</svg></div>`;
+    };
+
+    const makeCameraPinHtml = (labelText: string, isUser = false) => {
+      const border = isUser ? '2px solid #fde047' : '2px solid #ffffff';
+      return `<div style="padding:3px 7px;border-radius:9999px;background:#be123c;color:#ffffff;font-weight:900;font-size:10px;line-height:1.1;border:${border};box-shadow:0 3px 10px rgba(0,0,0,0.65);white-space:nowrap;display:flex;align-items:center;gap:3px;"><span>📷</span><span>${labelText}</span></div>`;
+    };
+
+    // 1) Lớp cảnh báo trực tiếp quanh xe từ /api/road (OSM + ưu tiên phía trước)
+    if (roadInfo?.hazards) {
+      for (const hz of roadInfo.hazards) {
+        if (typeof hz.lat !== 'number' || typeof hz.lon !== 'number') continue;
+        if (!showCamerasLayer && (hz.type === 'camera' || hz.type === 'no_stopping' || hz.type === 'no_parking')) {
+          continue;
+        }
+        if (hz.type === 'no_stopping' || hz.type === 'no_parking') {
+          addSignMarker({
+            lat: hz.lat,
+            lon: hz.lon,
+            kind: hz.type,
+            signCode: hz.signCode || (hz.type === 'no_stopping' ? 'P.130' : 'P.131a'),
+            badgeHtml: makeParkingSignHtml(hz.type),
+            title: hz.label,
+            subtitle: hz.detail || (hz.type === 'no_stopping' ? 'Biển P.130 cấm dừng & đỗ xe' : 'Biển P.131a cấm đỗ xe'),
+          });
+        } else if (hz.type === 'camera') {
+          addSignMarker({
+            lat: hz.lat,
+            lon: hz.lon,
+            kind: 'camera',
+            badgeHtml: makeCameraPinHtml(`${hz.distanceM}m`),
+            title: hz.label,
+            subtitle: hz.detail || 'Camera phạt nguội giám sát giao thông',
+          });
+        } else {
+          const icon =
+            hz.type === 'signals'
+              ? '🚦'
+              : hz.type === 'toll'
+              ? '🛂 TRẠM'
+              : hz.type === 'railway'
+              ? '🚂 TÀU'
+              : '🏫';
+          addSignMarker({
+            lat: hz.lat,
+            lon: hz.lon,
+            kind: 'other',
+            badgeHtml: `<div style="padding:3px 7px;border-radius:9999px;background:#d97706;color:#ffffff;font-weight:800;font-size:10px;border:2px solid #ffffff;box-shadow:0 3px 10px rgba(0,0,0,0.6);">${icon}</div>`,
+            title: hz.label,
+            subtitle: hz.detail || 'Cảnh báo hạ tầng đường bộ',
+          });
+        }
+      }
     }
-  }, [roadInfo?.hazards]);
+
+    // 2) Lớp Camera Phạt Nguội & Tuyến Cấm Dừng/Đỗ trọng điểm Việt Nam trong bán kính 12 km
+    if (showCamerasLayer && areaTrafficPoints.length > 0) {
+      for (const pt of areaTrafficPoints) {
+        if (pt.kind === 'no_stopping' || pt.kind === 'no_parking') {
+          addSignMarker({
+            lat: pt.lat,
+            lon: pt.lon,
+            kind: pt.kind,
+            signCode: pt.signCode || (pt.kind === 'no_stopping' ? 'P.130' : 'P.131a'),
+            badgeHtml: makeParkingSignHtml(pt.kind),
+            title: pt.name,
+            subtitle: `${pt.road}${pt.note ? ` • ${pt.note}` : ''}`,
+          });
+        } else {
+          const shortTag = pt.speedLimit ? `${pt.speedLimit}` : 'CAM';
+          addSignMarker({
+            lat: pt.lat,
+            lon: pt.lon,
+            kind: 'camera',
+            badgeHtml: makeCameraPinHtml(shortTag),
+            title: pt.name,
+            subtitle: `${pt.road}${pt.note ? ` • ${pt.note}` : ''}`,
+          });
+        }
+      }
+    }
+
+    // 3) Điểm Camera & Biển Cấm Cá Nhân do chính tài xế VF5 tự ghim (đồng bộ qua Mã Xe!)
+    if (showCamerasLayer && Array.isArray(customHazards) && customHazards.length > 0) {
+      for (const pin of customHazards) {
+        if (pin.kind === 'no_stopping' || pin.kind === 'no_parking') {
+          addSignMarker({
+            lat: pin.lat,
+            lon: pin.lon,
+            kind: pin.kind,
+            signCode: pin.kind === 'no_stopping' ? 'P.130' : 'P.131a',
+            badgeHtml: makeParkingSignHtml(pin.kind, true),
+            title: `⭐ ${pin.label}`,
+            subtitle: 'Điểm cấm dừng/đỗ cá nhân bạn đã ghim',
+          });
+        } else if (pin.kind === 'camera') {
+          addSignMarker({
+            lat: pin.lat,
+            lon: pin.lon,
+            kind: 'camera',
+            badgeHtml: makeCameraPinHtml('CÁ NHÂN', true),
+            title: `⭐ ${pin.label}`,
+            subtitle: 'Camera phạt nguội cá nhân bạn đã ghim',
+          });
+        } else {
+          const icon = pin.kind === 'police' ? '🚨' : pin.kind === 'pothole' ? '🕳️' : '⚠️';
+          addSignMarker({
+            lat: pin.lat,
+            lon: pin.lon,
+            kind: 'other',
+            badgeHtml: `<div style="padding:3px 7px;border-radius:9999px;background:#b45309;color:#ffffff;font-weight:800;font-size:10px;border:2px solid #fde047;box-shadow:0 3px 10px rgba(0,0,0,0.6);">${icon}</div>`,
+            title: `⭐ ${pin.label}`,
+            subtitle: 'Điểm cảnh báo cá nhân bạn đã ghim',
+          });
+        }
+      }
+    }
+  }, [roadInfo?.hazards, areaTrafficPoints, customHazards, showCamerasLayer, mapReadyNonce]);
 
   const cycleMapTheme = () => {
     const next: MapTheme =
@@ -1549,6 +1761,30 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
               }`}
             >
               {roadInfo?.isVerifiedLimit ? 'OSM' : 'T.Khảo'}
+            </span>
+          </div>
+        )}
+
+        {/* Biển báo Cấm dừng & Cấm đỗ (P.130) / Cấm đỗ xe (P.131a) chuẩn QCVN 41 ngay cạnh biển tốc độ P.127! */}
+        {roadInfo?.parkingRestriction && (
+          <div
+            className="flex flex-col items-center shrink-0"
+            title={`${roadInfo.parkingRestriction.label} (${roadInfo.parkingRestriction.signCode}) — ${roadInfo.parkingRestriction.reason}`}
+          >
+            <ParkingSignSvg
+              type={roadInfo.parkingRestriction.type}
+              className="w-11 h-11 sm:w-12 sm:h-12 short:w-10 short:h-10 drop-shadow-md"
+            />
+            <span
+              className={`text-[8px] font-black uppercase mt-0.5 ${
+                isDangerOverLimit
+                  ? 'text-white'
+                  : isLightMap
+                  ? 'text-rose-700'
+                  : 'text-rose-300'
+              }`}
+            >
+              {roadInfo.parkingRestriction.signCode}
             </span>
           </div>
         )}
@@ -2388,33 +2624,120 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       )}
 
       {/* =====================================================================
-          5. CỤM HẠ TẦNG ĐƯỜNG BỘ, CAMERA & THỜI TIẾT NỔI Ở ĐÁY BẢN ĐỒ
+          5. CỤM HẠ TẦNG ĐƯỜNG BỘ, CAMERA PHẠT NGUỘI, CẤM DỪNG/ĐỖ (P.130/P.131a) & GIAO THÔNG
          ===================================================================== */}
       <div className="absolute inset-x-2 bottom-2 z-20 flex flex-col gap-1.5 pointer-events-none">
+        {/* Popup chi tiết khi bấm vào 1 biểu tượng Camera hoặc Biển P.130/P.131a trên bản đồ */}
+        {selectedMapAlert && (
+          <div
+            className={`pointer-events-auto self-start max-w-sm rounded-2xl border px-3 py-2 backdrop-blur-xl shadow-2xl flex items-center gap-2.5 animate-ios-sheet-in ${
+              isLightMap
+                ? 'bg-white/96 border-slate-300 text-slate-900'
+                : 'bg-[#0b1220]/95 border-slate-600 text-white'
+            }`}
+          >
+            {selectedMapAlert.kind === 'no_stopping' || selectedMapAlert.kind === 'no_parking' ? (
+              <ParkingSignSvg type={selectedMapAlert.kind} className="w-9 h-9 shrink-0" />
+            ) : (
+              <div className="w-9 h-9 rounded-full bg-rose-600 text-white flex items-center justify-center shrink-0">
+                <CameraIcon className="w-4 h-4" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-black truncate">{selectedMapAlert.title}</p>
+              <p
+                className={`text-[10px] font-semibold leading-snug line-clamp-2 ${
+                  isLightMap ? 'text-slate-600' : 'text-slate-300'
+                }`}
+              >
+                {selectedMapAlert.subtitle}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedMapAlert(null)}
+              aria-label="Đóng thông tin biển báo"
+              className="w-7 h-7 rounded-full bg-current/10 flex items-center justify-center shrink-0 active:scale-90"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-1.5">
-          {isMapExpanded && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {roadInfo?.hazards?.map((hz, i) => (
+          {/* Cảnh báo trực tiếp Cấm dừng/đỗ P.130/P.131a & Camera phạt nguội ngay góc trái đáy bản đồ */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {roadInfo?.parkingRestriction && (
+              <span
+                className="pointer-events-auto px-2.5 py-1 rounded-full text-[10px] font-black flex items-center gap-1.5 border backdrop-blur-xl shadow-lg bg-blue-950/92 border-rose-400/80 text-white"
+                title={roadInfo.parkingRestriction.reason}
+              >
+                <ParkingSignSvg type={roadInfo.parkingRestriction.type} className="w-4 h-4 shrink-0" />
+                <span>
+                  {roadInfo.parkingRestriction.signCode} • {roadInfo.parkingRestriction.label}
+                  {roadInfo.parkingRestriction.hasCamera ? ' (📷)' : ''}
+                </span>
+              </span>
+            )}
+            {isMapExpanded &&
+              roadInfo?.hazards?.map((hz, i) => (
                 <span
                   key={i}
                   className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold flex items-center gap-1 border backdrop-blur-xl shadow-lg ${
                     hz.type === 'camera'
                       ? 'bg-rose-600 border-rose-300 text-white animate-pulse'
+                      : hz.type === 'no_stopping' || hz.type === 'no_parking'
+                      ? 'bg-blue-800 border-rose-400 text-white'
                       : 'bg-amber-600 border-amber-300 text-white'
                   }`}
                 >
                   {hz.type === 'camera' ? (
                     <CameraIcon className="w-3 h-3 shrink-0" />
+                  ) : hz.type === 'no_stopping' || hz.type === 'no_parking' ? (
+                    <ParkingSignSvg type={hz.type} className="w-3.5 h-3.5 shrink-0" />
                   ) : (
                     <AlertTriangle className="w-3 h-3 shrink-0" />
                   )}
                   <span>{hz.label}</span>
                 </span>
               ))}
-            </div>
-          )}
+          </div>
 
           <div className="flex items-center gap-1.5 ml-auto">
+            {/* Nút bật/tắt lớp Camera phạt nguội & Cấm dừng/đỗ P.130/P.131a trên bản đồ 3D */}
+            {!webglError && (
+              <button
+                type="button"
+                onClick={handleToggleCamerasLayer}
+                aria-label={
+                  showCamerasLayer
+                    ? 'Ẩn lớp Camera phạt nguội và Biển cấm dừng đỗ'
+                    : 'Hiện lớp Camera phạt nguội và Biển cấm dừng đỗ'
+                }
+                title="Bật/tắt lớp Camera phạt nguội & Biển Cấm dừng/đỗ (P.130 / P.131a)"
+                className={`pointer-events-auto min-h-[2.4rem] px-2.5 rounded-full backdrop-blur-xl border text-xs font-extrabold flex items-center gap-1.5 shadow-xl active:scale-95 transition ${
+                  showCamerasLayer
+                    ? isLightMap
+                      ? 'bg-white/96 hover:bg-white border-rose-400 text-rose-700'
+                      : 'bg-[#0b1220]/94 hover:bg-slate-900 border-rose-500/75 text-rose-300'
+                    : isLightMap
+                    ? 'bg-white/90 hover:bg-white border-slate-300 text-slate-500'
+                    : 'bg-[#0b1220]/88 hover:bg-slate-900 border-slate-700 text-slate-400'
+                }`}
+              >
+                <CameraIcon className="w-3.5 h-3.5 shrink-0" />
+                <span className="whitespace-nowrap">
+                  <span className="cq-hide-sm">Cam • P.130</span>
+                  <span className="cq-show-sm">Cam</span>
+                </span>
+                {showCamerasLayer && areaTrafficPoints.length + (customHazards?.length || 0) > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black leading-none tabular-nums">
+                    {areaTrafficPoints.length + (customHazards?.length || 0)}
+                  </span>
+                )}
+              </button>
+            )}
+
             {!webglError && (
               <button
                 type="button"

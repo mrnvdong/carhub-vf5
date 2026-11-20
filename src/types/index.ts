@@ -347,7 +347,14 @@ export interface MovieWatchHistoryItem {
   updatedAt: number;
 }
 
-export type CustomHazardKind = 'camera' | 'police' | 'pothole' | 'speedbump' | 'custom';
+export type CustomHazardKind =
+  | 'camera'
+  | 'no_stopping'
+  | 'no_parking'
+  | 'police'
+  | 'pothole'
+  | 'speedbump'
+  | 'custom';
 
 export interface CustomHazardPin {
   id: string;

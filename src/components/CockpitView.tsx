@@ -76,6 +76,7 @@ import {
   getVoiceShortName,
 } from '../services/news';
 import { MapErrorBoundary } from './MapErrorBoundary';
+import { ParkingSignSvg } from './TrafficSignBadge';
 import { getCarTheme } from '../utils/theme';
 
 const LazyCarCockpitMap = React.lazy(() => import('./CarCockpitMap'));
@@ -157,6 +158,7 @@ interface CockpitViewProps {
   kmPerPct?: number;
   onOpenVf5Tools?: (tab?: 'ev' | 'eq' | 'hazards' | 'safety') => void;
   onQuickPinCamera?: () => void;
+  onQuickPinNoStopping?: () => void;
 }
 
 export const CockpitView: React.FC<CockpitViewProps> = React.memo(
@@ -227,6 +229,7 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     kmPerPct = 2.85,
     onOpenVf5Tools,
     onQuickPinCamera,
+    onQuickPinNoStopping,
   }) => {
     const theme = getCarTheme(isLightTheme);
     const splitContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1130,6 +1133,30 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       </span>
                     </div>
                   )}
+
+                  {/* Biển báo Cấm dừng & Cấm đỗ (P.130) / Cấm đỗ (P.131a) chuẩn QCVN 41 */}
+                  {roadInfo?.parkingRestriction && (
+                    <div
+                      className="flex items-center gap-1 shrink-0"
+                      title={`${roadInfo.parkingRestriction.label} (${roadInfo.parkingRestriction.signCode}) — ${roadInfo.parkingRestriction.reason}`}
+                    >
+                      <ParkingSignSvg
+                        type={roadInfo.parkingRestriction.type}
+                        className="w-10 h-10 short:w-9 short:h-9 drop-shadow-md"
+                      />
+                      <span
+                        className={`cq-hide-md text-[0.6rem] font-black uppercase leading-tight ${
+                          isDangerOverLimit
+                            ? 'text-white'
+                            : isLightTheme
+                            ? 'text-rose-700'
+                            : 'text-rose-300'
+                        }`}
+                      >
+                        {roadInfo.parkingRestriction.signCode}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Cụm Đồng hồ + Thời tiết góc phải */}
@@ -1287,6 +1314,21 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                     >
                       <span>📷</span>
                       <span className="cq-hide-md">+Cam</span>
+                    </button>
+                  )}
+
+                  {onQuickPinNoStopping && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onQuickPinNoStopping();
+                      }}
+                      title="Ghim nhanh điểm Cấm dừng & Cấm đỗ (P.130) tại vị trí hiện tại"
+                      className={`px-1.5 py-0.5 rounded-full border text-[0.66rem] font-black flex items-center gap-0.5 active:scale-95 transition ${theme.iconBtn}`}
+                    >
+                      <span>🚫</span>
+                      <span className="cq-hide-md">+P.130</span>
                     </button>
                   )}
                 </div>

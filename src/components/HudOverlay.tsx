@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FlipHorizontal2, X, BatteryCharging, Navigation, AlertTriangle } from 'lucide-react';
 import { ActiveNavSummary } from '../types';
 import { CockpitTelemetry } from '../hooks/useCockpitTelemetry';
+import { ParkingSignSvg } from './TrafficSignBadge';
 
 interface HudOverlayProps {
   isOpen: boolean;
@@ -116,6 +117,18 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
               </span>
               <span className="text-[10px] sm:text-xs font-extrabold uppercase tracking-wider text-white/70 mt-0.5">
                 TỐI ĐA
+              </span>
+            </div>
+          )}
+
+          {telemetry.roadInfo?.parkingRestriction && (
+            <div className="flex flex-col items-center gap-1">
+              <ParkingSignSvg
+                type={telemetry.roadInfo.parkingRestriction.type}
+                className="w-24 h-24 sm:w-32 sm:h-32"
+              />
+              <span className="text-xs sm:text-sm font-black text-rose-400 uppercase tracking-wider">
+                {telemetry.roadInfo.parkingRestriction.signCode}
               </span>
             </div>
           )}

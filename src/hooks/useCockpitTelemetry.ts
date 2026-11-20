@@ -14,11 +14,22 @@ export interface WeatherInfo {
 }
 
 export interface RoadHazard {
-  type: 'camera' | 'toll' | 'railway' | 'school' | 'signals';
+  type: 'camera' | 'no_stopping' | 'no_parking' | 'toll' | 'railway' | 'school' | 'signals';
   label: string;
+  detail?: string;
+  signCode?: 'P.130' | 'P.131a';
   distanceM: number;
   lat?: number;
   lon?: number;
+}
+
+export interface ParkingRestrictionInfo {
+  type: 'no_stopping' | 'no_parking';
+  signCode: 'P.130' | 'P.131a';
+  label: string;
+  reason: string;
+  isVerified: boolean;
+  hasCamera?: boolean;
 }
 
 export interface RoadInfraInfo {
@@ -29,6 +40,7 @@ export interface RoadInfraInfo {
   isVerifiedLimit: boolean;
   lanes: number | null;
   oneway: boolean;
+  parkingRestriction: ParkingRestrictionInfo | null;
   hazards: RoadHazard[];
 }
 
@@ -44,6 +56,7 @@ export interface CockpitTelemetry {
   tripStats: TripStats;
   resetTrip: () => void;
   fatigueWarning: boolean;
+  customHazards: CustomHazardPin[];
   nearbyCustomHazard: { pin: CustomHazardPin; distanceM: number } | null;
 }
 
@@ -396,6 +409,7 @@ export function useCockpitTelemetry(
           isVerifiedLimit: Boolean(data.isVerifiedLimit),
           lanes: typeof data.lanes === 'number' ? data.lanes : null,
           oneway: Boolean(data.oneway),
+          parkingRestriction: data.parkingRestriction || null,
           hazards: Array.isArray(data.hazards) ? data.hazards : [],
         });
       } catch {
@@ -432,28 +446,59 @@ export function useCockpitTelemetry(
     }
   }, [active, speedAlertSound, speedKmh, roadInfo?.speedLimit]);
 
-  // Cảnh báo giọng nói khi phát hiện Camera phạt nguội / Đường sắt phía trước (< 280m)
+  // Cảnh báo giọng nói khi phát hiện Camera phạt nguội (<= 500m) / Đường sắt (<= 280m)
   useEffect(() => {
     if (!active || !speedAlertSound || !roadInfo?.hazards || roadInfo.hazards.length === 0) {
       return;
     }
     const now = Date.now();
     for (const hz of roadInfo.hazards) {
-      if ((hz.type === 'camera' || hz.type === 'railway') && hz.distanceM <= 280) {
+      const isCam = hz.type === 'camera' && hz.distanceM <= 500;
+      const isRail = hz.type === 'railway' && hz.distanceM <= 280;
+      if (isCam || isRail) {
         const key = `${hz.type}:${(hz.lat ?? 0).toFixed(3)},${(hz.lon ?? 0).toFixed(3)}`;
         const lastAt = announcedCameraKeysRef.current.get(key) || 0;
         if (now - lastAt > 65000) {
           announcedCameraKeysRef.current.set(key, now);
-          const msg =
-            hz.type === 'camera'
-              ? `Phía trước ${hz.distanceM} mét có ca me ra giám sát tốc độ`
-              : `Phía trước ${hz.distanceM} mét có giao cắt đường sắt`;
+          const roundedM = Math.max(50, Math.round(hz.distanceM / 50) * 50);
+          const msg = isCam
+            ? `Phía trước ${roundedM} mét có ca me ra phạt nguội${
+                hz.label.toLowerCase().includes('tốc độ') ? ' bắn tốc độ' : ''
+              }`
+            : `Phía trước ${roundedM} mét có giao cắt đường sắt`;
           speakVietnamese(msg, { dedupeKey: key, cooldownMs: 60000, chime: true });
           break;
         }
       }
     }
   }, [active, speedAlertSound, roadInfo?.hazards]);
+
+  // Cảnh báo giọng nói khu vực Biển P.130 (Cấm dừng & Cấm đỗ) / P.131a (Cấm đỗ)
+  // Đặc biệt nhắc mạnh khi xe giảm tốc (< 20 km/h) chuẩn bị tấp lề!
+  useEffect(() => {
+    const pr = roadInfo?.parkingRestriction;
+    if (!active || !speedAlertSound || !pr || !pr.isVerified) return;
+    // Chỉ cảnh báo trên phố (không báo liên tục khi chạy đều 80-100 trên cao tốc)
+    const isSlowingInUrban = speedKmh !== null && speedKmh <= 22;
+    const isCameraZone = Boolean(pr.hasCamera);
+    if (!isSlowingInUrban && !isCameraZone) return;
+
+    const roadKey = `park:${pr.signCode}:${roadInfo?.roadName || 'zone'}`;
+    const lastAt = announcedCameraKeysRef.current.get(roadKey) || 0;
+    const now = Date.now();
+    if (now - lastAt > 95000) {
+      announcedCameraKeysRef.current.set(roadKey, now);
+      const msg =
+        pr.type === 'no_stopping'
+          ? `Chú ý tuyến đường cấm dừng và cấm đỗ xe biển P130${
+              pr.hasCamera ? ', có ca me ra phạt nguội' : ''
+            }`
+          : `Chú ý tuyến đường cấm đỗ xe biển P131${
+              pr.hasCamera ? ', có ca me ra phạt nguội' : ''
+            }`;
+      speakVietnamese(msg, { dedupeKey: roadKey, cooldownMs: 90000, chime: true });
+    }
+  }, [active, speedAlertSound, roadInfo?.parkingRestriction, roadInfo?.roadName, speedKmh]);
 
   // Lấy thời tiết thực tế từ Open-Meteo
   useEffect(() => {
@@ -542,6 +587,7 @@ export function useCockpitTelemetry(
       tripStats,
       resetTrip,
       fatigueWarning,
+      customHazards,
       nearbyCustomHazard,
     }),
     [
@@ -556,6 +602,7 @@ export function useCockpitTelemetry(
       tripStats,
       resetTrip,
       fatigueWarning,
+      customHazards,
       nearbyCustomHazard,
     ]
   );

@@ -80,6 +80,10 @@ export function getHazardKindMeta(kind: CustomHazardKind): { icon: string; defau
   switch (kind) {
     case 'camera':
       return { icon: '📷', defaultLabel: 'Camera phạt nguội' };
+    case 'no_stopping':
+      return { icon: '🚫', defaultLabel: 'Cấm dừng & đỗ (P.130)' };
+    case 'no_parking':
+      return { icon: '⛔', defaultLabel: 'Cấm đỗ xe (P.131a)' };
     case 'police':
       return { icon: '🚨', defaultLabel: 'Điểm chốt kiểm tra' };
     case 'pothole':

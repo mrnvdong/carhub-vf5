@@ -1,6 +1,9 @@
 // Cloudflare Pages Function: /api/road
 // Real-time road infrastructure, Vietnamese speed limit (QCVN 41 / Thông tư 38/2024),
-// road name, lane count, and forward hazard/camera detection via OpenStreetMap 0.6 JSON API.
+// Camera phạt nguội CSGT, Biển P.130 (Cấm dừng & Cấm đỗ), Biển P.131a (Cấm đỗ xe),
+// road name, lane count, and nearby camera/sign overlay via OpenStreetMap + Vietnam Camera DB.
+
+import { VIETNAM_TRAFFIC_POINTS, VietnamTrafficPoint } from '../_lib/vietnamCameras';
 
 const CORS_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
@@ -32,11 +35,22 @@ interface OsmNode {
 }
 
 interface HazardItem {
-  type: 'camera' | 'toll' | 'railway' | 'school' | 'signals';
+  type: 'camera' | 'no_stopping' | 'no_parking' | 'toll' | 'railway' | 'school' | 'signals';
   label: string;
+  detail?: string;
+  signCode?: 'P.130' | 'P.131a';
   distanceM: number;
   lat: number;
   lon: number;
+}
+
+interface ParkingRestrictionInfo {
+  type: 'no_stopping' | 'no_parking';
+  signCode: 'P.130' | 'P.131a';
+  label: string;
+  reason: string;
+  isVerified: boolean;
+  hasCamera?: boolean;
 }
 
 function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -62,11 +76,9 @@ function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): num
 }
 
 function angleDiff(a: number, b: number): number {
-  const diff = Math.abs(((a - b + 540) % 360) - 180);
-  return diff;
+  return Math.abs(((a - b + 540) % 360) - 180);
 }
 
-// Perpendicular distance from point P to segment AB in meters (local equirectangular projection)
 function pointToSegmentDistM(
   pLat: number,
   pLon: number,
@@ -112,7 +124,6 @@ function parseMaxspeed(tags: Record<string, string>, isReverseOnTwoWay: boolean)
   return null;
 }
 
-// Fallback statutory speed limit reference in Vietnam (Thông tư 38/2024/TT-BGTVT)
 function inferVietnamStatutoryLimit(tags: Record<string, string>): {
   limit: number;
   roadTypeLabel: string;
@@ -154,9 +165,152 @@ function inferVietnamStatutoryLimit(tags: Record<string, string>): {
   }
 }
 
+// Phân tích biển Cấm dừng & Cấm đỗ (P.130) / Cấm đỗ xe (P.131a) từ thẻ OSM + Luật GTĐB VN
+function detectParkingRestrictionFromWay(
+  tags: Record<string, string>,
+  isReverseOnTwoWay: boolean
+): ParkingRestrictionInfo | null {
+  const side = isReverseOnTwoWay ? 'left' : 'right';
+  const vals = [
+    tags['parking:both:restriction'],
+    tags[`parking:${side}:restriction`],
+    tags['parking:condition:both'],
+    tags[`parking:condition:${side}`],
+    tags['parking:both'],
+    tags[`parking:${side}`],
+    tags['parking:lane:both'],
+    tags[`parking:lane:${side}`],
+    tags.traffic_sign,
+    tags.no_stopping === 'yes' ? 'no_stopping' : '',
+    tags.no_parking === 'yes' ? 'no_parking' : '',
+  ]
+    .filter(Boolean)
+    .map((v) => String(v).toLowerCase());
+
+  const joined = vals.join(' ');
+
+  if (
+    joined.includes('no_stopping') ||
+    joined.includes('p.130') ||
+    joined.includes('vn:p.130') ||
+    joined.includes('no_standing')
+  ) {
+    return {
+      type: 'no_stopping',
+      signCode: 'P.130',
+      label: 'Cấm dừng & Cấm đỗ',
+      reason: 'Biển P.130 trên tuyến đường (OSM)',
+      isVerified: true,
+    };
+  }
+
+  if (
+    joined.includes('no_parking') ||
+    joined.includes('p.131') ||
+    joined.includes('vn:p.131') ||
+    vals.some((v) => v === 'no')
+  ) {
+    return {
+      type: 'no_parking',
+      signCode: 'P.131a',
+      label: 'Cấm đỗ xe',
+      reason: 'Biển P.131a trên tuyến đường (OSM)',
+      isVerified: true,
+    };
+  }
+
+  // Luật TTATGTĐB Việt Nam: Cấm dừng & cấm đỗ tuyệt đối trên Cao tốc, Cầu, Hầm đường bộ!
+  if (tags.tunnel === 'yes' || tags.tunnel === 'building_passage') {
+    return {
+      type: 'no_stopping',
+      signCode: 'P.130',
+      label: 'Cấm dừng & Cấm đỗ',
+      reason: 'Trong hầm đường bộ (Luật GTĐB)',
+      isVerified: true,
+    };
+  }
+  if (tags.bridge === 'yes' || tags.bridge === 'viaduct') {
+    return {
+      type: 'no_stopping',
+      signCode: 'P.130',
+      label: 'Cấm dừng & Cấm đỗ',
+      reason: 'Trên cầu / cầu cạn (Luật GTĐB)',
+      isVerified: true,
+    };
+  }
+  if (tags.highway === 'motorway' || tags.highway === 'motorway_link') {
+    return {
+      type: 'no_stopping',
+      signCode: 'P.130',
+      label: 'Cấm dừng & Cấm đỗ',
+      reason: 'Cao tốc — chỉ dừng làn khẩn cấp khi gặp sự cố',
+      isVerified: true,
+    };
+  }
+
+  return null;
+}
+
+function classifyOsmNodeHazard(t: Record<string, string>): {
+  type: HazardItem['type'];
+  shortLabel: string;
+  detail?: string;
+  signCode?: 'P.130' | 'P.131a';
+} | null {
+  const ts = String(t.traffic_sign || '').toLowerCase();
+  if (ts.includes('p.130') || ts.includes('no_stopping') || t.enforcement === 'not_stopping') {
+    return {
+      type: 'no_stopping',
+      shortLabel: 'Cấm dừng & đỗ',
+      detail: 'Biển P.130 cấm dừng & đỗ xe',
+      signCode: 'P.130',
+    };
+  }
+  if (ts.includes('p.131') || ts.includes('no_parking') || t.enforcement === 'parking') {
+    return {
+      type: 'no_parking',
+      shortLabel: 'Cấm đỗ xe',
+      detail: 'Biển P.131a cấm đỗ xe',
+      signCode: 'P.131a',
+    };
+  }
+  if (
+    t.highway === 'speed_camera' ||
+    t.enforcement === 'maxspeed' ||
+    t.enforcement === 'traffic_signals' ||
+    (t.man_made === 'surveillance' &&
+      (t['surveillance:type'] === 'camera' ||
+        t.surveillance === 'traffic' ||
+        t['surveillance:zone'] === 'traffic' ||
+        t['surveillance:zone'] === 'road'))
+  ) {
+    const detail =
+      t.enforcement === 'traffic_signals'
+        ? 'Camera phạt nguội vượt đèn đỏ'
+        : t.maxspeed
+        ? `Camera phạt nguội tốc độ ${t.maxspeed} km/h`
+        : 'Camera phạt nguội giao thông';
+    return { type: 'camera', shortLabel: 'Camera phạt nguội', detail };
+  }
+  if (t.barrier === 'toll_booth') {
+    return { type: 'toll', shortLabel: 'Trạm thu phí' };
+  }
+  if (t.railway === 'level_crossing') {
+    return { type: 'railway', shortLabel: 'Đường sắt' };
+  }
+  if (t.amenity === 'school') {
+    return { type: 'school', shortLabel: 'Gần trường học' };
+  }
+  if (t.highway === 'traffic_signals') {
+    return { type: 'signals', shortLabel: 'Đèn giao thông' };
+  }
+  return null;
+}
+
 export async function onRequestGet(context: any) {
   const { request } = context;
   const url = new URL(request.url);
+  const mode = (url.searchParams.get('mode') || '').trim().toLowerCase();
   const lat = parseFloat(url.searchParams.get('lat') || '');
   const lon = parseFloat(url.searchParams.get('lon') || '');
   const headingParam = url.searchParams.get('heading');
@@ -172,17 +326,51 @@ export async function onRequestGet(context: any) {
     });
   }
 
-  // Cache pruned road/hazard OSM grid cell (~110m grid, ~210m bbox radius) for 24h at Cloudflare Edge
+  // =========================================================================
+  // MODE = CAMERAS: Trả về toàn bộ điểm Camera Phạt Nguội + Biển P.130/P.131a trong bán kính radiusKm
+  // để hiển thị thành lớp cảnh báo trực quan trên Bản đồ 3D Cockpit (như Vietmap Live!)
+  // =========================================================================
+  if (mode === 'cameras') {
+    const radiusKmRaw = parseFloat(url.searchParams.get('radiusKm') || '10');
+    const radiusM = Math.max(1000, Math.min(35000, (isNaN(radiusKmRaw) ? 10 : radiusKmRaw) * 1000));
+
+    const nearbyPoints: Array<VietnamTrafficPoint & { distanceM: number }> = [];
+    for (const pt of VIETNAM_TRAFFIC_POINTS) {
+      const distM = Math.round(haversineM(lat, lon, pt.lat, pt.lon));
+      if (distM <= radiusM) {
+        nearbyPoints.push({ ...pt, distanceM: distM });
+      }
+    }
+    nearbyPoints.sort((a, b) => a.distanceM - b.distanceM);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        count: nearbyPoints.length,
+        points: nearbyPoints.slice(0, 60),
+      }),
+      {
+        headers: {
+          ...CORS_HEADERS,
+          'Cache-Control': 'public, max-age=600, s-maxage=600',
+        },
+      }
+    );
+  }
+
+  // =========================================================================
+  // MODE MẶC ĐỊNH: Hạ tầng đường bộ, biển P.127, Camera phạt nguội & Cấm dừng/Cấm đỗ (P.130/P.131a)
+  // =========================================================================
   const gridLat = Math.round(lat * 900) / 900;
   const gridLon = Math.round(lon * 900) / 900;
-  const d = 0.0019; // ~210m radius around grid center (2.2x smaller payload than 0.0028)
+  const d = 0.0022; // ~245m radius quanh ô lưới
   const osmUrl = `https://api.openstreetmap.org/api/0.6/map.json?bbox=${(gridLon - d).toFixed(
     5
   )},${(gridLat - d).toFixed(5)},${(gridLon + d).toFixed(5)},${(gridLat + d).toFixed(5)}`;
 
   const cache = (caches as any).default;
   const osmCacheKey = new Request(
-    `https://carhub-osm-grid.internal/v2/${gridLat.toFixed(4)}/${gridLon.toFixed(4)}`
+    `https://carhub-osm-grid.internal/v3/${gridLat.toFixed(4)}/${gridLon.toFixed(4)}`
   );
 
   let elements: any[] | null = null;
@@ -201,7 +389,7 @@ export async function onRequestGet(context: any) {
     try {
       const osmRes = await fetch(osmUrl, {
         headers: {
-          'User-Agent': 'CarHub-VF5-HUD/2.0 (https://carhub-vf5.pages.dev)',
+          'User-Agent': 'CarHub-VF5-HUD/2.1 (https://carhub-vf5.pages.dev)',
           Accept: 'application/json',
         },
         signal: AbortSignal.timeout(4500),
@@ -211,8 +399,6 @@ export async function onRequestGet(context: any) {
         const osmJson: any = await osmRes.json();
         const rawElements: any[] = Array.isArray(osmJson?.elements) ? osmJson.elements : [];
 
-        // Prune buildings/trees/relations before caching: keep ONLY drivable highway ways,
-        // their referenced geometry nodes, and traffic hazard/camera nodes (>80% smaller!).
         const neededNodeIds = new Set<number>();
         const keptWays: any[] = [];
         for (const el of rawElements) {
@@ -236,30 +422,33 @@ export async function onRequestGet(context: any) {
                 'maxspeed:backward': el.tags['maxspeed:backward'],
                 lanes: el.tags.lanes,
                 oneway: el.tags.oneway,
+                bridge: el.tags.bridge,
+                tunnel: el.tags.tunnel,
+                traffic_sign: el.tags.traffic_sign,
+                no_stopping: el.tags.no_stopping,
+                no_parking: el.tags.no_parking,
+                'parking:both': el.tags['parking:both'],
+                'parking:right': el.tags['parking:right'],
+                'parking:left': el.tags['parking:left'],
+                'parking:both:restriction': el.tags['parking:both:restriction'],
+                'parking:right:restriction': el.tags['parking:right:restriction'],
+                'parking:left:restriction': el.tags['parking:left:restriction'],
+                'parking:lane:both': el.tags['parking:lane:both'],
+                'parking:lane:right': el.tags['parking:lane:right'],
+                'parking:lane:left': el.tags['parking:lane:left'],
+                'parking:condition:both': el.tags['parking:condition:both'],
+                'parking:condition:right': el.tags['parking:condition:right'],
+                'parking:condition:left': el.tags['parking:condition:left'],
               },
             });
             for (const nid of el.nodes) neededNodeIds.add(nid);
           }
         }
 
-        const isHazardTag = (t: Record<string, string> | undefined) => {
-          if (!t) return false;
-          return (
-            t.highway === 'speed_camera' ||
-            t.enforcement === 'maxspeed' ||
-            (t.man_made === 'surveillance' &&
-              (t['surveillance:type'] === 'camera' || t.surveillance === 'traffic')) ||
-            t.barrier === 'toll_booth' ||
-            t.railway === 'level_crossing' ||
-            t.amenity === 'school' ||
-            t.highway === 'traffic_signals'
-          );
-        };
-
         const keptNodes: any[] = [];
         for (const el of rawElements) {
           if (el.type === 'node' && typeof el.lat === 'number' && typeof el.lon === 'number') {
-            const hz = isHazardTag(el.tags);
+            const hz = el.tags ? classifyOsmNodeHazard(el.tags) : null;
             if (hz || neededNodeIds.has(el.id)) {
               keptNodes.push(
                 hz
@@ -286,140 +475,207 @@ export async function onRequestGet(context: any) {
     }
   }
 
-  if (!elements || elements.length === 0) {
-    return new Response(
-      JSON.stringify({
-        success: false,
-        roadName: null,
-        speedLimit: null,
-        isVerifiedLimit: false,
-        hazards: [],
-      }),
-      { headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=30' } }
-    );
-  }
-
-  // Index nodes & detect nearby traffic hazards/cameras
+  // 1) Thu thập cảnh báo từ OSM nodes
   const nodeMap = new Map<number, OsmNode>();
   const hazards: HazardItem[] = [];
+  let nearbyZoneParkingRestriction: ParkingRestrictionInfo | null = null;
 
-  for (const el of elements) {
-    if (el.type === 'node' && typeof el.lat === 'number' && typeof el.lon === 'number') {
-      nodeMap.set(el.id, el);
-      const t = el.tags;
-      if (!t) continue;
+  if (Array.isArray(elements)) {
+    for (const el of elements) {
+      if (el.type === 'node' && typeof el.lat === 'number' && typeof el.lon === 'number') {
+        nodeMap.set(el.id, el);
+        const t = el.tags;
+        if (!t) continue;
+        const classified = classifyOsmNodeHazard(t);
+        if (!classified) continue;
 
-      const distM = Math.round(haversineM(lat, lon, el.lat, el.lon));
-      if (distM > 320) continue;
+        const distM = Math.round(haversineM(lat, lon, el.lat, el.lon));
+        const maxDist = classified.type === 'camera' ? 400 : 300;
+        if (distM > maxDist) continue;
 
-      // Filter out hazards that are already behind the car (> 80° off current heading)
-      if (heading !== null && distM > 25) {
-        const brg = bearingDeg(lat, lon, el.lat, el.lon);
-        if (angleDiff(heading, brg) > 80) continue;
-      }
+        // Cấm dừng / Cấm đỗ áp dụng quanh xe (không cần lọc hướng); các loại khác lọc hướng phía trước
+        if (
+          classified.type !== 'no_stopping' &&
+          classified.type !== 'no_parking' &&
+          heading !== null &&
+          distM > 30
+        ) {
+          const brg = bearingDeg(lat, lon, el.lat, el.lon);
+          if (angleDiff(heading, brg) > 85) continue;
+        }
 
-      if (
-        t.highway === 'speed_camera' ||
-        t.enforcement === 'maxspeed' ||
-        (t.man_made === 'surveillance' &&
-          (t['surveillance:type'] === 'camera' || t.surveillance === 'traffic'))
-      ) {
-        hazards.push({ type: 'camera', label: `Camera ${distM}m`, distanceM: distM, lat: el.lat, lon: el.lon });
-      } else if (t.barrier === 'toll_booth') {
-        hazards.push({ type: 'toll', label: `Trạm thu phí ${distM}m`, distanceM: distM, lat: el.lat, lon: el.lon });
-      } else if (t.railway === 'level_crossing') {
-        hazards.push({ type: 'railway', label: `Đường sắt ${distM}m`, distanceM: distM, lat: el.lat, lon: el.lon });
-      } else if (t.amenity === 'school' && distM <= 180) {
-        hazards.push({ type: 'school', label: 'Gần trường học', distanceM: distM, lat: el.lat, lon: el.lon });
-      } else if (t.highway === 'traffic_signals' && distM <= 150) {
-        hazards.push({ type: 'signals', label: `Đèn giao thông ${distM}m`, distanceM: distM, lat: el.lat, lon: el.lon });
+        if (classified.type === 'school' && distM > 180) continue;
+        if (classified.type === 'signals' && distM > 150) continue;
+
+        hazards.push({
+          type: classified.type,
+          label:
+            classified.type === 'school'
+              ? classified.shortLabel
+              : `${classified.shortLabel} ${distM}m`,
+          detail: classified.detail,
+          signCode: classified.signCode,
+          distanceM: distM,
+          lat: el.lat,
+          lon: el.lon,
+        });
+
+        if (
+          (classified.type === 'no_stopping' || classified.type === 'no_parking') &&
+          distM <= 160 &&
+          !nearbyZoneParkingRestriction
+        ) {
+          nearbyZoneParkingRestriction = {
+            type: classified.type,
+            signCode: classified.signCode || (classified.type === 'no_stopping' ? 'P.130' : 'P.131a'),
+            label: classified.shortLabel,
+            reason: classified.detail || 'Biển cấm dừng/đỗ trên bản đồ',
+            isVerified: true,
+          };
+        }
       }
     }
   }
 
-  // Deduplicate hazards by type (keep closest of each type, prioritize camera/railway/toll first)
+  // 2) Ghép thêm dữ liệu Camera Phạt Nguội & Tuyến Cấm Dừng/Cấm Đỗ trọng điểm Việt Nam (bán kính 550m!)
+  for (const pt of VIETNAM_TRAFFIC_POINTS) {
+    const distM = Math.round(haversineM(lat, lon, pt.lat, pt.lon));
+    const isParkingType = pt.kind === 'no_stopping' || pt.kind === 'no_parking';
+    const maxDist = isParkingType ? 280 : 550;
+    if (distM > maxDist) continue;
+
+    if (!isParkingType && heading !== null && distM > 45) {
+      const brg = bearingDeg(lat, lon, pt.lat, pt.lon);
+      if (angleDiff(heading, brg) > 85) continue;
+    }
+
+    if (isParkingType) {
+      const signCode = pt.signCode || (pt.kind === 'no_stopping' ? 'P.130' : 'P.131a');
+      hazards.push({
+        type: pt.kind,
+        label:
+          pt.kind === 'no_stopping'
+            ? `Cấm dừng & đỗ (${signCode})`
+            : `Cấm đỗ xe (${signCode})`,
+        detail: pt.note || pt.name,
+        signCode,
+        distanceM: distM,
+        lat: pt.lat,
+        lon: pt.lon,
+      });
+      if (distM <= 240) {
+        nearbyZoneParkingRestriction = {
+          type: pt.kind,
+          signCode,
+          label: pt.kind === 'no_stopping' ? 'Cấm dừng & Cấm đỗ' : 'Cấm đỗ xe',
+          reason: pt.note || `${pt.name} (${pt.road})`,
+          isVerified: true,
+          hasCamera: Boolean(pt.hasCamera),
+        };
+      }
+    } else {
+      const camLabel =
+        pt.kind === 'camera_speed'
+          ? `Cam tốc độ ${distM}m`
+          : pt.kind === 'camera_redlight'
+          ? `Cam phạt nguội ${distM}m`
+          : `Cam làn đường ${distM}m`;
+      hazards.push({
+        type: 'camera',
+        label: camLabel,
+        detail: `${pt.name}${pt.note ? ` • ${pt.note}` : ''}`,
+        distanceM: distM,
+        lat: pt.lat,
+        lon: pt.lon,
+      });
+    }
+  }
+
+  // 3) Sắp xếp & khử trùng theo tọa độ gần nhau (giữ tối đa 4 cảnh báo ưu tiên: Camera > P.130 > P.131a > Tàu > Trạm phí)
   const priorityOrder: Record<HazardItem['type'], number> = {
     camera: 1,
-    railway: 2,
-    toll: 3,
-    school: 4,
-    signals: 5,
+    no_stopping: 2,
+    no_parking: 3,
+    railway: 4,
+    toll: 5,
+    school: 6,
+    signals: 7,
   };
   hazards.sort(
     (a, b) => priorityOrder[a.type] - priorityOrder[b.type] || a.distanceM - b.distanceM
   );
   const uniqueHazards: HazardItem[] = [];
-  const seenTypes = new Set<string>();
+  const seenKey = new Set<string>();
   for (const h of hazards) {
-    if (seenTypes.has(h.type)) continue;
-    seenTypes.add(h.type);
+    const k = `${h.type}:${h.lat.toFixed(3)},${h.lon.toFixed(3)}`;
+    if (seenKey.has(k)) continue;
+    seenKey.add(k);
     uniqueHazards.push(h);
-    if (uniqueHazards.length >= 2) break;
+    if (uniqueHazards.length >= 4) break;
   }
 
-  // Find the exact road way the vehicle is currently driving on
+  // 4) Tìm đoạn đường chính xác xe đang chạy để đọc biển P.127 & P.130/P.131a theo mặt đường
   let bestWay: any = null;
   let bestScore = Infinity;
   let bestReverse = false;
 
-  for (const el of elements) {
-    if (el.type !== 'way' || !el.tags?.highway || !Array.isArray(el.nodes)) continue;
-    const hw = el.tags.highway;
-    if (!DRIVABLE_HIGHWAYS.has(hw)) continue;
+  if (Array.isArray(elements)) {
+    for (const el of elements) {
+      if (el.type !== 'way' || !el.tags?.highway || !Array.isArray(el.nodes)) continue;
+      const hw = el.tags.highway;
+      if (!DRIVABLE_HIGHWAYS.has(hw)) continue;
 
-    let minWayDist = Infinity;
-    let closestBearing = 0;
+      let minWayDist = Infinity;
+      let closestBearing = 0;
 
-    for (let i = 0; i < el.nodes.length - 1; i++) {
-      const nA = nodeMap.get(el.nodes[i]);
-      const nB = nodeMap.get(el.nodes[i + 1]);
-      if (!nA || !nB) continue;
+      for (let i = 0; i < el.nodes.length - 1; i++) {
+        const nA = nodeMap.get(el.nodes[i]);
+        const nB = nodeMap.get(el.nodes[i + 1]);
+        if (!nA || !nB) continue;
 
-      const { distM, segBearing } = pointToSegmentDistM(
-        lat,
-        lon,
-        nA.lat,
-        nA.lon,
-        nB.lat,
-        nB.lon
-      );
-      if (distM < minWayDist) {
-        minWayDist = distM;
-        closestBearing = segBearing;
+        const { distM, segBearing } = pointToSegmentDistM(
+          lat,
+          lon,
+          nA.lat,
+          nA.lon,
+          nB.lat,
+          nB.lon
+        );
+        if (distM < minWayDist) {
+          minWayDist = distM;
+          closestBearing = segBearing;
+        }
       }
-    }
 
-    if (minWayDist > 65) continue;
+      if (minWayDist > 65) continue;
 
-    // Score penalty: penalize unnamed service alleys if a real street is within GPS tolerance,
-    // and penalize wrong-way carriageways on divided highways when heading is available.
-    let score = minWayDist;
-    if (hw === 'service' && !el.tags.name) score += 22;
-    else if (hw === 'service') score += 12;
+      let score = minWayDist;
+      if (hw === 'service' && !el.tags.name) score += 22;
+      else if (hw === 'service') score += 12;
 
-    let isReverse = false;
-    if (heading !== null) {
-      const diffForward = angleDiff(heading, closestBearing);
-      const diffBackward = angleDiff(heading, (closestBearing + 180) % 360);
-      const isOneWay = el.tags.oneway === 'yes' || el.tags.oneway === '1';
-      const isOneWayRev = el.tags.oneway === '-1';
+      let isReverse = false;
+      if (heading !== null) {
+        const diffForward = angleDiff(heading, closestBearing);
+        const diffBackward = angleDiff(heading, (closestBearing + 180) % 360);
+        const isOneWay = el.tags.oneway === 'yes' || el.tags.oneway === '1';
+        const isOneWayRev = el.tags.oneway === '-1';
 
-      if (isOneWay) {
-        if (diffForward > 95) score += 35; // Opposite carriageway on divided highway!
-      } else if (isOneWayRev) {
-        if (diffBackward > 95) score += 35;
-        isReverse = true;
-      } else {
-        // Two-way road: align along either forward or backward bearing
-        if (Math.min(diffForward, diffBackward) > 65) score += 10;
-        if (diffBackward < diffForward) isReverse = true;
+        if (isOneWay) {
+          if (diffForward > 95) score += 35;
+        } else if (isOneWayRev) {
+          if (diffBackward > 95) score += 35;
+          isReverse = true;
+        } else {
+          if (Math.min(diffForward, diffBackward) > 65) score += 10;
+          if (diffBackward < diffForward) isReverse = true;
+        }
       }
-    }
 
-    if (score < bestScore) {
-      bestScore = score;
-      bestWay = el;
-      bestReverse = isReverse;
+      if (score < bestScore) {
+        bestScore = score;
+        bestWay = el;
+        bestReverse = isReverse;
+      }
     }
   }
 
@@ -434,6 +690,7 @@ export async function onRequestGet(context: any) {
         isVerifiedLimit: false,
         lanes: null,
         oneway: false,
+        parkingRestriction: nearbyZoneParkingRestriction,
         hazards: uniqueHazards,
       }),
       { headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store' } }
@@ -445,6 +702,12 @@ export async function onRequestGet(context: any) {
   const statutory = inferVietnamStatutoryLimit(t);
   const finalLimit = verifiedSpeed ?? statutory.limit;
   const lanesNum = t.lanes ? parseInt(t.lanes, 10) : null;
+  const wayParking = detectParkingRestrictionFromWay(t, bestReverse);
+  // Ưu tiên P.130 (cấm dừng & đỗ) nếu có giữa cả 2 nguồn (tuyến cấm cố định hoặc thẻ OSM đường bộ)
+  const parkingRestriction =
+    nearbyZoneParkingRestriction?.type === 'no_stopping'
+      ? nearbyZoneParkingRestriction
+      : wayParking || nearbyZoneParkingRestriction;
 
   return new Response(
     JSON.stringify({
@@ -456,6 +719,7 @@ export async function onRequestGet(context: any) {
       isVerifiedLimit: verifiedSpeed !== null,
       lanes: lanesNum && !isNaN(lanesNum) ? lanesNum : null,
       oneway: t.oneway === 'yes' || t.oneway === '1' || t.oneway === '-1',
+      parkingRestriction,
       hazards: uniqueHazards,
     }),
     { headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store' } }

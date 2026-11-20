@@ -136,7 +136,15 @@ function sanitizeCustomHazard(p: any) {
   const lat = Number(p.lat);
   const lon = Number(p.lon);
   if (isNaN(lat) || isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
-  const allowedKinds = new Set(['camera', 'police', 'pothole', 'speedbump', 'custom']);
+  const allowedKinds = new Set([
+    'camera',
+    'no_stopping',
+    'no_parking',
+    'police',
+    'pothole',
+    'speedbump',
+    'custom',
+  ]);
   const kind = allowedKinds.has(String(p.kind)) ? String(p.kind) : 'camera';
   return {
     id: String(p.id || `hz-${Date.now()}`).slice(0, 48),

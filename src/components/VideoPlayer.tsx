@@ -2889,6 +2889,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             kmPerPct={kmPerPct}
             onOpenVf5Tools={handleOpenVf5Tools}
             onQuickPinCamera={() => handleAddCustomHazard('camera', 'Camera phạt nguội')}
+            onQuickPinNoStopping={() => handleAddCustomHazard('no_stopping', 'Cấm dừng & đỗ (P.130)')}
           />
         )}
 

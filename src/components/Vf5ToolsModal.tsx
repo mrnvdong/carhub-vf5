@@ -505,10 +505,12 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
                 <p className={`text-xs font-semibold ${theme.textSub}`}>
                   Vị trí: {telemetry.position.lat.toFixed(5)}, {telemetry.position.lon.toFixed(5)} • Lần sau xe đi tới cách 350m sẽ tự động đọc cảnh báo bằng giọng nói!
                 </p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {(
                     [
                       { kind: 'camera', icon: '📷', label: 'Camera phạt nguội' },
+                      { kind: 'no_stopping', icon: '🚫', label: 'Cấm dừng & đỗ (P.130)' },
+                      { kind: 'no_parking', icon: '⛔', label: 'Cấm đỗ xe (P.131a)' },
                       { kind: 'police', icon: '🚨', label: 'Chốt kiểm tra' },
                       { kind: 'pothole', icon: '🕳️', label: 'Đường xấu / Ổ gà' },
                       { kind: 'speedbump', icon: '⚠️', label: 'Gờ giảm tốc lớn' },
