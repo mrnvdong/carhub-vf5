@@ -71,40 +71,174 @@
   }
 }
 
-/* Container queries riêng cho khung Phát Nhạc / Video / TV (Card 3B) trong Cockpit
-   -> Tự căn chuẩn theo đúng bề ngang thực của thẻ nhạc ở mọi tỉ lệ chia 60/40, 70/30 & Ultrawide 3 cột */
+/* Container queries riêng cho cột phải Cockpit (Card 3A + Card 3B)
+   -> Chỉ tách ngang 2 cột khi thực sự đủ bề ngang (>= 42rem), tránh bóp nghẹt Card 3B khi kéo giãn trên màn Ultrawide! */
+.cockpit-right-cq {
+  container-type: inline-size;
+  container-name: right-pane;
+}
+
+.cockpit-right-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-height: 540px) {
+  @container right-pane (min-width: 42rem) {
+    .cockpit-right-stack {
+      flex-direction: row;
+    }
+    .cockpit-telemetry-card {
+      width: 17.5rem;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+  }
+}
+
+/* Container queries riêng cho khung Phát Nhạc / Video / TV / Báo (Card 3B) trong Cockpit
+   -> Tự thích ứng theo đúng bề ngang thực của thẻ khi kéo giãn 30% <-> 70% mà KHÔNG bao giờ vỡ dòng! */
 .cockpit-media-cq {
   container-type: inline-size;
   container-name: media-card;
 }
 
-@container media-card (max-width: 32.5rem) {
-  .mc-hide-lg {
-    display: none !important;
-  }
+.mc-show-xs {
+  display: none;
 }
 
-@container media-card (max-width: 27rem) {
+/* Thanh nút điều khiển đáy thích ứng theo đúng bề ngang thẻ (không lệ thuộc viewport sm:) */
+.mc-transport-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.mc-play-btn {
+  width: 3.35rem;
+  height: 3.35rem;
+}
+
+.mc-step-btn {
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+.mc-aux-btn {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.mc-tv-play-btn {
+  width: 3.15rem;
+  height: 3.15rem;
+}
+
+.mc-tv-step-btn {
+  width: 2.65rem;
+  height: 2.65rem;
+}
+
+.mc-tv-side-btn {
+  height: 2.5rem;
+  min-width: 2.5rem;
+}
+
+@container media-card (max-width: 26rem) {
   .mc-hide-md {
     display: none !important;
   }
-  .mc-seg-btn {
-    padding-inline: 0.5rem !important;
+  .mc-transport-row {
+    gap: 0.5rem;
+  }
+  .mc-play-btn {
+    width: 3.15rem;
+    height: 3.15rem;
+  }
+  .mc-step-btn {
+    width: 2.6rem;
+    height: 2.6rem;
+  }
+  .mc-aux-btn {
+    width: 2.35rem;
+    height: 2.35rem;
+  }
+  .mc-tv-play-btn {
+    width: 3rem;
+    height: 3rem;
+  }
+  .mc-tv-step-btn {
+    width: 2.5rem;
+    height: 2.5rem;
   }
 }
 
-@container media-card (max-width: 23rem) {
+@container media-card (max-width: 20.5rem) {
   .mc-hide-sm {
     display: none !important;
   }
-  .mc-seg-btn {
-    padding-inline: 0.42rem !important;
+  .mc-transport-row {
+    gap: 0.375rem;
+  }
+  .mc-aux-btn {
+    width: 2.25rem;
+    height: 2.25rem;
   }
 }
 
 @container media-card (max-width: 17.5rem) {
   .mc-hide-xs {
     display: none !important;
+  }
+  .mc-show-xs {
+    display: inline !important;
+  }
+  .mc-transport-row {
+    gap: 0.5rem;
+  }
+  .mc-play-btn {
+    width: 3rem;
+    height: 3rem;
+  }
+  .mc-step-btn {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+  .mc-tv-play-btn {
+    width: 2.85rem;
+    height: 2.85rem;
+  }
+  .mc-tv-step-btn {
+    width: 2.35rem;
+    height: 2.35rem;
+  }
+  .mc-tv-side-btn {
+    height: 2.25rem;
+    min-width: 2.25rem;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+}
+
+@media (max-height: 500px) {
+  .mc-play-btn {
+    width: 2.85rem;
+    height: 2.85rem;
+  }
+  .mc-step-btn {
+    width: 2.4rem;
+    height: 2.4rem;
+  }
+  .mc-tv-play-btn {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+  .mc-tv-step-btn {
+    width: 2.3rem;
+    height: 2.3rem;
   }
 }
 
