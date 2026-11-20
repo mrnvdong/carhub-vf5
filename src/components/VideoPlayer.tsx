@@ -1670,7 +1670,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {hardwareNotice && (
         <div
           className={`fixed ${
-            dockMode === 'floating' ? 'top-12' : 'top-3'
+            dockMode === 'floating' ? 'top-[4.5rem] short:top-[4rem]' : 'top-3'
           } left-1/2 -translate-x-1/2 z-50 backdrop-blur-xl px-4 py-2 rounded-full text-xs sm:text-sm font-bold flex items-center gap-2 shadow-2xl border pointer-events-none max-w-[90vw] ${theme.toast}`}
         >
           <ShieldCheck className="w-4 h-4 text-rose-400 shrink-0" />
@@ -1683,7 +1683,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <button
           type="button"
           onClick={() => onChangeRailSection('cockpit')}
-          className={`fixed top-2 right-2.5 z-40 max-w-[min(360px,calc(100vw-6rem))] px-3 py-1.5 rounded-full border backdrop-blur-2xl shadow-2xl flex items-center gap-2 active:scale-95 transition ${
+          className={`fixed ${
+            dockMode === 'floating' ? 'top-[4.5rem] short:top-[4rem]' : 'top-2'
+          } right-2.5 z-40 max-w-[min(360px,calc(100vw-6rem))] px-3 py-1.5 rounded-full border backdrop-blur-2xl shadow-2xl flex items-center gap-2 active:scale-95 transition ${
             telemetry.roadInfo?.speedLimit &&
             telemetry.speedKmh !== null &&
             telemetry.speedKmh >= telemetry.roadInfo.speedLimit + 5
@@ -1708,15 +1710,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* =====================================================================
           1. THANH ĐIỀU HƯỚNG THÔNG MINH CHUẨN CARPLAY (Né 100% menu trái cố định của CarPlay!)
              - Mặc định 'bottom': Thanh đáy siêu mảnh 1 hàng (h-11/h-12) giải phóng +88px bề ngang!
-             - 'floating': Thu gọn hoàn toàn -> 100% toàn màn hình (chỉ 1 viên thuốc nổi trên đỉnh)
+             - 'floating': Thu gọn hoàn toàn -> 100% toàn màn hình (thanh nổi to chuẩn cảm ứng ô tô trên đỉnh!)
              - 'right': Thanh dọc bên phải (đối diện hoàn toàn menu CarPlay bên trái)
          ===================================================================== */}
       {!isFullscreen && dockMode === 'floating' && (
         <div
-          className={`fixed top-1.5 left-1/2 -translate-x-1/2 z-40 h-9 px-1.5 rounded-full border backdrop-blur-2xl shadow-2xl flex items-center gap-1 transition-all ${
+          className={`fixed top-1.5 left-1/2 -translate-x-1/2 z-40 min-h-[3.5rem] short:min-h-[3.25rem] px-2 py-1.5 rounded-full border-2 backdrop-blur-2xl shadow-2xl flex items-center gap-2 transition-all ${
             isLightTheme
-              ? 'bg-white/92 border-slate-300/90 text-slate-900'
-              : 'bg-[#0b101d]/90 border-white/20 text-white'
+              ? 'bg-white/95 border-slate-300 text-slate-900'
+              : 'bg-[#0b101d]/92 border-white/25 text-white'
           }`}
         >
           <button
@@ -1724,13 +1726,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onClick={() => setShowAppLauncher(true)}
             aria-label="Mở menu điều hướng nhanh CarHub"
             title="Mở Menu nhanh CarHub"
-            className={`h-7 px-2.5 rounded-full text-xs font-black flex items-center gap-1.5 active:scale-95 transition ${
+            className={`h-11 short:h-10 px-4 sm:px-5 rounded-full text-sm font-black flex items-center justify-center gap-2 active:scale-95 transition shrink-0 ${
               isLightTheme
-                ? 'bg-slate-900 text-white hover:bg-slate-800'
-                : 'bg-white/15 text-white hover:bg-white/25'
+                ? 'bg-slate-900 text-white hover:bg-slate-800 shadow'
+                : 'bg-white/18 text-white hover:bg-white/28 shadow'
             }`}
           >
-            <LayoutGrid className="w-3.5 h-3.5 shrink-0" />
+            <LayoutGrid className="w-5 h-5 shrink-0" />
             <span>Menu</span>
           </button>
 
@@ -1739,13 +1741,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onClick={() => onOpenSearchModal(true)}
             aria-label="Tìm kiếm bằng giọng nói"
             title="Ra lệnh giọng nói tiếng Việt"
-            className={`w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition ${
+            className={`w-12 h-11 short:w-11 short:h-10 rounded-full border flex items-center justify-center active:scale-90 transition shrink-0 ${
               isLightTheme
-                ? 'bg-rose-50 text-rose-600 hover:bg-rose-100'
-                : 'bg-rose-500/25 text-rose-300 hover:bg-rose-500/40'
+                ? 'bg-rose-50 border-rose-300 text-rose-600 hover:bg-rose-100'
+                : 'bg-rose-500/25 border-rose-400/45 text-rose-200 hover:bg-rose-500/40'
             }`}
           >
-            <Mic className="w-3.5 h-3.5" />
+            <Mic className="w-5 h-5" />
           </button>
 
           <button
@@ -1753,13 +1755,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onClick={() => handleOpenVf5Tools('qr')}
             aria-label="Quét QR điện thoại"
             title="Quét QR điều khiển từ điện thoại"
-            className={`w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition ${
+            className={`h-11 short:h-10 px-3.5 car:px-4 rounded-full border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-90 transition shrink-0 ${
               isLightTheme
-                ? 'bg-sky-50 text-sky-700 hover:bg-sky-100'
-                : 'bg-sky-500/25 text-sky-300 hover:bg-sky-500/40'
+                ? 'bg-sky-50 border-sky-300 text-sky-800 hover:bg-sky-100'
+                : 'bg-sky-500/25 border-sky-400/50 text-sky-200 hover:bg-sky-500/40'
             }`}
           >
-            <QrCode className="w-3.5 h-3.5" />
+            <QrCode className="w-5 h-5 shrink-0" />
+            <span className="hidden car:inline">QR</span>
           </button>
 
           <button
@@ -1770,13 +1773,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             }}
             aria-label="Hiện lại thanh điều hướng dưới đáy"
             title="Hiện lại thanh Dock đáy"
-            className={`w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition ${
+            className={`w-12 h-11 short:w-11 short:h-10 rounded-full border flex items-center justify-center active:scale-90 transition shrink-0 ${
               isLightTheme
-                ? 'text-slate-600 hover:bg-slate-200/80'
-                : 'text-white/75 hover:bg-white/15'
+                ? 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
+                : 'bg-white/10 border-white/20 text-white/85 hover:bg-white/20'
             }`}
           >
-            <ChevronUp className="w-4 h-4" />
+            <ChevronUp className="w-5 h-5" />
           </button>
         </div>
       )}
@@ -2178,12 +2181,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       onChangeRailSection(app.id);
                       setShowAppLauncher(false);
                     }}
-                    className={`min-h-[4rem] rounded-2xl border px-2 py-2 flex flex-col items-center justify-center gap-1 active:scale-95 transition ${
+                    className={`min-h-[4.75rem] rounded-2xl border px-2 py-2.5 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition ${
                       active ? app.activeClass : theme.itemIdle
                     }`}
                   >
-                    <Icon className="w-5 h-5 shrink-0" />
-                    <span className="text-[0.7rem] font-extrabold text-center leading-tight line-clamp-1">
+                    <Icon className="w-6 h-6 shrink-0" />
+                    <span className="text-xs font-extrabold text-center leading-tight line-clamp-1">
                       {app.label}
                     </span>
                   </button>
@@ -2196,10 +2199,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   setShowAppLauncher(false);
                   onOpenSearchModal(false);
                 }}
-                className={`min-h-[4rem] rounded-2xl border px-2 py-2 flex flex-col items-center justify-center gap-1 active:scale-95 transition ${theme.itemIdle}`}
+                className={`min-h-[4.75rem] rounded-2xl border px-2 py-2.5 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition ${theme.itemIdle}`}
               >
-                <Search className="w-5 h-5 shrink-0" />
-                <span className="text-[0.7rem] font-extrabold text-center leading-tight">
+                <Search className="w-6 h-6 shrink-0" />
+                <span className="text-xs font-extrabold text-center leading-tight">
                   Tìm kiếm
                 </span>
               </button>
@@ -2213,13 +2216,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   setShowAppLauncher(false);
                   handleOpenVf5Tools('qr');
                 }}
-                className={`min-h-[2.75rem] px-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                className={`min-h-[3.25rem] px-3 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
                   isLightTheme
                     ? 'bg-sky-50 border-sky-300 text-sky-800'
                     : 'bg-sky-500/20 border-sky-400/50 text-sky-300'
                 }`}
               >
-                <QrCode className="w-4 h-4 shrink-0" />
+                <QrCode className="w-5 h-5 shrink-0" />
                 <span>Quét QR</span>
               </button>
 
@@ -2229,13 +2232,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   setShowAppLauncher(false);
                   handleOpenVf5Tools('ev');
                 }}
-                className={`min-h-[2.75rem] px-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                className={`min-h-[3.25rem] px-3 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
                   isLightTheme
                     ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
                     : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300'
                 }`}
               >
-                <Zap className="w-4 h-4 shrink-0" />
+                <Zap className="w-5 h-5 shrink-0" />
                 <span>Tiện ích VF5</span>
               </button>
 
@@ -2250,13 +2253,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       : '☀️ Giao diện & Bản đồ 3D: Chế độ Sáng'
                   );
                 }}
-                className={`min-h-[2.75rem] px-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                className={`min-h-[3.25rem] px-3 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
                   isLightTheme
                     ? 'bg-amber-100 border-amber-300 text-amber-800'
                     : 'bg-indigo-500/25 border-indigo-400/50 text-amber-200'
                 }`}
               >
-                {isLightTheme ? <Sun className="w-4 h-4 shrink-0" /> : <Moon className="w-4 h-4 shrink-0" />}
+                {isLightTheme ? <Sun className="w-5 h-5 shrink-0" /> : <Moon className="w-5 h-5 shrink-0" />}
                 <span>{isLightTheme ? 'Đang Sáng' : 'Đang Tối'}</span>
               </button>
 
@@ -2266,9 +2269,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   setShowAppLauncher(false);
                   setShowScalePopover(true);
                 }}
-                className={`min-h-[2.75rem] px-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${theme.iconBtn}`}
+                className={`min-h-[3.25rem] px-3 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${theme.iconBtn}`}
               >
-                <SlidersHorizontal className="w-4 h-4 shrink-0" />
+                <SlidersHorizontal className="w-5 h-5 shrink-0" />
                 <span>Cỡ chữ ({scaleLabel})</span>
               </button>
             </div>
@@ -2278,7 +2281,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <p className={`text-[0.7rem] font-extrabold uppercase tracking-wider ${theme.textMuted}`}>
                 Vị trí thanh Menu (tối ưu né menu trái CarPlay)
               </p>
-              <div className="grid grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -2286,11 +2289,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     setShowAppLauncher(false);
                     showToast('⬇️ Thanh Menu dưới đáy (giải phóng 100% bề ngang)');
                   }}
-                  className={`min-h-[2.75rem] px-2 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                  className={`min-h-[3.25rem] px-2 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
                     dockMode === 'bottom' ? theme.segActive : theme.itemIdle
                   }`}
                 >
-                  <PanelBottom className="w-4 h-4 shrink-0" />
+                  <PanelBottom className="w-5 h-5 shrink-0" />
                   <span>Thanh Đáy</span>
                 </button>
 
@@ -2301,11 +2304,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     setShowAppLauncher(false);
                     showToast('✨ Toàn màn hình 100% — chạm Menu nổi trên đỉnh để mở');
                   }}
-                  className={`min-h-[2.75rem] px-2 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                  className={`min-h-[3.25rem] px-2 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
                     dockMode === 'floating' ? theme.segActive : theme.itemIdle
                   }`}
                 >
-                  <Maximize2 className="w-4 h-4 shrink-0" />
+                  <Maximize2 className="w-5 h-5 shrink-0" />
                   <span>Ẩn nổi 100%</span>
                 </button>
 
@@ -2316,11 +2319,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     setShowAppLauncher(false);
                     showToast('➡️ Thanh Menu cạnh phải (đối diện menu trái CarPlay)');
                   }}
-                  className={`min-h-[2.75rem] px-2 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                  className={`min-h-[3.25rem] px-2 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
                     dockMode === 'right' ? theme.segActive : theme.itemIdle
                   }`}
                 >
-                  <PanelRight className="w-4 h-4 shrink-0" />
+                  <PanelRight className="w-5 h-5 shrink-0" />
                   <span>Cạnh Phải</span>
                 </button>
               </div>
