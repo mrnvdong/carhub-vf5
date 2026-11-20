@@ -30,6 +30,7 @@ import {
   History,
   Bookmark,
   ChevronDown,
+  ChevronUp,
   Search,
   Mic,
   Quote,
@@ -49,6 +50,10 @@ import {
   Newspaper,
   Clapperboard,
   QrCode,
+  LayoutGrid,
+  PanelBottom,
+  PanelRight,
+  X,
 } from 'lucide-react';
 import {
   StreamData,
@@ -340,6 +345,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [hardwareNotice, setHardwareNotice] = useState<string | null>(null);
   const [confirmClearHistory, setConfirmClearHistory] = useState<boolean>(false);
   const [showScalePopover, setShowScalePopover] = useState<boolean>(false);
+  const [showAppLauncher, setShowAppLauncher] = useState<boolean>(false);
+  // Vị trí thanh điều hướng: mặc định 'bottom' (thanh đáy mảnh — né 100% menu trái cố định của CarPlay!),
+  // hoặc 'floating' (ẩn hoàn toàn, toàn màn hình 100%) hoặc 'right' (thanh dọc bên phải đối diện CarPlay).
+  const [dockMode, setDockMode] = useState<'bottom' | 'floating' | 'right'>(() => {
+    try {
+      const saved = localStorage.getItem('carhub_dock_mode');
+      if (saved === 'bottom' || saved === 'floating' || saved === 'right') return saved;
+    } catch {}
+    return 'bottom';
+  });
+
+  const handleChangeDockMode = useCallback((next: 'bottom' | 'floating' | 'right') => {
+    setDockMode(next);
+    try {
+      localStorage.setItem('carhub_dock_mode', next);
+    } catch {}
+    window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'));
+      window.setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
+    });
+  }, []);
 
   const [musicRightTab, setMusicRightTab] = useState<'lyrics' | 'queue' | 'categories'>('lyrics');
   const [videoRightTab, setVideoRightTab] = useState<'queue' | 'categories'>('queue');
@@ -1526,7 +1552,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`relative w-full h-full overflow-hidden select-none flex flex-col car:flex-row transition-colors duration-300 ${
+      className={`relative w-full h-full overflow-hidden select-none flex flex-col ${
+        !isFullscreen && dockMode === 'right' ? 'car:flex-row' : ''
+      } transition-colors duration-300 ${
         isFullscreen ? 'fixed inset-0 z-50 bg-black text-white' : theme.shell
       }`}
     >
@@ -1641,7 +1669,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Toast thông báo thông minh (Vô lăng, Vuốt mù, SponsorBlock, Auto-Mix, Send-to-Car) */}
       {hardwareNotice && (
         <div
-          className={`fixed top-3 left-1/2 -translate-x-1/2 z-50 backdrop-blur-xl px-4 py-2 rounded-full text-xs sm:text-sm font-bold flex items-center gap-2 shadow-2xl border pointer-events-none max-w-[90vw] ${theme.toast}`}
+          className={`fixed ${
+            dockMode === 'floating' ? 'top-12' : 'top-3'
+          } left-1/2 -translate-x-1/2 z-50 backdrop-blur-xl px-4 py-2 rounded-full text-xs sm:text-sm font-bold flex items-center gap-2 shadow-2xl border pointer-events-none max-w-[90vw] ${theme.toast}`}
         >
           <ShieldCheck className="w-4 h-4 text-rose-400 shrink-0" />
           <span className="truncate">{hardwareNotice}</span>
@@ -1676,26 +1706,99 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
 
       {/* =====================================================================
-          1. THANH ĐIỀU HƯỚNG (Bên trái gần tay lái trên xe VF5 / Đáy màn hình trên điện thoại dọc!)
+          1. THANH ĐIỀU HƯỚNG THÔNG MINH CHUẨN CARPLAY (Né 100% menu trái cố định của CarPlay!)
+             - Mặc định 'bottom': Thanh đáy siêu mảnh 1 hàng (h-11/h-12) giải phóng +88px bề ngang!
+             - 'floating': Thu gọn hoàn toàn -> 100% toàn màn hình (chỉ 1 viên thuốc nổi trên đỉnh)
+             - 'right': Thanh dọc bên phải (đối diện hoàn toàn menu CarPlay bên trái)
          ===================================================================== */}
-      {!isFullscreen && (
-        <aside
-          className={`relative z-30 order-last car:order-first flex car:flex-col items-center justify-between gap-1.5 px-2 py-1.5 car:py-2 car:px-1.5 car:w-[5.2rem] lg:w-[5.5rem] border-t car:border-t-0 car:border-r shrink-0 overflow-x-auto car:overflow-x-hidden car:overflow-y-hidden no-scrollbar transition-colors ${theme.rail}`}
+      {!isFullscreen && dockMode === 'floating' && (
+        <div
+          className={`fixed top-1.5 left-1/2 -translate-x-1/2 z-40 h-9 px-1.5 rounded-full border backdrop-blur-2xl shadow-2xl flex items-center gap-1 transition-all ${
+            isLightTheme
+              ? 'bg-white/92 border-slate-300/90 text-slate-900'
+              : 'bg-[#0b101d]/90 border-white/20 text-white'
+          }`}
         >
-          {/* Cụm điều hướng chính (Chỉ phần <nav> cuộn ở giữa — cụm công cụ 2x2 ghim cố định ở đáy không bao giờ bị khuất!) */}
+          <button
+            type="button"
+            onClick={() => setShowAppLauncher(true)}
+            aria-label="Mở menu điều hướng nhanh CarHub"
+            title="Mở Menu nhanh CarHub"
+            className={`h-7 px-2.5 rounded-full text-xs font-black flex items-center gap-1.5 active:scale-95 transition ${
+              isLightTheme
+                ? 'bg-slate-900 text-white hover:bg-slate-800'
+                : 'bg-white/15 text-white hover:bg-white/25'
+            }`}
+          >
+            <LayoutGrid className="w-3.5 h-3.5 shrink-0" />
+            <span>Menu</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onOpenSearchModal(true)}
+            aria-label="Tìm kiếm bằng giọng nói"
+            title="Ra lệnh giọng nói tiếng Việt"
+            className={`w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition ${
+              isLightTheme
+                ? 'bg-rose-50 text-rose-600 hover:bg-rose-100'
+                : 'bg-rose-500/25 text-rose-300 hover:bg-rose-500/40'
+            }`}
+          >
+            <Mic className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleOpenVf5Tools('qr')}
+            aria-label="Quét QR điện thoại"
+            title="Quét QR điều khiển từ điện thoại"
+            className={`w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition ${
+              isLightTheme
+                ? 'bg-sky-50 text-sky-700 hover:bg-sky-100'
+                : 'bg-sky-500/25 text-sky-300 hover:bg-sky-500/40'
+            }`}
+          >
+            <QrCode className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              handleChangeDockMode('bottom');
+              showToast('⬇️ Đã hiện lại thanh điều hướng dưới đáy');
+            }}
+            aria-label="Hiện lại thanh điều hướng dưới đáy"
+            title="Hiện lại thanh Dock đáy"
+            className={`w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition ${
+              isLightTheme
+                ? 'text-slate-600 hover:bg-slate-200/80'
+                : 'text-white/75 hover:bg-white/15'
+            }`}
+          >
+            <ChevronUp className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {!isFullscreen && dockMode === 'bottom' && (
+        <aside
+          className={`relative z-30 order-last w-full h-12 short:h-11 vshort:h-10 px-2 sm:px-3 border-t shrink-0 flex items-center justify-between gap-1.5 transition-colors ${theme.rail}`}
+        >
+          {/* 6 tab cốt lõi 1 chạm trên 1 hàng ngang duy nhất — 0px bên trái, không bao giờ đụng menu CarPlay! */}
           <nav
             aria-label="Điều hướng chính"
-            className="flex car:flex-col items-center gap-1 car:gap-1 car:w-full car:flex-1 car:min-h-0 car:overflow-y-auto no-scrollbar shrink-0"
+            className="flex items-center gap-1 min-w-0 flex-1 overflow-x-auto no-scrollbar"
           >
             <button
               type="button"
               onClick={() => onChangeRailSection('cockpit')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`h-9 short:h-8 px-2 md:px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 shrink-0 ios-spring-fast active:scale-95 ${
                 railSection === 'cockpit' ? theme.railCockpitActive : theme.railNavIdle
               }`}
             >
-              <Gauge className="w-5 h-5 shrink-0" />
-              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
+              <Gauge className="w-4 h-4 shrink-0" />
+              <span className={railSection === 'cockpit' ? 'inline whitespace-nowrap' : 'hidden car:inline whitespace-nowrap'}>
                 Cockpit
               </span>
             </button>
@@ -1703,42 +1806,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('tv')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`h-9 short:h-8 px-2 md:px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 shrink-0 ios-spring-fast active:scale-95 ${
                 railSection === 'tv' ? theme.railTvActive : theme.railNavIdle
               }`}
             >
-              <Tv className="w-5 h-5 shrink-0" />
-              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
-                TV Live
+              <Tv className="w-4 h-4 shrink-0" />
+              <span className={railSection === 'tv' ? 'inline whitespace-nowrap' : 'hidden car:inline whitespace-nowrap'}>
+                TV
               </span>
             </button>
 
             <button
               type="button"
               onClick={() => onChangeRailSection('news')}
-              className={`relative flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`relative h-9 short:h-8 px-2 md:px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 shrink-0 ios-spring-fast active:scale-95 ${
                 railSection === 'news' ? theme.railNewsActive : theme.railNavIdle
               }`}
             >
-              <Newspaper className="w-5 h-5 shrink-0" />
-              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
-                Báo Audio
+              <Newspaper className="w-4 h-4 shrink-0" />
+              <span className={railSection === 'news' ? 'inline whitespace-nowrap' : 'hidden car:inline whitespace-nowrap'}>
+                Báo
               </span>
               {(newsController.isPlaying || newsController.isTtsSpeaking) &&
                 railSection !== 'news' && (
-                  <span className="absolute top-1.5 right-2 w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                  <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400 animate-ping" />
                 )}
             </button>
 
             <button
               type="button"
               onClick={() => onChangeRailSection('movies')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`h-9 short:h-8 px-2 md:px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 shrink-0 ios-spring-fast active:scale-95 ${
                 railSection === 'movies' ? theme.railMovieActive : theme.railNavIdle
               }`}
             >
-              <Clapperboard className="w-5 h-5 shrink-0" />
-              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
+              <Clapperboard className="w-4 h-4 shrink-0" />
+              <span className={railSection === 'movies' ? 'inline whitespace-nowrap' : 'hidden car:inline whitespace-nowrap'}>
                 Phim
               </span>
             </button>
@@ -1746,112 +1849,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onChangeRailSection('nowPlaying')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+              className={`h-9 short:h-8 px-2 md:px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 shrink-0 ios-spring-fast active:scale-95 ${
                 railSection === 'nowPlaying' ? theme.railNavActive : theme.railNavIdle
               }`}
             >
               {effectiveVideoMode ? (
-                <Tv className="w-5 h-5 shrink-0" />
+                <Tv className="w-4 h-4 shrink-0" />
               ) : (
-                <Headphones className="w-5 h-5 shrink-0" />
+                <Headphones className="w-4 h-4 shrink-0" />
               )}
-              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
-                Đang phát
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onChangeRailSection('browse')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'browse' ? theme.railNavActive : theme.railNavIdle
-              }`}
-            >
-              <Compass className="w-5 h-5 shrink-0" />
-              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
-                Khám phá
+              <span className={railSection === 'nowPlaying' ? 'inline whitespace-nowrap' : 'hidden car:inline whitespace-nowrap'}>
+                Nhạc
               </span>
             </button>
 
             <button
               type="button"
               onClick={() => onOpenSearchModal(false)}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${theme.railNavIdle}`}
+              className={`h-9 short:h-8 px-2 md:px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 shrink-0 ios-spring-fast active:scale-95 ${theme.railNavIdle}`}
             >
-              <Search className="w-5 h-5 shrink-0" />
-              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
-                Tìm kiếm
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onChangeRailSection('favorites')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'favorites' ? theme.railNavActive : theme.railNavIdle
-              }`}
-            >
-              <Bookmark className="w-5 h-5 shrink-0" />
-              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
-                Playlist{favoritesCount > 0 ? ` (${favoritesCount})` : ''}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onChangeRailSection('history')}
-              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.85rem] car:min-h-[2.65rem] min-w-[3.85rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
-                railSection === 'history' ? theme.railNavActive : theme.railNavIdle
-              }`}
-            >
-              <History className="w-5 h-5 shrink-0" />
-              <span className="text-[0.68rem] font-extrabold leading-none whitespace-nowrap">
-                Lịch sử
-              </span>
+              <Search className="w-4 h-4 shrink-0" />
+              <span className="hidden car:inline whitespace-nowrap">Tìm</span>
             </button>
           </nav>
 
-          {/* Cụm công cụ ghim cố định dưới đáy thanh trái: [📱 QR | ⚡ VF5] + [Mic | Sáng-Tối] + [Nhạc/Video | Cỡ chữ %] */}
-          <div
-            className={`flex car:flex-col items-center gap-1 car:w-full shrink-0 car:pt-1.5 car:border-t ${theme.divider}`}
-          >
-            <div className="flex car:grid car:grid-cols-2 items-center gap-1 car:w-full shrink-0">
-              <button
-                type="button"
-                onClick={() => handleOpenVf5Tools('qr')}
-                aria-label="Quét mã QR trên điện thoại điều khiển màn xe"
-                title="Quét QR trên điện thoại để chọn nhạc / phim / TV / bản đồ phát lên xe"
-                className={`min-h-[2.3rem] px-2 car:px-0 car:w-full rounded-xl border text-[0.65rem] font-black flex items-center justify-center gap-0.5 active:scale-95 transition shrink-0 ${
-                  isLightTheme
-                    ? 'bg-sky-50 hover:bg-sky-100 border-sky-300 text-sky-800'
-                    : 'bg-sky-500/20 hover:bg-sky-500/35 border-sky-400/50 text-sky-300'
-                }`}
-              >
-                <QrCode className="w-3.5 h-3.5 shrink-0" />
-                <span className="car:hidden">QR</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenVf5Tools('ev')}
-                aria-label="Mở Tiện ích VF5 (Pin EV, DSP Loa, Camera, HUD)"
-                title="Tiện ích VF5: Pin EV • DSP Loa • Camera • HUD"
-                className={`min-h-[2.3rem] px-2 car:px-0 car:w-full rounded-xl border text-[0.65rem] font-black flex items-center justify-center gap-0.5 active:scale-95 transition shrink-0 ${
-                  isLightTheme
-                    ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800'
-                    : 'bg-emerald-500/20 hover:bg-emerald-500/35 border-emerald-400/45 text-emerald-300'
-                }`}
-              >
-                <Zap className="w-3.5 h-3.5 shrink-0" />
-                <span className="car:hidden">VF5</span>
-              </button>
-            </div>
-            <div className="flex car:grid car:grid-cols-2 items-center gap-1 car:w-full shrink-0">
+          {/* Cụm công cụ nhanh bên phải: Mic • QR • VF5 • Menu thêm • Thu gọn toàn màn */}
+          <div className={`flex items-center gap-1 shrink-0 pl-1.5 border-l ${theme.divider}`}>
             <button
               type="button"
               onClick={() => onOpenSearchModal(true)}
               aria-label="Tìm kiếm bằng giọng nói"
               title="Tìm giọng nói tiếng Việt"
-              className={`min-h-[2.45rem] w-10 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${
+              className={`w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-95 transition shrink-0 ${
                 isLightTheme
                   ? 'bg-rose-50 hover:bg-rose-100 border-rose-300 text-rose-600'
                   : 'bg-rose-500/25 hover:bg-rose-500/40 border-rose-400/45 text-rose-200'
@@ -1862,85 +1891,449 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             <button
               type="button"
-              onClick={() => {
-                const willBeDark = isLightTheme;
-                onCycleNightMode();
-                showToast(
-                  willBeDark
-                    ? '🌙 Giao diện & Bản đồ 3D: Chế độ Tối'
-                    : '☀️ Giao diện & Bản đồ 3D: Chế độ Sáng'
-                );
-              }}
-              aria-label={
+              onClick={() => handleOpenVf5Tools('qr')}
+              aria-label="Quét mã QR trên điện thoại điều khiển màn xe"
+              title="Quét QR trên điện thoại để chọn nhạc / phim / TV / bản đồ phát lên xe"
+              className={`h-9 short:h-8 px-2 rounded-xl border text-xs font-black flex items-center justify-center gap-1 active:scale-95 transition shrink-0 ${
                 isLightTheme
-                  ? 'Chuyển sang giao diện & bản đồ Tối'
-                  : 'Chuyển sang giao diện & bản đồ Sáng'
-              }
-              title={
-                isLightTheme
-                  ? 'Đang ở chế độ Sáng • Bấm để chuyển sang Tối'
-                  : 'Đang ở chế độ Tối • Bấm để chuyển sang Sáng'
-              }
-              className={`min-h-[2.45rem] w-10 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${
-                isLightTheme
-                  ? 'bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-700'
-                  : 'bg-indigo-500/25 hover:bg-indigo-500/40 border-indigo-400/50 text-amber-200'
+                  ? 'bg-sky-50 hover:bg-sky-100 border-sky-300 text-sky-800'
+                  : 'bg-sky-500/20 hover:bg-sky-500/35 border-sky-400/50 text-sky-300'
               }`}
             >
-              {isLightTheme ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              <QrCode className="w-4 h-4 shrink-0" />
+              <span className="hidden md:inline">QR</span>
             </button>
 
             <button
               type="button"
-              onClick={() => {
-                if (isCockpitView && (cockpitTvMode || cockpitNewsMode)) {
-                  setCockpitTvMode(false);
-                  setIsTvSessionActive(false);
-                  setCockpitNewsMode(false);
-                  newsController.pauseNews();
-                }
-                onViewModeChange(isVideoMode ? 'ytmusic' : 'classic');
-              }}
-              aria-label={isVideoMode ? 'Chuyển sang chế độ Nghe Nhạc' : 'Chuyển sang chế độ Xem Video'}
-              title={isVideoMode ? 'Đang chế độ Video • Chạm để sang Nhạc' : 'Đang chế độ Nhạc • Chạm để sang Video'}
-              className={`min-h-[2.45rem] w-10 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${
-                isVideoMode
-                  ? isLightTheme
-                    ? 'bg-blue-50 border-blue-300 text-blue-700 hover:bg-blue-100'
-                    : 'bg-sky-500/25 border-sky-400/50 text-sky-200'
-                  : isLightTheme
-                  ? 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100'
-                  : 'bg-rose-500/25 border-rose-400/50 text-rose-200'
+              onClick={() => handleOpenVf5Tools('ev')}
+              aria-label="Mở Tiện ích VF5 (Pin EV, DSP Loa, Camera, HUD)"
+              title="Tiện ích VF5: Pin EV • DSP Loa • Camera • HUD"
+              className={`hidden car:flex w-9 h-9 short:w-8 short:h-8 rounded-xl border items-center justify-center active:scale-95 transition shrink-0 ${
+                isLightTheme
+                  ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800'
+                  : 'bg-emerald-500/20 hover:bg-emerald-500/35 border-emerald-400/45 text-emerald-300'
               }`}
             >
-              {isVideoMode ? <Tv className="w-4 h-4" /> : <Music className="w-4 h-4" />}
+              <Zap className="w-4 h-4 shrink-0" />
             </button>
 
             <button
               type="button"
-              onClick={() => setShowScalePopover((v) => !v)}
-              aria-label={`Chọn cỡ hiển thị giao diện, hiện tại ${scaleLabel}`}
-              title="Chỉnh cỡ chữ & nút cảm ứng (92% - 138%)"
-              className={`min-h-[2.45rem] px-1.5 car:px-0 car:w-full rounded-xl text-[0.65rem] font-black border flex items-center justify-center active:scale-95 transition ${
-                showScalePopover
+              onClick={() => setShowAppLauncher(true)}
+              aria-label="Mở Menu mở rộng (Khám phá, Playlist, Lịch sử, Giao diện, Vị trí Menu)"
+              title="Khám phá • Playlist • Lịch sử • Cỡ chữ • Vị trí thanh Menu"
+              className={`relative w-9 h-9 short:w-8 short:h-8 rounded-xl border flex items-center justify-center active:scale-95 transition shrink-0 ${
+                showAppLauncher ||
+                railSection === 'browse' ||
+                railSection === 'favorites' ||
+                railSection === 'history'
                   ? isLightTheme
-                    ? 'bg-blue-600 text-white border-blue-600 shadow'
-                    : 'bg-sky-400 text-slate-950 border-sky-300 shadow'
+                    ? 'bg-slate-900 border-slate-900 text-white shadow-sm'
+                    : 'bg-white/25 border-white/35 text-white shadow-sm'
                   : theme.railToolBtn
               }`}
             >
-              {scaleLabel}
+              <LayoutGrid className="w-4 h-4" />
             </button>
-            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                handleChangeDockMode('floating');
+                showToast('✨ Đã thu gọn thanh Menu (100% toàn màn hình) • Chạm Menu ở đỉnh để mở');
+              }}
+              aria-label="Thu gọn thanh điều hướng để có 100% toàn màn hình"
+              title="Thu gọn thanh Menu (Toàn màn hình 100%)"
+              className={`hidden car:flex w-9 h-9 short:w-8 short:h-8 rounded-xl border items-center justify-center active:scale-95 transition shrink-0 ${theme.railToolBtn}`}
+            >
+              <ChevronDown className="w-4 h-4" />
+            </button>
           </div>
         </aside>
+      )}
+
+      {!isFullscreen && dockMode === 'right' && (
+        <aside
+          className={`relative z-30 order-last flex car:flex-col items-center justify-between gap-1.5 px-2 py-1.5 car:py-2 car:px-1.5 car:w-[4.65rem] border-t car:border-t-0 car:border-l shrink-0 overflow-x-auto car:overflow-x-hidden car:overflow-y-hidden no-scrollbar transition-colors ${theme.rail}`}
+        >
+          {/* Thanh dọc bên PHẢI (đối diện menu trái CarPlay — dành cho màn hình rất ngắn hoặc người thích thanh dọc) */}
+          <nav
+            aria-label="Điều hướng chính cạnh phải"
+            className="flex car:flex-col items-center gap-1 car:w-full car:flex-1 car:min-h-0 car:overflow-y-auto no-scrollbar shrink-0"
+          >
+            <button
+              type="button"
+              onClick={() => onChangeRailSection('cockpit')}
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.6rem] min-w-[3.5rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+                railSection === 'cockpit' ? theme.railCockpitActive : theme.railNavIdle
+              }`}
+            >
+              <Gauge className="w-4 h-4 shrink-0" />
+              <span className="text-[0.62rem] font-extrabold leading-none whitespace-nowrap">Cockpit</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onChangeRailSection('tv')}
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.6rem] min-w-[3.5rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+                railSection === 'tv' ? theme.railTvActive : theme.railNavIdle
+              }`}
+            >
+              <Tv className="w-4 h-4 shrink-0" />
+              <span className="text-[0.62rem] font-extrabold leading-none whitespace-nowrap">TV</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onChangeRailSection('news')}
+              className={`relative flex flex-col items-center justify-center gap-0.5 min-h-[2.6rem] min-w-[3.5rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+                railSection === 'news' ? theme.railNewsActive : theme.railNavIdle
+              }`}
+            >
+              <Newspaper className="w-4 h-4 shrink-0" />
+              <span className="text-[0.62rem] font-extrabold leading-none whitespace-nowrap">Báo</span>
+              {(newsController.isPlaying || newsController.isTtsSpeaking) &&
+                railSection !== 'news' && (
+                  <span className="absolute top-1 right-1.5 w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onChangeRailSection('movies')}
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.6rem] min-w-[3.5rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+                railSection === 'movies' ? theme.railMovieActive : theme.railNavIdle
+              }`}
+            >
+              <Clapperboard className="w-4 h-4 shrink-0" />
+              <span className="text-[0.62rem] font-extrabold leading-none whitespace-nowrap">Phim</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onChangeRailSection('nowPlaying')}
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.6rem] min-w-[3.5rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${
+                railSection === 'nowPlaying' ? theme.railNavActive : theme.railNavIdle
+              }`}
+            >
+              {effectiveVideoMode ? (
+                <Tv className="w-4 h-4 shrink-0" />
+              ) : (
+                <Headphones className="w-4 h-4 shrink-0" />
+              )}
+              <span className="text-[0.62rem] font-extrabold leading-none whitespace-nowrap">Nhạc</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenSearchModal(false)}
+              className={`flex flex-col items-center justify-center gap-0.5 min-h-[2.6rem] min-w-[3.5rem] car:min-w-0 car:w-full py-1 px-1 rounded-xl ios-spring-fast active:scale-95 ${theme.railNavIdle}`}
+            >
+              <Search className="w-4 h-4 shrink-0" />
+              <span className="text-[0.62rem] font-extrabold leading-none whitespace-nowrap">Tìm</span>
+            </button>
+          </nav>
+
+          <div className={`flex car:grid car:grid-cols-2 items-center gap-1 car:w-full shrink-0 car:pt-1.5 car:border-t ${theme.divider}`}>
+            <button
+              type="button"
+              onClick={() => handleOpenVf5Tools('qr')}
+              title="Quét QR điện thoại"
+              className={`h-8 w-8 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${
+                isLightTheme
+                  ? 'bg-sky-50 border-sky-300 text-sky-800'
+                  : 'bg-sky-500/20 border-sky-400/50 text-sky-300'
+              }`}
+            >
+              <QrCode className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleOpenVf5Tools('ev')}
+              title="Tiện ích VF5"
+              className={`h-8 w-8 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${
+                isLightTheme
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                  : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenSearchModal(true)}
+              title="Tìm giọng nói"
+              className={`h-8 w-8 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${
+                isLightTheme
+                  ? 'bg-rose-50 border-rose-300 text-rose-600'
+                  : 'bg-rose-500/25 border-rose-400/45 text-rose-200'
+              }`}
+            >
+              <Mic className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowAppLauncher(true)}
+              title="Menu mở rộng & Đổi vị trí thanh Menu"
+              className={`h-8 w-8 car:w-full rounded-xl border flex items-center justify-center active:scale-95 transition ${theme.railToolBtn}`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </aside>
+      )}
+
+      {/* BẢNG MENU NHANH CARHUB (APP LAUNCHER + TÙY CHỈNH VỊ TRÍ THANH MENU CHO CARPLAY) */}
+      {showAppLauncher && !isFullscreen && (
+        <div
+          onClick={() => setShowAppLauncher(false)}
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-[34rem] max-h-[90dvh] overflow-y-auto no-scrollbar rounded-3xl border p-4 space-y-3.5 shadow-2xl animate-ios-sheet-in ${theme.cardElevated}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h3 className={`text-sm sm:text-base font-black ${theme.text}`}>
+                  Menu nhanh CarHub VF5
+                </h3>
+                <p className={`text-xs font-semibold ${theme.textSub}`}>
+                  Mở ứng dụng, tiện ích &amp; chỉnh vị trí thanh Menu không đụng CarPlay
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAppLauncher(false)}
+                aria-label="Đóng Menu nhanh"
+                className={`w-9 h-9 rounded-full border flex items-center justify-center active:scale-90 ${theme.iconBtn}`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Lưới 9 ứng dụng cốt lõi */}
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+              {[
+                {
+                  id: 'cockpit' as RailSection,
+                  label: 'Cockpit',
+                  icon: Gauge,
+                  activeClass: theme.railCockpitActive,
+                },
+                {
+                  id: 'tv' as RailSection,
+                  label: 'TV Live',
+                  icon: Tv,
+                  activeClass: theme.railTvActive,
+                },
+                {
+                  id: 'news' as RailSection,
+                  label: 'Báo Audio',
+                  icon: Newspaper,
+                  activeClass: theme.railNewsActive,
+                },
+                {
+                  id: 'movies' as RailSection,
+                  label: 'Phim',
+                  icon: Clapperboard,
+                  activeClass: theme.railMovieActive,
+                },
+                {
+                  id: 'nowPlaying' as RailSection,
+                  label: 'Đang phát',
+                  icon: effectiveVideoMode ? Tv : Headphones,
+                  activeClass: theme.railNavActive,
+                },
+                {
+                  id: 'browse' as RailSection,
+                  label: 'Khám phá',
+                  icon: Compass,
+                  activeClass: theme.railNavActive,
+                },
+                {
+                  id: 'favorites' as RailSection,
+                  label: `Playlist${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`,
+                  icon: Bookmark,
+                  activeClass: theme.railNavActive,
+                },
+                {
+                  id: 'history' as RailSection,
+                  label: 'Lịch sử',
+                  icon: History,
+                  activeClass: theme.railNavActive,
+                },
+              ].map((app) => {
+                const Icon = app.icon;
+                const active = railSection === app.id;
+                return (
+                  <button
+                    key={app.id}
+                    type="button"
+                    onClick={() => {
+                      onChangeRailSection(app.id);
+                      setShowAppLauncher(false);
+                    }}
+                    className={`min-h-[4rem] rounded-2xl border px-2 py-2 flex flex-col items-center justify-center gap-1 active:scale-95 transition ${
+                      active ? app.activeClass : theme.itemIdle
+                    }`}
+                  >
+                    <Icon className="w-5 h-5 shrink-0" />
+                    <span className="text-[0.7rem] font-extrabold text-center leading-tight line-clamp-1">
+                      {app.label}
+                    </span>
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAppLauncher(false);
+                  onOpenSearchModal(false);
+                }}
+                className={`min-h-[4rem] rounded-2xl border px-2 py-2 flex flex-col items-center justify-center gap-1 active:scale-95 transition ${theme.itemIdle}`}
+              >
+                <Search className="w-5 h-5 shrink-0" />
+                <span className="text-[0.7rem] font-extrabold text-center leading-tight">
+                  Tìm kiếm
+                </span>
+              </button>
+            </div>
+
+            {/* Cụm tiện ích nhanh 1 chạm */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAppLauncher(false);
+                  handleOpenVf5Tools('qr');
+                }}
+                className={`min-h-[2.75rem] px-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                  isLightTheme
+                    ? 'bg-sky-50 border-sky-300 text-sky-800'
+                    : 'bg-sky-500/20 border-sky-400/50 text-sky-300'
+                }`}
+              >
+                <QrCode className="w-4 h-4 shrink-0" />
+                <span>Quét QR</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAppLauncher(false);
+                  handleOpenVf5Tools('ev');
+                }}
+                className={`min-h-[2.75rem] px-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                  isLightTheme
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                    : 'bg-emerald-500/20 border-emerald-400/45 text-emerald-300'
+                }`}
+              >
+                <Zap className="w-4 h-4 shrink-0" />
+                <span>Tiện ích VF5</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const willBeDark = isLightTheme;
+                  onCycleNightMode();
+                  showToast(
+                    willBeDark
+                      ? '🌙 Giao diện & Bản đồ 3D: Chế độ Tối'
+                      : '☀️ Giao diện & Bản đồ 3D: Chế độ Sáng'
+                  );
+                }}
+                className={`min-h-[2.75rem] px-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                  isLightTheme
+                    ? 'bg-amber-100 border-amber-300 text-amber-800'
+                    : 'bg-indigo-500/25 border-indigo-400/50 text-amber-200'
+                }`}
+              >
+                {isLightTheme ? <Sun className="w-4 h-4 shrink-0" /> : <Moon className="w-4 h-4 shrink-0" />}
+                <span>{isLightTheme ? 'Đang Sáng' : 'Đang Tối'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAppLauncher(false);
+                  setShowScalePopover(true);
+                }}
+                className={`min-h-[2.75rem] px-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${theme.iconBtn}`}
+              >
+                <SlidersHorizontal className="w-4 h-4 shrink-0" />
+                <span>Cỡ chữ ({scaleLabel})</span>
+              </button>
+            </div>
+
+            {/* Tùy chọn vị trí thanh Menu — hoàn toàn không đặt bên trái để tránh đụng CarPlay */}
+            <div className={`rounded-2xl border p-2.5 space-y-2 ${theme.well}`}>
+              <p className={`text-[0.7rem] font-extrabold uppercase tracking-wider ${theme.textMuted}`}>
+                Vị trí thanh Menu (tối ưu né menu trái CarPlay)
+              </p>
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleChangeDockMode('bottom');
+                    setShowAppLauncher(false);
+                    showToast('⬇️ Thanh Menu dưới đáy (giải phóng 100% bề ngang)');
+                  }}
+                  className={`min-h-[2.75rem] px-2 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                    dockMode === 'bottom' ? theme.segActive : theme.itemIdle
+                  }`}
+                >
+                  <PanelBottom className="w-4 h-4 shrink-0" />
+                  <span>Thanh Đáy</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleChangeDockMode('floating');
+                    setShowAppLauncher(false);
+                    showToast('✨ Toàn màn hình 100% — chạm Menu nổi trên đỉnh để mở');
+                  }}
+                  className={`min-h-[2.75rem] px-2 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                    dockMode === 'floating' ? theme.segActive : theme.itemIdle
+                  }`}
+                >
+                  <Maximize2 className="w-4 h-4 shrink-0" />
+                  <span>Ẩn nổi 100%</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleChangeDockMode('right');
+                    setShowAppLauncher(false);
+                    showToast('➡️ Thanh Menu cạnh phải (đối diện menu trái CarPlay)');
+                  }}
+                  className={`min-h-[2.75rem] px-2 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+                    dockMode === 'right' ? theme.segActive : theme.itemIdle
+                  }`}
+                >
+                  <PanelRight className="w-4 h-4 shrink-0" />
+                  <span>Cạnh Phải</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* BẢNG CHỌN CỠ HIỂN THỊ 4 MỨC TRỰC QUAN (Tối ưu cho màn VF5 bé, màn to, màn dài & điện thoại!) */}
       {showScalePopover && !isFullscreen && (
         <div
           onClick={() => setShowScalePopover(false)}
-          className="fixed inset-0 z-50 bg-black/30 backdrop-blur-xs flex items-end car:items-end justify-center car:justify-start p-3 car:pl-[5.75rem]"
+          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-3"
         >
           <div
             onClick={(e) => e.stopPropagation()}
