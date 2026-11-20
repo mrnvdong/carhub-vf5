@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   Play,
@@ -8,13 +8,15 @@ import {
   Film,
   MapPin,
   Music,
+  Tv,
+  Newspaper,
   Send,
   Loader2,
   ArrowLeft,
   CheckCircle2,
   Smartphone,
 } from 'lucide-react';
-import { MovieItem, VideoItem } from '../types';
+import { MovieItem, MusicSource, TvChannel, VideoItem } from '../types';
 import { searchVideos } from '../services/api';
 import { fetchMovieList } from '../services/movie';
 import { sendNavToCar, sendRemoteCommand, normalizeSyncCode } from '../services/sync';
@@ -24,7 +26,9 @@ interface CoPilotRemoteViewProps {
   onExitCoPilot: () => void;
 }
 
-type RemoteTab = 'music' | 'movie' | 'nav';
+type RemoteTab = 'music' | 'movie' | 'tv' | 'nav';
+
+const QUICK_TV_PICKS = ['VTV1', 'VTV3', 'VOV Giao thông', 'HTV7', 'HTV9', 'VTV Cần Thơ'];
 
 export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
   initialCode,
@@ -32,10 +36,12 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
 }) => {
   const code = normalizeSyncCode(initialCode);
   const [tab, setTab] = useState<RemoteTab>('music');
+  const [musicSource, setMusicSource] = useState<MusicSource>('youtube');
   const [query, setQuery] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [tracks, setTracks] = useState<VideoItem[]>([]);
   const [movies, setMovies] = useState<MovieItem[]>([]);
+  const [tvChannels, setTvChannels] = useState<TvChannel[]>([]);
   const [places, setPlaces] = useState<
     Array<{ name: string; subtitle: string; lat: number; lon: number }>
   >([]);
@@ -46,9 +52,23 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
     window.setTimeout(() => setToast(null), 2600);
   };
 
-  const handleControl = async (action: 'prev' | 'playPause' | 'next', label: string) => {
+  // Tải sẵn danh sách kênh TV khi mở tab TV
+  useEffect(() => {
+    if (tab !== 'tv' || tvChannels.length > 0) return;
+    fetch('/api/tv?action=playlist')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (Array.isArray(d?.channels)) setTvChannels(d.channels);
+      })
+      .catch(() => {});
+  }, [tab, tvChannels.length]);
+
+  const handleControl = async (
+    action: 'prev' | 'playPause' | 'next' | 'openNews',
+    label: string
+  ) => {
     const res = await sendRemoteCommand(code, action);
-    notify(res.success ? `✅ Đã gửi lệnh: ${label}` : res.error || 'Lỗi gửi lệnh');
+    notify(res.success ? `✅ Đã gửi lên VF5: ${label}` : res.error || 'Lỗi gửi lệnh');
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -58,13 +78,14 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
     setLoading(true);
     try {
       if (tab === 'music') {
-        const res = await searchVideos(q, null, undefined, 'youtube');
+        const res = await searchVideos(q, null, undefined, musicSource);
         setTracks(res.items.slice(0, 15));
       } else if (tab === 'movie') {
         const settled = await Promise.allSettled([
+          fetchMovieList({ source: 'k20', type: 'moi-cap-nhat', keyword: q, limit: 8 }),
           fetchMovieList({ source: 'kkphim', type: 'moi-cap-nhat', keyword: q, limit: 8 }),
           fetchMovieList({ source: 'vsmov', type: 'moi-cap-nhat', keyword: q, limit: 8 }),
-          fetchMovieList({ source: 'k20', type: 'moi-cap-nhat', keyword: q, limit: 8 }),
+          fetchMovieList({ source: 'cobephim', type: 'moi-cap-nhat', keyword: q, limit: 8 }),
         ]);
         const merged: MovieItem[] = [];
         for (const r of settled) {
@@ -72,8 +93,8 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
             merged.push(...r.value.items);
           }
         }
-        setMovies(merged.slice(0, 20));
-      } else {
+        setMovies(merged.slice(0, 24));
+      } else if (tab === 'nav') {
         const res = await fetch(`/api/places?q=${encodeURIComponent(q)}`);
         const data = await res.json();
         setPlaces(Array.isArray(data?.items) ? data.items : []);
@@ -85,6 +106,10 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
     }
   };
 
+  const filteredTv = tvChannels
+    .filter((c) => !query.trim() || c.name.toLowerCase().includes(query.trim().toLowerCase()))
+    .slice(0, 24);
+
   return (
     <div className="min-h-[100dvh] bg-slate-950 text-white flex flex-col max-w-xl mx-auto">
       {/* Header */}
@@ -94,9 +119,9 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
             <Smartphone className="w-5 h-5" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-sm font-black truncate">Co-Pilot Ghế Sau • VF5-{code}</h1>
+            <h1 className="text-sm font-black truncate">Điều Khiển VF5 • Mã {code}</h1>
             <p className="text-[11px] text-slate-400 font-semibold truncate">
-              Chọn nhạc, mở phim &amp; gửi điểm đến thẳng lên màn xe
+              Chọn nhạc, phim, TV Live, Báo Audio &amp; dẫn đường lên màn xe
             </p>
           </div>
         </div>
@@ -106,7 +131,7 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
           className="h-9 px-3 rounded-xl bg-white/10 border border-white/15 text-xs font-bold flex items-center gap-1 shrink-0 active:scale-95"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
-          <span>App đầy đủ</span>
+          <span>App chính</span>
         </button>
       </header>
 
@@ -118,41 +143,50 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
         </div>
       )}
 
-      {/* Quick Transport Controls */}
-      <div className="px-4 pt-3 pb-2 grid grid-cols-3 gap-2">
+      {/* Quick Transport + Báo Audio Controls */}
+      <div className="px-4 pt-3 pb-2 grid grid-cols-4 gap-1.5">
         <button
           type="button"
           onClick={() => handleControl('prev', 'Bài trước')}
-          className="h-12 rounded-2xl bg-slate-900 border border-white/15 flex items-center justify-center gap-1.5 text-xs font-extrabold active:scale-95"
+          className="h-11 rounded-2xl bg-slate-900 border border-white/15 flex items-center justify-center gap-1 text-xs font-extrabold active:scale-95"
         >
           <SkipBack className="w-4 h-4" />
-          <span>Bài trước</span>
+          <span>Trước</span>
         </button>
         <button
           type="button"
           onClick={() => handleControl('playPause', 'Phát / Tạm dừng')}
-          className="h-12 rounded-2xl bg-sky-500 text-slate-950 flex items-center justify-center gap-1.5 text-xs font-black active:scale-95"
+          className="h-11 rounded-2xl bg-sky-500 text-slate-950 flex items-center justify-center gap-1 text-xs font-black active:scale-95"
         >
           <Play className="w-4 h-4" />
-          <span>Phát / Dừng</span>
+          <span>Phát</span>
         </button>
         <button
           type="button"
           onClick={() => handleControl('next', 'Bài tiếp')}
-          className="h-12 rounded-2xl bg-slate-900 border border-white/15 flex items-center justify-center gap-1.5 text-xs font-extrabold active:scale-95"
+          className="h-11 rounded-2xl bg-slate-900 border border-white/15 flex items-center justify-center gap-1 text-xs font-extrabold active:scale-95"
         >
-          <span>Bài tiếp</span>
+          <span>Tiếp</span>
           <SkipForward className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => handleControl('openNews', 'Đọc Báo Audio mới nhất')}
+          className="h-11 rounded-2xl bg-amber-500/20 border border-amber-400/45 text-amber-300 flex items-center justify-center gap-1 text-xs font-black active:scale-95"
+        >
+          <Newspaper className="w-4 h-4" />
+          <span>Báo</span>
         </button>
       </div>
 
-      {/* Mode Tabs */}
-      <div className="px-4 py-2 grid grid-cols-3 gap-2">
+      {/* 4 Mode Tabs */}
+      <div className="px-4 py-1.5 grid grid-cols-4 gap-1.5">
         {(
           [
-            { id: 'music', icon: Music, label: 'Chọn Nhạc' },
-            { id: 'movie', icon: Film, label: 'Mở Phim' },
-            { id: 'nav', icon: MapPin, label: 'Dẫn Đường' },
+            { id: 'music', icon: Music, label: 'Nhạc' },
+            { id: 'movie', icon: Film, label: 'Phim' },
+            { id: 'tv', icon: Tv, label: 'TV Live' },
+            { id: 'nav', icon: MapPin, label: 'Bản đồ' },
           ] as const
         ).map((t) => {
           const Icon = t.icon;
@@ -162,18 +196,46 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
               key={t.id}
               type="button"
               onClick={() => setTab(t.id)}
-              className={`h-11 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
+              className={`h-10 rounded-xl border text-xs font-black flex items-center justify-center gap-1 active:scale-95 transition ${
                 active
                   ? 'bg-violet-600 border-violet-400 text-white shadow'
                   : 'bg-slate-900 border-white/10 text-slate-300'
               }`}
             >
-              <Icon className="w-4 h-4" />
+              <Icon className="w-3.5 h-3.5" />
               <span>{t.label}</span>
             </button>
           );
         })}
       </div>
+
+      {/* YouTube / SoundCloud switch when on Music tab */}
+      {tab === 'music' && (
+        <div className="px-4 pt-1 flex gap-1.5">
+          <button
+            type="button"
+            onClick={() => setMusicSource('youtube')}
+            className={`flex-1 h-8 rounded-lg text-xs font-extrabold border ${
+              musicSource === 'youtube'
+                ? 'bg-rose-600 border-rose-400 text-white'
+                : 'bg-slate-900 border-white/10 text-slate-400'
+            }`}
+          >
+            ▶️ YouTube
+          </button>
+          <button
+            type="button"
+            onClick={() => setMusicSource('soundcloud')}
+            className={`flex-1 h-8 rounded-lg text-xs font-extrabold border ${
+              musicSource === 'soundcloud'
+                ? 'bg-orange-500 border-orange-300 text-slate-950'
+                : 'bg-slate-900 border-white/10 text-slate-400'
+            }`}
+          >
+            ☁️ SoundCloud
+          </button>
+        </div>
+      )}
 
       {/* Search Form */}
       <form onSubmit={handleSearch} className="px-4 py-2 flex gap-2">
@@ -185,21 +247,25 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
             onChange={(e) => setQuery(e.target.value)}
             placeholder={
               tab === 'music'
-                ? 'Tìm bài hát, ca sĩ, remix...'
+                ? `Tìm nhạc trên ${musicSource === 'soundcloud' ? 'SoundCloud' : 'YouTube'}...`
                 : tab === 'movie'
                 ? 'Tìm tên phim (4 nguồn sạch QC)...'
+                : tab === 'tv'
+                ? 'Lọc kênh VTV, HTV, VOV Giao thông...'
                 : 'Tìm địa chỉ, quán ăn, trạm sạc...'
             }
             className="w-full h-11 pl-9 pr-3 rounded-xl bg-slate-900 border border-white/15 text-sm font-bold text-white focus:outline-none focus:border-sky-400"
           />
         </div>
-        <button
-          type="submit"
-          disabled={loading}
-          className="h-11 px-4 rounded-xl bg-sky-500 text-slate-950 font-black text-xs shrink-0 active:scale-95 disabled:opacity-60"
-        >
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Tìm'}
-        </button>
+        {tab !== 'tv' && (
+          <button
+            type="submit"
+            disabled={loading}
+            className="h-11 px-4 rounded-xl bg-sky-500 text-slate-950 font-black text-xs shrink-0 active:scale-95 disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Tìm'}
+          </button>
+        )}
       </form>
 
       {/* Results */}
@@ -279,6 +345,42 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
               </button>
             </div>
           ))}
+
+        {tab === 'tv' && (
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap gap-1.5">
+              {QUICK_TV_PICKS.map((ch) => (
+                <button
+                  key={ch}
+                  type="button"
+                  onClick={async () => {
+                    const r = await sendRemoteCommand(code, 'openTv', { query: ch });
+                    notify(r.success ? `📺 Đang mở ${ch} trên VF5!` : r.error || 'Lỗi');
+                  }}
+                  className="h-9 px-3 rounded-full bg-sky-500/20 border border-sky-400/40 text-sky-200 text-xs font-extrabold active:scale-95"
+                >
+                  📺 {ch}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {filteredTv.map((ch) => (
+                <button
+                  key={ch.id}
+                  type="button"
+                  onClick={async () => {
+                    const r = await sendRemoteCommand(code, 'openTv', { query: ch.name });
+                    notify(r.success ? `📺 Đang mở ${ch.name} trên VF5!` : r.error || 'Lỗi');
+                  }}
+                  className="p-2.5 rounded-xl bg-slate-900 border border-white/10 text-left flex items-center gap-2 active:scale-95"
+                >
+                  <Tv className="w-4 h-4 text-sky-400 shrink-0" />
+                  <span className="text-xs font-bold truncate">{ch.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {tab === 'nav' &&
           places.map((pl, i) => (

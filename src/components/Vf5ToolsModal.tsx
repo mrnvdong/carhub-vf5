@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import QRCode from 'qrcode';
 import {
   X,
   BatteryCharging,
@@ -15,6 +16,10 @@ import {
   Loader2,
   Sparkles,
   Volume2,
+  QrCode,
+  Copy,
+  Check,
+  RefreshCw,
 } from 'lucide-react';
 import {
   ActiveNavSummary,
@@ -31,7 +36,7 @@ import {
 } from '../services/vf5Tools';
 import { EQ_BAND_LABELS, EQ_PRESETS } from '../services/audioEq';
 
-type ToolsTab = 'ev' | 'eq' | 'hazards' | 'safety';
+export type Vf5ToolsTab = 'qr' | 'ev' | 'eq' | 'hazards' | 'safety';
 
 interface HealthReport {
   status: string;
@@ -42,9 +47,12 @@ interface HealthReport {
 
 interface Vf5ToolsModalProps {
   isOpen: boolean;
-  initialTab?: ToolsTab;
+  initialTab?: Vf5ToolsTab;
   onClose: () => void;
   isLightTheme: boolean;
+  syncCode: string;
+  onSaveSyncCode?: (code: string) => void;
+  onOpenSyncSettings?: () => void;
   telemetry: CockpitTelemetry;
   activeNavSummary: ActiveNavSummary | null;
   batterySoc: number;
@@ -64,6 +72,10 @@ interface Vf5ToolsModalProps {
   onToggleMoviePreferDub: () => void;
 }
 
+function generateSixDigitCarCode(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
 function formatDurationHm(totalSec: number): string {
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
@@ -76,6 +88,9 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
   initialTab = 'ev',
   onClose,
   isLightTheme,
+  syncCode,
+  onSaveSyncCode,
+  onOpenSyncSettings,
   telemetry,
   activeNavSummary,
   batterySoc,
@@ -95,9 +110,54 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
   onToggleMoviePreferDub,
 }) => {
   const theme = getCarTheme(isLightTheme);
-  const [tab, setTab] = useState<ToolsTab>(initialTab);
+  const [tab, setTab] = useState<Vf5ToolsTab>(initialTab);
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [checkingHealth, setCheckingHealth] = useState<boolean>(false);
+  const [qrImg, setQrImg] = useState<string>('');
+  const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
+
+  // Đồng bộ tab ban đầu mỗi lần mở modal
+  useEffect(() => {
+    if (isOpen) {
+      setTab(initialTab);
+      setCopiedUrl(false);
+    }
+  }, [isOpen, initialTab]);
+
+  // Tự cấp Mã Xe 6 số ngay nếu máy chưa có Mã Xe khi mở tab QR (để hiện QR quét được ngay tức thì!)
+  useEffect(() => {
+    if (isOpen && tab === 'qr' && (!syncCode || syncCode.length < 4) && onSaveSyncCode) {
+      onSaveSyncCode(generateSixDigitCarCode());
+    }
+  }, [isOpen, tab, syncCode, onSaveSyncCode]);
+
+  const copilotUrl =
+    typeof window !== 'undefined' && syncCode && syncCode.length >= 4
+      ? `${window.location.origin}/?copilot=${encodeURIComponent(syncCode)}`
+      : '';
+
+  // Sinh mã QR lớn sắc nét offline (220x220px) để hành khách ghế sau giơ camera quét 1 giây là ăn!
+  useEffect(() => {
+    if (!isOpen || !copilotUrl) {
+      setQrImg('');
+      return;
+    }
+    let cancelled = false;
+    QRCode.toDataURL(copilotUrl, {
+      width: 240,
+      margin: 2,
+      color: { dark: '#0f172a', light: '#ffffff' },
+    })
+      .then((url) => {
+        if (!cancelled) setQrImg(url);
+      })
+      .catch(() => {
+        if (!cancelled) setQrImg('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, copilotUrl]);
 
   if (!isOpen) return null;
 
@@ -173,10 +233,11 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
           </button>
         </div>
 
-        {/* 4 Tabs */}
+        {/* 5 Tabs */}
         <div className="px-3 pt-2.5 pb-1.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
           {(
             [
+              { id: 'qr', icon: QrCode, label: 'QR Điện thoại' },
               { id: 'ev', icon: BatteryCharging, label: 'Pin & Hành trình' },
               { id: 'eq', icon: Sliders, label: 'DSP Loa VF5' },
               { id: 'hazards', icon: MapPin, label: `Camera (${customHazards.length})` },
@@ -192,7 +253,9 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
                 onClick={() => setTab(t.id)}
                 className={`min-h-[2.45rem] px-3 rounded-xl text-xs font-extrabold border flex items-center gap-1.5 whitespace-nowrap shrink-0 active:scale-95 transition ${
                   active
-                    ? 'bg-emerald-600 border-emerald-500 text-white shadow'
+                    ? t.id === 'qr'
+                      ? 'bg-sky-600 border-sky-400 text-white shadow'
+                      : 'bg-emerald-600 border-emerald-500 text-white shadow'
                     : theme.chipIdle
                 }`}
               >
@@ -205,6 +268,97 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
 
         {/* Body */}
         <div className="flex-1 min-h-0 overflow-y-auto p-3.5 sm:p-4 space-y-3.5">
+          {/* TAB 0: QUÉT MÃ QR TRÊN ĐIỆN THOẠI ĐIỀU KHIỂN MÀN XE VF5 (CO-PILOT REMOTE) */}
+          {tab === 'qr' && (
+            <div className={`rounded-2xl border p-4 flex flex-col sm:flex-row items-center gap-5 ${theme.card}`}>
+              <div className="flex flex-col items-center gap-2 shrink-0">
+                <div className="w-52 h-52 sm:w-56 sm:h-56 rounded-2xl bg-white p-2.5 shadow-2xl border-2 border-sky-400/60 flex items-center justify-center">
+                  {qrImg ? (
+                    <img
+                      src={qrImg}
+                      alt={`Mã QR điều khiển VF5-${syncCode}`}
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <Loader2 className="w-8 h-8 text-sky-500 animate-spin" />
+                  )}
+                </div>
+                <span className="px-3 py-1 rounded-full bg-sky-500/20 border border-sky-400/45 text-sky-300 text-xs font-mono font-black tracking-widest">
+                  MÃ XE: VF5-{syncCode || '------'}
+                </span>
+              </div>
+
+              <div className="flex-1 min-w-0 space-y-3 text-center sm:text-left">
+                <div className="space-y-1">
+                  <h3 className={`text-base font-black ${theme.text}`}>
+                    📱 Quét QR bằng Camera điện thoại để chọn phát lên xe
+                  </h3>
+                  <p className={`text-xs font-semibold leading-relaxed ${theme.textSub}`}>
+                    Giơ camera iPhone / Android quét mã bên cạnh — không cần cài app hay đăng nhập. Từ điện thoại bạn có thể chọn ngay:
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5 text-left text-xs font-extrabold">
+                  <div className={`rounded-xl border px-2.5 py-2 ${theme.cardElevated}`}>
+                    🎵 Chọn nhạc YouTube / SoundCloud
+                  </div>
+                  <div className={`rounded-xl border px-2.5 py-2 ${theme.cardElevated}`}>
+                    🎬 Mở Phim 4 nguồn sạch QC
+                  </div>
+                  <div className={`rounded-xl border px-2.5 py-2 ${theme.cardElevated}`}>
+                    📺 Mở kênh TV Live / VOV / Báo
+                  </div>
+                  <div className={`rounded-xl border px-2.5 py-2 ${theme.cardElevated}`}>
+                    📍 Gửi địa chỉ dẫn đường 3D
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={!copilotUrl}
+                    onClick={async () => {
+                      if (!copilotUrl) return;
+                      try {
+                        await navigator.clipboard.writeText(copilotUrl);
+                        setCopiedUrl(true);
+                        window.setTimeout(() => setCopiedUrl(false), 2400);
+                      } catch {}
+                    }}
+                    className="min-h-[2.45rem] px-3.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-black flex items-center gap-1.5 active:scale-95 transition"
+                  >
+                    {copiedUrl ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    <span>{copiedUrl ? 'Đã chép link Co-Pilot' : 'Chép link gửi Zalo'}</span>
+                  </button>
+
+                  {onSaveSyncCode && (
+                    <button
+                      type="button"
+                      onClick={() => onSaveSyncCode(generateSixDigitCarCode())}
+                      className={`min-h-[2.45rem] px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition ${theme.iconBtn}`}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Đổi mã mới</span>
+                    </button>
+                  )}
+
+                  {onOpenSyncSettings && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenSyncSettings();
+                      }}
+                      className={`min-h-[2.45rem] px-3 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 active:scale-95 transition ${theme.iconBtn}`}
+                    >
+                      <span>Nhập mã riêng</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* TAB 1: PIN VF5 & TRIP COMPUTER & HUD */}
           {tab === 'ev' && (
             <>

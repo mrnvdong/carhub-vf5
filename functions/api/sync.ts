@@ -162,6 +162,8 @@ function sanitizeRemoteCmd(cmd: any) {
     'playTrack',
     'queueTrack',
     'openMovie',
+    'openTv',
+    'openNews',
     'playPause',
     'next',
     'prev',
@@ -180,6 +182,10 @@ function sanitizeRemoteCmd(cmd: any) {
     const name = String(cmd.payload?.name || '').trim().slice(0, 160);
     if (!slug) return null;
     payload = { slug, source, name };
+  } else if (cmd.action === 'openTv') {
+    const query = String(cmd.payload?.query || cmd.payload?.name || '').trim().slice(0, 80);
+    if (!query) return null;
+    payload = { query };
   }
 
   return {

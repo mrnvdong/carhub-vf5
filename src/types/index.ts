@@ -369,6 +369,8 @@ export type RemoteCommandAction =
   | 'playTrack'
   | 'queueTrack'
   | 'openMovie'
+  | 'openTv'
+  | 'openNews'
   | 'playPause'
   | 'next'
   | 'prev';

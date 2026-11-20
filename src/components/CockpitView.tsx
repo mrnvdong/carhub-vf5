@@ -156,7 +156,7 @@ interface CockpitViewProps {
   onChangeUiScale: (scale: UiScale) => void;
   batterySoc?: number;
   kmPerPct?: number;
-  onOpenVf5Tools?: (tab?: 'ev' | 'eq' | 'hazards' | 'safety') => void;
+  onOpenVf5Tools?: (tab?: 'qr' | 'ev' | 'eq' | 'hazards' | 'safety') => void;
   onQuickPinCamera?: () => void;
   onQuickPinNoStopping?: () => void;
 }

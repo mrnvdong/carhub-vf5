@@ -122,7 +122,11 @@ export const App: React.FC = () => {
   const [newsAutoPlayNonce, setNewsAutoPlayNonce] = useState<number>(0);
   const [hudOpenNonce, setHudOpenNonce] = useState<number>(0);
   const [remoteTogglePlayNonce, setRemoteTogglePlayNonce] = useState<number>(0);
+  const [remoteBoostUntil, setRemoteBoostUntil] = useState<number>(0);
   const lastSeenCmdIdRef = useRef<string>('');
+  const handleBoostRemotePolling = useCallback(() => {
+    setRemoteBoostUntil(Date.now() + 10 * 60 * 1000);
+  }, []);
 
   // Search Modal state
   const [isSearchModalOpen, setIsSearchModalOpen] = useState<boolean>(false);
@@ -628,11 +632,13 @@ export const App: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [favorites, playlists, savedPlaces, syncCode, copilotCode]);
 
-  // Send-to-Car & Co-Pilot Polling tiết kiệm KV (25s/lần, chỉ chạy khi tab hiển thị & không ở chế độ Co-Pilot):
-  // Nhận đồng thời điểm đến dẫn đường (pendingNav) VÀ lệnh Co-Pilot ghế sau (remoteCmd) trong cùng 1 request!
+  // Send-to-Car & Co-Pilot Polling thông minh:
+  // - Khi vừa mở mã QR hoặc vừa nhận lệnh Co-Pilot (trong 10 phút): poll nhanh 4 giây/lần để bấm trên điện thoại là xe phản hồi gần như ngay lập tức!
+  // - Khi rảnh: tự hạ về 25 giây/lần để tiết kiệm tối đa Cloudflare KV reads!
   useEffect(() => {
     if (syncCode.length < 4 || copilotCode) return;
     let cancelled = false;
+    let timer: number | null = null;
 
     const checkRemote = async () => {
       if (cancelled || document.visibilityState !== 'visible') return;
@@ -649,6 +655,7 @@ export const App: React.FC = () => {
         if (!isSelfSent && isFresh) {
           lastSeenNavIdRef.current = pendingNav.id;
           setIncomingNavTarget(pendingNav);
+          setRemoteBoostUntil(Date.now() + 10 * 60 * 1000);
         }
       }
 
@@ -661,6 +668,7 @@ export const App: React.FC = () => {
         const isFreshCmd = isNaN(cmdMs) || Date.now() - cmdMs < 5 * 60 * 1000;
         if (!isSelfCmd && isFreshCmd) {
           lastSeenCmdIdRef.current = remoteCmd.id;
+          setRemoteBoostUntil(Date.now() + 10 * 60 * 1000);
           clearRemoteCommand(syncCode).catch(() => {});
           if (remoteCmd.action === 'playTrack' && remoteCmd.payload?.id) {
             const tr = remoteCmd.payload as VideoItem;
@@ -681,6 +689,12 @@ export const App: React.FC = () => {
                 source: remoteCmd.payload.source || 'kkphim',
               },
             });
+          } else if (remoteCmd.action === 'openTv' && remoteCmd.payload?.query) {
+            setRailSection('tv');
+            setTvChannelCommand({ nonce: Date.now(), query: remoteCmd.payload.query });
+          } else if (remoteCmd.action === 'openNews') {
+            setRailSection('news');
+            setNewsAutoPlayNonce((n) => n + 1);
           } else if (remoteCmd.action === 'playPause') {
             setRemoteTogglePlayNonce((n) => n + 1);
           } else if (remoteCmd.action === 'next') {
@@ -692,7 +706,16 @@ export const App: React.FC = () => {
       }
     };
 
-    const timer = window.setInterval(checkRemote, 25000);
+    const scheduleNext = () => {
+      if (cancelled) return;
+      const delay = Date.now() < remoteBoostUntil ? 4000 : 25000;
+      timer = window.setTimeout(async () => {
+        await checkRemote();
+        scheduleNext();
+      }, delay);
+    };
+
+    scheduleNext();
     const onVis = () => {
       if (document.visibilityState === 'visible') checkRemote();
     };
@@ -700,10 +723,10 @@ export const App: React.FC = () => {
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (timer !== null) window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [syncCode, copilotCode]);
+  }, [syncCode, copilotCode, remoteBoostUntil]);
 
   const handleConsumeIncomingNav = useCallback(() => {
     setIncomingNavTarget(null);
@@ -1374,7 +1397,9 @@ export const App: React.FC = () => {
             selectedPlaylistId={selectedPlaylistId}
             onSelectPlaylistId={setSelectedPlaylistId}
             syncCode={syncCode}
+            onSaveSyncCode={setSyncCode}
             onOpenSyncModal={handleOpenSyncModal}
+            onBoostRemotePolling={handleBoostRemotePolling}
             nightMode={nightMode}
             isNightDimmed={isNightDimmed}
             onCycleNightMode={handleToggleDayNight}

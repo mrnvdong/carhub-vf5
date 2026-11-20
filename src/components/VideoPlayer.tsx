@@ -48,6 +48,7 @@ import {
   Navigation,
   Newspaper,
   Clapperboard,
+  QrCode,
 } from 'lucide-react';
 import {
   StreamData,
@@ -79,7 +80,7 @@ import { useTvLive } from '../hooks/useTvLive';
 import { useNewsAudio, NewsAudioController } from '../hooks/useNewsAudio';
 import { CockpitView, VideoSlotRect } from './CockpitView';
 import { TvPlayerStage } from './TvPlayerStage';
-import { Vf5ToolsModal } from './Vf5ToolsModal';
+import { Vf5ToolsModal, Vf5ToolsTab } from './Vf5ToolsModal';
 import { HudOverlay } from './HudOverlay';
 import type { MovieExternalCommand } from './MoviesView';
 import { getCarTheme } from '../utils/theme';
@@ -158,7 +159,9 @@ interface VideoPlayerProps {
   selectedPlaylistId: string;
   onSelectPlaylistId: (id: string) => void;
   syncCode: string;
+  onSaveSyncCode?: (code: string) => void;
   onOpenSyncModal: (mode: 'sync' | 'addTrack') => void;
+  onBoostRemotePolling?: () => void;
   // Upgrade #4: Unified Day/Night Theme synced with Map Theme
   nightMode: NightMode;
   isNightDimmed: boolean;
@@ -232,7 +235,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   selectedPlaylistId,
   onSelectPlaylistId,
   syncCode,
+  onSaveSyncCode,
   onOpenSyncModal,
+  onBoostRemotePolling,
   nightMode: _nightMode,
   isNightDimmed: _isNightDimmed,
   onCycleNightMode,
@@ -572,7 +577,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [drivingVideoLock, setDrivingVideoLock] = useState<boolean>(() => loadDrivingVideoLock());
   const [moviePreferDub, setMoviePreferDub] = useState<boolean>(() => loadMoviePreferDub());
   const [showVf5Tools, setShowVf5Tools] = useState<boolean>(false);
-  const [vf5ToolsTab, setVf5ToolsTab] = useState<'ev' | 'eq' | 'hazards' | 'safety'>('ev');
+  const [vf5ToolsTab, setVf5ToolsTab] = useState<Vf5ToolsTab>('ev');
   const [showHud, setShowHud] = useState<boolean>(false);
 
   // Giữ GPS & cảnh báo tốc độ / giọng nói chỉ đường / camera cá nhân chạy nền!
@@ -616,10 +621,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [hudOpenNonce]);
 
-  const handleOpenVf5Tools = useCallback((tab: 'ev' | 'eq' | 'hazards' | 'safety' = 'ev') => {
-    setVf5ToolsTab(tab);
-    setShowVf5Tools(true);
-  }, []);
+  const handleOpenVf5Tools = useCallback(
+    (tab: Vf5ToolsTab = 'ev') => {
+      setVf5ToolsTab(tab);
+      setShowVf5Tools(true);
+      if (tab === 'qr') {
+        onBoostRemotePolling?.();
+      }
+    },
+    [onBoostRemotePolling]
+  );
 
   const handleChangeBatterySoc = useCallback((soc: number) => {
     setBatterySoc(saveVf5BatterySoc(soc));
@@ -1794,24 +1805,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           </nav>
 
-          {/* Cụm công cụ ghim cố định dưới đáy thanh trái: [⚡ VF5] + [Mic | Sáng-Tối] + [Nhạc/Video | Cỡ chữ %] */}
+          {/* Cụm công cụ ghim cố định dưới đáy thanh trái: [📱 QR | ⚡ VF5] + [Mic | Sáng-Tối] + [Nhạc/Video | Cỡ chữ %] */}
           <div
             className={`flex car:flex-col items-center gap-1 car:w-full shrink-0 car:pt-1.5 car:border-t ${theme.divider}`}
           >
-            <button
-              type="button"
-              onClick={() => handleOpenVf5Tools('ev')}
-              aria-label="Mở Tiện ích VF5 (Pin EV, DSP Loa, Camera, HUD)"
-              title="Tiện ích VF5: Pin EV • DSP Loa • Camera • HUD"
-              className={`min-h-[2.2rem] px-2 car:px-0 car:w-full rounded-xl border text-[0.65rem] font-black flex items-center justify-center gap-1 active:scale-95 transition shrink-0 ${
-                isLightTheme
-                  ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800'
-                  : 'bg-emerald-500/20 hover:bg-emerald-500/35 border-emerald-400/45 text-emerald-300'
-              }`}
-            >
-              <Zap className="w-3.5 h-3.5 shrink-0" />
-              <span>VF5</span>
-            </button>
+            <div className="flex car:grid car:grid-cols-2 items-center gap-1 car:w-full shrink-0">
+              <button
+                type="button"
+                onClick={() => handleOpenVf5Tools('qr')}
+                aria-label="Quét mã QR trên điện thoại điều khiển màn xe"
+                title="Quét QR trên điện thoại để chọn nhạc / phim / TV / bản đồ phát lên xe"
+                className={`min-h-[2.3rem] px-2 car:px-0 car:w-full rounded-xl border text-[0.65rem] font-black flex items-center justify-center gap-0.5 active:scale-95 transition shrink-0 ${
+                  isLightTheme
+                    ? 'bg-sky-50 hover:bg-sky-100 border-sky-300 text-sky-800'
+                    : 'bg-sky-500/20 hover:bg-sky-500/35 border-sky-400/50 text-sky-300'
+                }`}
+              >
+                <QrCode className="w-3.5 h-3.5 shrink-0" />
+                <span className="car:hidden">QR</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenVf5Tools('ev')}
+                aria-label="Mở Tiện ích VF5 (Pin EV, DSP Loa, Camera, HUD)"
+                title="Tiện ích VF5: Pin EV • DSP Loa • Camera • HUD"
+                className={`min-h-[2.3rem] px-2 car:px-0 car:w-full rounded-xl border text-[0.65rem] font-black flex items-center justify-center gap-0.5 active:scale-95 transition shrink-0 ${
+                  isLightTheme
+                    ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800'
+                    : 'bg-emerald-500/20 hover:bg-emerald-500/35 border-emerald-400/45 text-emerald-300'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5 shrink-0" />
+                <span className="car:hidden">VF5</span>
+              </button>
+            </div>
             <div className="flex car:grid car:grid-cols-2 items-center gap-1 car:w-full shrink-0">
             <button
               type="button"
@@ -3418,12 +3445,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
       </div>
 
-      {/* MODAL TIỆN ÍCH VF5 (Pin EV • Hành trình • DSP Loa 5 băng tần • Camera cá nhân • An toàn & Health) */}
+      {/* MODAL TIỆN ÍCH VF5 (QR Điều khiển • Pin EV • Hành trình • DSP Loa 5 băng tần • Camera cá nhân • An toàn) */}
       <Vf5ToolsModal
         isOpen={showVf5Tools}
         initialTab={vf5ToolsTab}
         onClose={() => setShowVf5Tools(false)}
         isLightTheme={isLightTheme}
+        syncCode={syncCode}
+        onSaveSyncCode={onSaveSyncCode}
+        onOpenSyncSettings={() => onOpenSyncModal('sync')}
         telemetry={telemetry}
         activeNavSummary={activeNavSummary}
         batterySoc={batterySoc}
