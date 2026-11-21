@@ -37,11 +37,14 @@ export function getVoiceShortName(id: number, fallbackName?: string): string {
 
 const articleCache = new Map<string, { data: NewsArticleDetail; ts: number }>();
 const ARTICLE_CACHE_TTL_MS = 10 * 60 * 1000;
+const feedCache = new Map<string, { data: NewsFeedResponse; ts: number }>();
+const FEED_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export async function fetchNewsFeed(
   cat: NewsCategoryId,
   page = 1,
-  query = ''
+  query = '',
+  forceRefresh = false
 ): Promise<NewsFeedResponse> {
   const params = new URLSearchParams();
   params.set('action', 'feed');
@@ -52,11 +55,22 @@ export async function fetchNewsFeed(
     if (page > 1) params.set('page', String(page));
   }
 
-  const res = await fetch(`/api/news?${params.toString()}`);
+  const qs = params.toString();
+  const cached = feedCache.get(qs);
+  if (!forceRefresh && cached && Date.now() - cached.ts < FEED_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const res = await fetch(`/api/news?${qs}`);
   const data = (await res.json()) as NewsFeedResponse;
   if (!res.ok) {
     throw new Error(data.error || `Không tải được tin tức (HTTP ${res.status})`);
   }
+  if (feedCache.size >= 24) {
+    const oldest = feedCache.keys().next().value;
+    if (oldest) feedCache.delete(oldest);
+  }
+  feedCache.set(qs, { data, ts: Date.now() });
   return data;
 }
 

@@ -327,10 +327,57 @@ export const App: React.FC = () => {
   const [isLoadingMix, setIsLoadingMix] = useState<boolean>(false);
   const lastAutoMixAttemptRef = useRef<string>('');
   const [forceMusicFocusNonce, setForceMusicFocusNonce] = useState<number>(0);
+  const [remoteUiCommand, setRemoteUiCommand] = useState<{
+    id: string;
+    action: string;
+    payload?: any;
+  } | null>(null);
   const [externalNotice, setExternalNotice] = useState<{ id: number; text: string } | null>(null);
   const notifyApp = useCallback((text: string) => {
     setExternalNotice({ id: Date.now() + Math.random(), text });
   }, []);
+
+  // Chế độ Màn Hình Không Cảm Ứng (?notouch=1 hoặc bật trong Menu -> tự hiện QR+PIN, điều khiển 100% qua điện thoại!)
+  const [noTouchMode, setNoTouchMode] = useState<boolean>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        const nt = params.get('notouch');
+        if (nt === '1' || nt === 'true') {
+          localStorage.setItem('carhub_notouch_mode_v1', 'true');
+          return true;
+        }
+        if (nt === '0' || nt === 'false') {
+          localStorage.setItem('carhub_notouch_mode_v1', 'false');
+          return false;
+        }
+      }
+      return localStorage.getItem('carhub_notouch_mode_v1') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleToggleNoTouchMode = useCallback(() => {
+    setNoTouchMode((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('carhub_notouch_mode_v1', String(next));
+      } catch {}
+      notifyApp(
+        next
+          ? '🖥️ Đã bật Chế độ Màn Không Cảm Ứng — quét QR trên màn xe để điều khiển toàn bộ qua điện thoại!'
+          : '👆 Đã tắt Chế độ Màn Không Cảm Ứng (trở về chế độ cảm ứng chuẩn)'
+      );
+      return next;
+    });
+  }, [notifyApp]);
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.dataset.notouch = noTouchMode ? '1' : '0';
+    }
+  }, [noTouchMode]);
 
   const [currentVideo, setCurrentVideo] = useState<VideoItem | null>(() => {
     try {
@@ -640,9 +687,10 @@ export const App: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [favorites, playlists, savedPlaces, syncCode, copilotCode]);
 
-  // Phiên QR Bảo Mật 4 lớp (/api/remote — 144-bit token tự hủy 3h + PIN 4 số + duyệt máy + Khóa Remote + Chỉ xếp hàng đợi)
+  // Phiên QR Bảo Mật 4 lớp + WebRTC P2P 0-cost + Chế độ Màn Không Cảm Ứng (Full Owner Control)
   const remoteHost = useRemoteHostSession({
     disabled: Boolean(copilotCode),
+    noTouchMode,
     onRemoteCmd: (remoteCmd) => {
       if (remoteCmd.action === 'playTrack' && remoteCmd.payload?.id) {
         const tr = remoteCmd.payload as VideoItem;
@@ -656,7 +704,7 @@ export const App: React.FC = () => {
           if (prev.some((x) => x.id === tr.id)) return prev;
           return [...prev, tr];
         });
-        notifyApp(`➕ Hàng ghế sau vừa xếp hàng đợi: ${tr.title}`);
+        notifyApp(`➕ Đã xếp hàng đợi từ Remote: ${tr.title}`);
       } else if (remoteCmd.action === 'openMovie' && remoteCmd.payload?.slug) {
         setRailSection('movies');
         setMovieCommand({
@@ -680,9 +728,43 @@ export const App: React.FC = () => {
       } else if (remoteCmd.action === 'prev') {
         setRailSection((prev) => (prev === 'movies' ? 'cockpit' : prev));
         handlePrevRef.current?.();
+      } else if (remoteCmd.action === 'switchScreen' && remoteCmd.payload?.screen) {
+        setRailSection(remoteCmd.payload.screen as RailSection);
+      } else if (remoteCmd.action === 'toggleTheme') {
+        handleToggleDayNight();
+      } else if (remoteCmd.action === 'toggleHud') {
+        setHudOpenNonce((n) => n + 1);
+      } else if (remoteCmd.action === 'toggleViewMode') {
+        handleViewModeChange(viewModeRef.current === 'classic' ? 'ytmusic' : 'classic');
+      } else if (remoteCmd.action === 'toggleFavorite') {
+        toggleFavoriteCurrentRef.current?.();
+      } else if (remoteCmd.action === 'toggleShuffle') {
+        setIsShuffle((s) => !s);
+      } else if (remoteCmd.action === 'toggleRepeat') {
+        handleToggleRepeatRef.current?.();
+      } else if (remoteCmd.action === 'cycleUiScale') {
+        setUiScale((prev) =>
+          prev === 'compact' ? 'normal' : prev === 'normal' ? 'large' : prev === 'large' ? 'xlarge' : 'compact'
+        );
+      } else if (
+        remoteCmd.action === 'seekRelative' ||
+        remoteCmd.action === 'toggleFullscreen' ||
+        remoteCmd.action === 'mapControl' ||
+        remoteCmd.action === 'scrollPage' ||
+        remoteCmd.action === 'tvZap' ||
+        remoteCmd.action === 'newsNav' ||
+        remoteCmd.action === 'toggleVoiceAlert' ||
+        remoteCmd.action === 'cycleDockMode'
+      ) {
+        setRemoteUiCommand({
+          id: remoteCmd.id || `rui-${Date.now()}`,
+          action: remoteCmd.action,
+          payload: remoteCmd.payload,
+        });
       }
     },
     onRemoteNav: (nav) => {
+      setRailSection('cockpit');
       setIncomingNavTarget(nav);
     },
   });
@@ -715,7 +797,8 @@ export const App: React.FC = () => {
 
     const scheduleNext = () => {
       if (cancelled) return;
-      const delay = Date.now() < remoteBoostUntil ? 4000 : 25000;
+      // Tiết kiệm 60% lượt đọc KV khi nhàn rỗi (60s), tăng tốc 6s khi vừa gửi điểm đến
+      const delay = Date.now() < remoteBoostUntil ? 6000 : 60000;
       timer = window.setTimeout(async () => {
         await checkRemote();
         scheduleNext();
@@ -811,6 +894,12 @@ export const App: React.FC = () => {
         if (result.items.length > 0) {
           setVideos(result.items);
           setNextContinuation(result.nextContinuation);
+          try {
+            localStorage.setItem(
+              'carhub_cached_videos_meta',
+              JSON.stringify({ cat: catId, source: activeSource, ts: Date.now() })
+            );
+          } catch {}
           if (!currentVideoRef.current || !isInitialStartup) {
             playVideo(result.items[0], 'explore');
           }
@@ -835,6 +924,22 @@ export const App: React.FC = () => {
       return;
     }
     const startCat = selectedCategory || 'remix';
+    // Tối ưu gói Free: Nếu đã có cache nhạc < 30 phút trùng thể loại & nguồn -> mở tức thì 0 request server!
+    try {
+      const metaRaw = localStorage.getItem('carhub_cached_videos_meta');
+      if (metaRaw && videosRef.current.length >= 6 && currentVideoRef.current) {
+        const meta = JSON.parse(metaRaw);
+        if (
+          meta?.cat === startCat &&
+          meta?.source === musicSourceRef.current &&
+          typeof meta?.ts === 'number' &&
+          Date.now() - meta.ts < 30 * 60 * 1000
+        ) {
+          setIsLoadingVideos(false);
+          return;
+        }
+      }
+    } catch {}
     loadCategory(startCat, getCategoryQuery(startCat), true, musicSourceRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [copilotCode]);
@@ -1208,13 +1313,19 @@ export const App: React.FC = () => {
   const totalSavedCount =
     favorites.length + playlists.reduce((sum, p) => sum + p.items.length, 0);
 
-  // Refs trỏ tới hàm phát/chuyển bài mới nhất cho Co-Pilot polling
+  // Refs trỏ tới hàm phát/chuyển bài mới nhất cho Co-Pilot & P2P Remote
   const playVideoRef = useRef(playVideo);
   playVideoRef.current = playVideo;
   const handleNextRef = useRef(handleNext);
   handleNextRef.current = handleNext;
   const handlePrevRef = useRef(handlePrev);
   handlePrevRef.current = handlePrev;
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
+  const toggleFavoriteCurrentRef = useRef(toggleFavoriteCurrent);
+  toggleFavoriteCurrentRef.current = toggleFavoriteCurrent;
+  const handleToggleRepeatRef = useRef(handleToggleRepeat);
+  handleToggleRepeatRef.current = handleToggleRepeat;
 
   // Trợ lý Giọng Nói Đa Năng Toàn App VF5
   const handleVoiceCommand = useCallback(
@@ -1454,6 +1565,9 @@ export const App: React.FC = () => {
             hudOpenNonce={hudOpenNonce}
             remoteTogglePlayNonce={remoteTogglePlayNonce}
             forceMusicFocusNonce={forceMusicFocusNonce}
+            remoteUiCommand={remoteUiCommand}
+            noTouchMode={noTouchMode}
+            onToggleNoTouchMode={handleToggleNoTouchMode}
             externalNotice={externalNotice}
             onStartRouteToTarget={setIncomingNavTarget}
             remoteHost={remoteHost}

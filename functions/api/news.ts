@@ -501,13 +501,35 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
   }
 
   // =========================================================================
-  // 1. ACTION = FEED (Danh sách tin tức theo chuyên mục hoặc Tìm kiếm)
+  // 1. ACTION = FEED (Danh sách tin tức theo chuyên mục hoặc Tìm kiếm — Edge Cache 5 phút!)
   // =========================================================================
   if (action === 'feed') {
     const cat = (reqUrl.searchParams.get('cat') || 'hot').toLowerCase();
     const query = (reqUrl.searchParams.get('q') || '').trim().slice(0, 120);
     const pageRaw = parseInt(reqUrl.searchParams.get('page') || '1', 10);
     const page = Number.isFinite(pageRaw) && pageRaw >= 1 && pageRaw <= 8 ? pageRaw : 1;
+
+    const edgeCache = (caches as any).default;
+    const feedCacheKey = new Request(
+      `https://carhub-news-feed.internal/v2?c=${encodeURIComponent(cat)}&p=${page}&q=${encodeURIComponent(
+        query.toLowerCase()
+      )}`
+    );
+    if (edgeCache) {
+      try {
+        const hit = await edgeCache.match(feedCacheKey);
+        if (hit) {
+          return new Response(hit.body, {
+            status: 200,
+            headers: {
+              ...JSON_HEADERS,
+              'Cache-Control': 'public, max-age=180, s-maxage=300',
+              'X-Cache': 'HIT',
+            },
+          });
+        }
+      } catch {}
+    }
 
     let targetPath = '/';
     let supportsPagination = true;
@@ -573,11 +595,27 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
         items,
       };
 
-      return new Response(JSON.stringify(payload), {
+      const serialized = JSON.stringify(payload);
+      if (edgeCache && items.length > 0) {
+        context.waitUntil(
+          edgeCache.put(
+            feedCacheKey,
+            new Response(serialized, {
+              headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Cache-Control': 'public, max-age=300, s-maxage=300',
+              },
+            })
+          )
+        );
+      }
+
+      return new Response(serialized, {
         status: 200,
         headers: {
           ...JSON_HEADERS,
-          'Cache-Control': 'public, max-age=120, s-maxage=120',
+          'Cache-Control': 'public, max-age=180, s-maxage=300',
+          'X-Cache': 'MISS',
         },
       });
     } catch (err: any) {

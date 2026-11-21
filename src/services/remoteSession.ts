@@ -5,28 +5,40 @@ export interface RemoteDeviceInfo {
   id: string;
   label: string;
   status: 'approved' | 'pending' | 'blocked';
+  role?: 'owner' | 'guest';
   joinedAt: number;
   lastCmdAt: number;
+}
+
+export interface PendingRtcOfferInfo {
+  deviceId: string;
+  sdp: string;
+  ts: number;
 }
 
 export interface RemoteSessionState {
   sessionId: string;
   pin: string;
+  noTouchMode?: boolean;
   requirePin: boolean;
   requireApproval: boolean;
   locked: boolean;
+  ownerJoinLocked?: boolean;
   queueOnly: boolean;
   createdAt: number;
   expiresAt: number;
   devices: RemoteDeviceInfo[];
   pendingCmd: (RemoteControlCommand & { senderLabel?: string }) | null;
+  recentCmds?: Array<RemoteControlCommand & { senderLabel?: string }>;
   pendingNav: PendingNavTarget | null;
+  pendingRtcOffers?: PendingRtcOfferInfo[];
 }
 
 export interface RemoteHostCredentials {
   sessionId: string;
   hostSecret: string;
   expiresAt: number;
+  noTouchMode?: boolean;
 }
 
 const HOST_STORAGE_KEY = 'carhub_remote_host_session_v1';
@@ -106,6 +118,7 @@ async function postRemoteApi(body: Record<string, any>, timeoutMs = 6500): Promi
 
 export async function createRemoteHostSession(options?: {
   ttlSec?: number;
+  noTouchMode?: boolean;
   requirePin?: boolean;
   requireApproval?: boolean;
   queueOnly?: boolean;
@@ -114,9 +127,10 @@ export async function createRemoteHostSession(options?: {
   const { ok, data } = await postRemoteApi({
     action: 'create',
     ttlSec: options?.ttlSec ?? 10800, // 3 giờ tự hủy
-    requirePin: options?.requirePin ?? true,
-    requireApproval: options?.requireApproval ?? true,
-    queueOnly: options?.queueOnly ?? false,
+    noTouchMode: Boolean(options?.noTouchMode),
+    requirePin: options?.noTouchMode ? true : options?.requirePin ?? true,
+    requireApproval: options?.noTouchMode ? false : options?.requireApproval ?? true,
+    queueOnly: options?.noTouchMode ? false : options?.queueOnly ?? false,
     ...(options?.replaceCreds
       ? {
           replaceSessionId: options.replaceCreds.sessionId,
@@ -130,6 +144,7 @@ export async function createRemoteHostSession(options?: {
     sessionId: data.state.sessionId,
     hostSecret: data.hostSecret,
     expiresAt: data.state.expiresAt,
+    noTouchMode: Boolean(data.state.noTouchMode),
   };
   saveHostCredentials(creds);
   return { creds, state: data.state as RemoteSessionState };
@@ -154,19 +169,22 @@ export async function pollRemoteHostSession(
   return { state: data.state as RemoteSessionState };
 }
 
-export async function ackRemoteHostSession(
+export async function sendHostRtcAnswer(
   creds: RemoteHostCredentials,
-  ack: { cmdId?: string; navId?: string }
-): Promise<void> {
-  await postRemoteApi(
+  deviceId: string,
+  sdp: string
+): Promise<boolean> {
+  const { ok } = await postRemoteApi(
     {
-      action: 'ack',
+      action: 'rtcAnswer',
       sessionId: creds.sessionId,
       hostSecret: creds.hostSecret,
-      ...ack,
+      deviceId,
+      sdp,
     },
-    4000
+    5500
   );
+  return ok;
 }
 
 export async function updateRemoteHostSettings(
@@ -191,13 +209,15 @@ export async function updateRemoteHostSettings(
 export async function setRemoteHostDeviceDecision(
   creds: RemoteHostCredentials,
   deviceId: string,
-  decision: 'approve' | 'block'
+  decision: 'approve' | 'block',
+  rtcAnswer?: string
 ): Promise<RemoteSessionState | null> {
   const { ok, data } = await postRemoteApi({
     action: decision === 'approve' ? 'approveDevice' : 'blockDevice',
     sessionId: creds.sessionId,
     hostSecret: creds.hostSecret,
     deviceId,
+    ...(rtcAnswer ? { rtcAnswer } : {}),
   });
   return ok && data?.state ? (data.state as RemoteSessionState) : null;
 }
@@ -215,7 +235,7 @@ export async function revokeRemoteHostSession(creds: RemoteHostCredentials): Pro
 }
 
 // =========================================================================
-// GUEST PHONE API
+// GUEST / NO-TOUCH OWNER PHONE API
 // =========================================================================
 
 export function getOrCreateGuestDeviceId(): string {
@@ -247,11 +267,15 @@ export async function checkGuestSessionStatus(sessionId: string, deviceId: strin
   code?: string;
   error?: string;
   status?: 'new' | 'pending' | 'approved' | 'blocked';
+  role?: 'owner' | 'guest';
+  noTouchMode?: boolean;
+  ownerJoinLocked?: boolean;
   requirePin?: boolean;
   requireApproval?: boolean;
   locked?: boolean;
   queueOnly?: boolean;
   expiresAt?: number;
+  rtcAnswer?: { sdp: string; ts: number } | null;
 }> {
   const { ok, data } = await postRemoteApi({
     action: 'status',
@@ -264,11 +288,15 @@ export async function checkGuestSessionStatus(sessionId: string, deviceId: strin
   return {
     ok: true,
     status: data.status,
+    role: data.role === 'owner' ? 'owner' : 'guest',
+    noTouchMode: Boolean(data.noTouchMode),
+    ownerJoinLocked: Boolean(data.ownerJoinLocked),
     requirePin: Boolean(data.requirePin),
     requireApproval: Boolean(data.requireApproval),
     locked: Boolean(data.locked),
     queueOnly: Boolean(data.queueOnly),
     expiresAt: data.expiresAt,
+    rtcAnswer: data.rtcAnswer || null,
   };
 }
 
@@ -276,12 +304,16 @@ export async function joinGuestRemoteSession(
   sessionId: string,
   deviceId: string,
   deviceLabel: string,
-  pin: string
+  pin: string,
+  rtcOffer?: string
 ): Promise<{
   ok: boolean;
   code?: string;
   error?: string;
   status?: 'approved' | 'pending';
+  role?: 'owner' | 'guest';
+  noTouchMode?: boolean;
+  ownerJoinLocked?: boolean;
   locked?: boolean;
   queueOnly?: boolean;
   expiresAt?: number;
@@ -292,6 +324,7 @@ export async function joinGuestRemoteSession(
     deviceId,
     deviceLabel,
     pin,
+    ...(rtcOffer ? { rtcOffer } : {}),
   });
   if (!ok) {
     return { ok: false, code: data?.code, error: data?.error || 'Không thể kết nối vào xe.' };
@@ -299,9 +332,44 @@ export async function joinGuestRemoteSession(
   return {
     ok: true,
     status: data.status,
+    role: data.role === 'owner' ? 'owner' : 'guest',
+    noTouchMode: Boolean(data.noTouchMode),
+    ownerJoinLocked: Boolean(data.ownerJoinLocked),
     locked: Boolean(data.locked),
     queueOnly: Boolean(data.queueOnly),
     expiresAt: data.expiresAt,
+  };
+}
+
+export async function sendGuestRtcOffer(
+  sessionId: string,
+  deviceId: string,
+  sdp: string
+): Promise<boolean> {
+  const { ok } = await postRemoteApi({
+    action: 'rtcOffer',
+    sessionId,
+    deviceId,
+    sdp,
+  });
+  return ok;
+}
+
+export async function toggleOwnerJoinLock(
+  sessionId: string,
+  deviceId: string,
+  ownerJoinLocked: boolean
+): Promise<{ ok: boolean; ownerJoinLocked?: boolean; error?: string }> {
+  const { ok, data } = await postRemoteApi({
+    action: 'ownerToggleJoinLock',
+    sessionId,
+    deviceId,
+    ownerJoinLocked,
+  });
+  return {
+    ok,
+    ownerJoinLocked: Boolean(data?.ownerJoinLocked),
+    error: data?.error,
   };
 }
 

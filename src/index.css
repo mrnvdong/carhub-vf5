@@ -260,6 +260,15 @@
   }
 }
 
+/* Nổi bật khung focus khi điều khiển bằng núm xoay / bàn phím CarPlay (Mazda, BMW, Audi...) */
+[data-notouch='1'] button:focus-visible,
+[data-notouch='1'] input:focus-visible,
+[data-notouch='1'] a:focus-visible {
+  outline: 3px solid #38bdf8 !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.35) !important;
+}
+
 /* Màn hình cảm ứng ô tô: tăng vùng chạm tối thiểu cho thanh trượt & các nút điều khiển */
 @media (pointer: coarse) {
   input[type='range'].car-scrubber {

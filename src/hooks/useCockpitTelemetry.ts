@@ -7,6 +7,10 @@ import {
   unlockCarAudio,
 } from '../services/voiceAudio';
 import { fetchWithTimeout } from '../utils/timedFetch';
+import { findLocalNearbyTrafficAlerts } from '../data/vietnamCameras';
+
+const CLIENT_ROAD_CACHE_TTL_MS = 10 * 60 * 1000;
+const clientRoadGridCache = new Map<string, { data: RoadInfraInfo; ts: number }>();
 
 export interface WeatherInfo {
   temperature: number;
@@ -336,12 +340,52 @@ export function useCockpitTelemetry(
           setNearbyCustomHazard(null);
         }
 
-        // Cập nhật hạ tầng đường bộ lần đầu hoặc khi xe di chuyển >= 65m (và cách >= 4s)
+        // Cập nhật tức thời 0ms Camera Phạt Nguội & Biển P.130/P.131a Việt Nam hoàn toàn CỤC BỘ (chạy cả trong hầm / mất 4G, 0 request server!)
+        const localAlerts = findLocalNearbyTrafficAlerts(latitude, longitude, computedHeading);
+        if (localAlerts.hazards.length > 0 || localAlerts.parkingRestriction) {
+          setRoadInfo((prev) => {
+            const base: RoadInfraInfo = prev || {
+              roadName: null,
+              roadRef: null,
+              roadTypeLabel: null,
+              speedLimit: null,
+              isVerifiedLimit: false,
+              lanes: null,
+              oneway: false,
+              parkingRestriction: null,
+              hazards: [],
+            };
+            const mergedParking =
+              localAlerts.parkingRestriction?.type === 'no_stopping'
+                ? localAlerts.parkingRestriction
+                : base.parkingRestriction || localAlerts.parkingRestriction;
+            const seen = new Set<string>();
+            const mergedHazards: RoadHazard[] = [];
+            for (const h of [...localAlerts.hazards, ...(base.hazards || [])]) {
+              const k = `${h.type}:${(h.lat ?? 0).toFixed(3)},${(h.lon ?? 0).toFixed(3)}`;
+              if (seen.has(k)) continue;
+              seen.add(k);
+              mergedHazards.push(h);
+              if (mergedHazards.length >= 4) break;
+            }
+            return {
+              ...base,
+              parkingRestriction: mergedParking,
+              hazards: mergedHazards,
+            };
+          });
+        }
+
+        // Cập nhật hạ tầng đường bộ OSM (/api/road) theo tốc độ xe để giảm ~78% số request server mà vẫn chuẩn biển P.127:
+        // - Phố đông (< 30 km/h): 140m & >= 12s | Đường trục (30-65 km/h): 220m & >= 15s | Cao tốc (> 65 km/h): 450m & >= 22s
+        const estKmh = smoothedSpeedRef.current;
+        const minDistM = estKmh > 65 ? 450 : estKmh > 30 ? 220 : 140;
+        const minIntervalMs = estKmh > 65 ? 22000 : estKmh > 30 ? 15000 : 12000;
         const lastQ = lastRoadQueryRef.current;
         const movedEnough =
           !lastQ ||
-          (Date.now() - lastQ.time >= 4000 &&
-            haversineMeters(lastQ.lat, lastQ.lon, latitude, longitude) >= 65);
+          (Date.now() - lastQ.time >= minIntervalMs &&
+            haversineMeters(lastQ.lat, lastQ.lon, latitude, longitude) >= minDistM);
 
         if (movedEnough) {
           lastRoadQueryRef.current = { lat: latitude, lon: longitude, time: Date.now() };
@@ -391,12 +435,40 @@ export function useCockpitTelemetry(
     };
   }, [active, startWatch]);
 
-  // Truy vấn API hạ tầng đường bộ & biển tốc độ (/api/road)
+  // Truy vấn API hạ tầng đường bộ & biển tốc độ (/api/road) kèm cache ô lưới ~110m trên máy (10 phút)
   useEffect(() => {
     if (!active || !liveGpsFix) return;
     let cancelled = false;
 
     const queryRoad = async () => {
+      const headingSector =
+        liveGpsFix.heading !== null ? Math.round(liveGpsFix.heading / 45) % 8 : 'n';
+      const cellKey = `${(Math.round(liveGpsFix.lat * 900) / 900).toFixed(4)}:${(
+        Math.round(liveGpsFix.lon * 900) / 900
+      ).toFixed(4)}:${headingSector}`;
+
+      const cached = clientRoadGridCache.get(cellKey);
+      if (cached && Date.now() - cached.ts < CLIENT_ROAD_CACHE_TTL_MS) {
+        const localAlerts = findLocalNearbyTrafficAlerts(
+          liveGpsFix.lat,
+          liveGpsFix.lon,
+          liveGpsFix.heading
+        );
+        const mergedParking =
+          localAlerts.parkingRestriction?.type === 'no_stopping'
+            ? localAlerts.parkingRestriction
+            : cached.data.parkingRestriction || localAlerts.parkingRestriction;
+        const mergedHazards = [...localAlerts.hazards, ...cached.data.hazards].slice(0, 4);
+        if (!cancelled) {
+          setRoadInfo({
+            ...cached.data,
+            parkingRestriction: mergedParking,
+            hazards: mergedHazards,
+          });
+        }
+        return;
+      }
+
       try {
         const headingPart =
           liveGpsFix.heading !== null ? `&heading=${Math.round(liveGpsFix.heading)}` : '';
@@ -410,7 +482,7 @@ export function useCockpitTelemetry(
         const data = await res.json();
         if (cancelled || !data?.success) return;
 
-        setRoadInfo({
+        const nextInfo: RoadInfraInfo = {
           roadName: data.roadName || null,
           roadRef: data.roadRef || null,
           roadTypeLabel: data.roadTypeLabel || null,
@@ -420,7 +492,13 @@ export function useCockpitTelemetry(
           oneway: Boolean(data.oneway),
           parkingRestriction: data.parkingRestriction || null,
           hazards: Array.isArray(data.hazards) ? data.hazards : [],
-        });
+        };
+        if (clientRoadGridCache.size >= 200) {
+          const firstKey = clientRoadGridCache.keys().next().value;
+          if (firstKey) clientRoadGridCache.delete(firstKey);
+        }
+        clientRoadGridCache.set(cellKey, { data: nextInfo, ts: Date.now() });
+        setRoadInfo(nextInfo);
       } catch {
         // Giữ nguyên thông tin tuyến đường trước đó nếu thoáng mất 4G
       }

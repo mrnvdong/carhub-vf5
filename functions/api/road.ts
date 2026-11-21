@@ -370,7 +370,31 @@ export async function onRequestGet(context: any) {
 
   // =========================================================================
   // MODE MẶC ĐỊNH: Hạ tầng đường bộ, biển P.127, Camera phạt nguội & Cấm dừng/Cấm đỗ (P.130/P.131a)
+  // Edge-cache kết quả theo ô lưới ~55m + 8 hướng lái xe trong 30 phút để chia sẻ giữa mọi xe cùng tuyến!
   // =========================================================================
+  const respCellLat = Math.round(lat * 1800) / 1800;
+  const respCellLon = Math.round(lon * 1800) / 1800;
+  const headingSector = heading !== null ? Math.round(heading / 45) % 8 : 'n';
+  const cache = (caches as any).default;
+  const roadRespCacheKey = new Request(
+    `https://carhub-road-resp.internal/v1/${respCellLat.toFixed(4)}/${respCellLon.toFixed(4)}/${headingSector}`
+  );
+  if (cache) {
+    try {
+      const hit = await cache.match(roadRespCacheKey);
+      if (hit) {
+        return new Response(hit.body, {
+          status: 200,
+          headers: {
+            ...CORS_HEADERS,
+            'Cache-Control': 'public, max-age=120',
+            'X-Cache': 'HIT',
+          },
+        });
+      }
+    } catch {}
+  }
+
   const gridLat = Math.round(lat * 900) / 900;
   const gridLon = Math.round(lon * 900) / 900;
   const d = 0.0022; // ~245m radius quanh ô lưới
@@ -378,7 +402,6 @@ export async function onRequestGet(context: any) {
     5
   )},${(gridLat - d).toFixed(5)},${(gridLon + d).toFixed(5)},${(gridLat + d).toFixed(5)}`;
 
-  const cache = (caches as any).default;
   const osmCacheKey = new Request(
     `https://carhub-osm-grid.internal/v3/${gridLat.toFixed(4)}/${gridLon.toFixed(4)}`
   );
@@ -722,19 +745,38 @@ export async function onRequestGet(context: any) {
       ? nearbyZoneParkingRestriction
       : wayParking || nearbyZoneParkingRestriction;
 
-  return new Response(
-    JSON.stringify({
-      success: true,
-      roadName: t.name || t['name:vi'] || statutory.roadTypeLabel,
-      roadRef: t.ref || null,
-      roadTypeLabel: statutory.roadTypeLabel,
-      speedLimit: finalLimit,
-      isVerifiedLimit: verifiedSpeed !== null,
-      lanes: lanesNum && !isNaN(lanesNum) ? lanesNum : null,
-      oneway: t.oneway === 'yes' || t.oneway === '1' || t.oneway === '-1',
-      parkingRestriction,
-      hazards: uniqueHazards,
-    }),
-    { headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store' } }
-  );
+  const finalPayload = JSON.stringify({
+    success: true,
+    roadName: t.name || t['name:vi'] || statutory.roadTypeLabel,
+    roadRef: t.ref || null,
+    roadTypeLabel: statutory.roadTypeLabel,
+    speedLimit: finalLimit,
+    isVerifiedLimit: verifiedSpeed !== null,
+    lanes: lanesNum && !isNaN(lanesNum) ? lanesNum : null,
+    oneway: t.oneway === 'yes' || t.oneway === '1' || t.oneway === '-1',
+    parkingRestriction,
+    hazards: uniqueHazards,
+  });
+
+  if (cache) {
+    context.waitUntil(
+      cache.put(
+        roadRespCacheKey,
+        new Response(finalPayload, {
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=1800, s-maxage=1800',
+          },
+        })
+      )
+    );
+  }
+
+  return new Response(finalPayload, {
+    headers: {
+      ...CORS_HEADERS,
+      'Cache-Control': 'public, max-age=120',
+      'X-Cache': 'MISS',
+    },
+  });
 }

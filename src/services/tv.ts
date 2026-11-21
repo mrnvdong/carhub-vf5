@@ -11,13 +11,36 @@ export function buildTvProxyUrl(channel: TvChannel, targetUrl?: string): string 
   return `/api/tv?${params.toString()}`;
 }
 
+const TV_PLAYLIST_CACHE_KEY = 'carhub_tv_playlist_cache_v1';
+const TV_PLAYLIST_CACHE_TTL_MS = 30 * 60 * 1000;
+
 export async function fetchTvPlaylist(
   playlistUrl: string = DEFAULT_TV_PLAYLIST_URL,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  forceRefresh = false
 ): Promise<{ data: TvPlaylistData | null; error?: string }> {
+  const normalizedUrl = playlistUrl.trim() || DEFAULT_TV_PLAYLIST_URL;
+  if (!forceRefresh) {
+    try {
+      const raw = localStorage.getItem(TV_PLAYLIST_CACHE_KEY);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        if (
+          cached?.url === normalizedUrl &&
+          typeof cached?.ts === 'number' &&
+          Date.now() - cached.ts < TV_PLAYLIST_CACHE_TTL_MS &&
+          Array.isArray(cached?.data?.channels) &&
+          cached.data.channels.length > 0
+        ) {
+          return { data: cached.data as TvPlaylistData };
+        }
+      }
+    } catch {}
+  }
+
   try {
     const res = await fetch(
-      `/api/tv?action=playlist&url=${encodeURIComponent(playlistUrl.trim() || DEFAULT_TV_PLAYLIST_URL)}`,
+      `/api/tv?action=playlist&url=${encodeURIComponent(normalizedUrl)}`,
       { signal }
     );
     const ct = res.headers.get('content-type') || '';
@@ -31,18 +54,23 @@ export async function fetchTvPlaylist(
         error: json?.error || 'Không tải được danh sách kênh TV.',
       };
     }
-    return {
-      data: {
-        sourceUrl: json.sourceUrl || playlistUrl,
-        resolvedSourceUrl: json.resolvedSourceUrl,
-        epgUrl: json.epgUrl || null,
-        totalRaw: Number(json.totalRaw || json.channels.length),
-        totalPlayable: Number(json.totalPlayable || json.channels.length),
-        totalDrmCount: Number(json.totalDrmCount || 0),
-        groups: Array.isArray(json.groups) ? json.groups : [],
-        channels: json.channels as TvChannel[],
-      },
+    const resultData: TvPlaylistData = {
+      sourceUrl: json.sourceUrl || normalizedUrl,
+      resolvedSourceUrl: json.resolvedSourceUrl,
+      epgUrl: json.epgUrl || null,
+      totalRaw: Number(json.totalRaw || json.channels.length),
+      totalPlayable: Number(json.totalPlayable || json.channels.length),
+      totalDrmCount: Number(json.totalDrmCount || 0),
+      groups: Array.isArray(json.groups) ? json.groups : [],
+      channels: json.channels as TvChannel[],
     };
+    try {
+      localStorage.setItem(
+        TV_PLAYLIST_CACHE_KEY,
+        JSON.stringify({ url: normalizedUrl, ts: Date.now(), data: resultData })
+      );
+    } catch {}
+    return { data: resultData };
   } catch (err: any) {
     if (signal?.aborted) return { data: null };
     return {

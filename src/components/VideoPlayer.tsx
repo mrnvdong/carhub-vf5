@@ -56,6 +56,7 @@ import {
   PanelTop,
   PanelBottom,
   PanelRight,
+  Smartphone,
   X,
 } from 'lucide-react';
 import {
@@ -73,6 +74,7 @@ import {
   SavedPlace,
   PendingNavTarget,
   ActiveNavSummary,
+  CockpitNavControls,
   MusicSource,
   CustomHazardKind,
   CustomHazardPin,
@@ -93,6 +95,7 @@ import { CockpitView, VideoSlotRect } from './CockpitView';
 import { TvPlayerStage } from './TvPlayerStage';
 import { Vf5ToolsModal, Vf5ToolsTab } from './Vf5ToolsModal';
 import { HudOverlay } from './HudOverlay';
+import { NoTouchPairingOverlay } from './NoTouchPairingOverlay';
 import type { MovieExternalCommand } from './MoviesView';
 import { getCarTheme } from '../utils/theme';
 import {
@@ -202,6 +205,9 @@ interface VideoPlayerProps {
   hudOpenNonce?: number;
   remoteTogglePlayNonce?: number;
   forceMusicFocusNonce?: number;
+  remoteUiCommand?: { id: string; action: string; payload?: any } | null;
+  noTouchMode?: boolean;
+  onToggleNoTouchMode?: () => void;
   externalNotice?: { id: number; text: string } | null;
   onStartRouteToTarget?: (target: PendingNavTarget) => void;
   remoteHost?: RemoteHostController;
@@ -276,11 +282,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   hudOpenNonce = 0,
   remoteTogglePlayNonce = 0,
   forceMusicFocusNonce = 0,
+  remoteUiCommand = null,
+  noTouchMode = false,
+  onToggleNoTouchMode,
   externalNotice = null,
   onStartRouteToTarget,
   remoteHost,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const cockpitNavControlsRef = useRef<CockpitNavControls | null>(null);
   const iframeWrapperRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -1622,6 +1632,118 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     showToast(externalNotice.text);
   }, [externalNotice, showToast]);
 
+  // Thực thi toàn bộ lệnh điều khiển màn hình từ xa (Chế độ Màn Không Cảm Ứng / Chủ xe P2P!)
+  const handledRemoteUiCmdRef = useRef<string>('');
+  useEffect(() => {
+    if (!remoteUiCommand || remoteUiCommand.id === handledRemoteUiCmdRef.current) return;
+    handledRemoteUiCmdRef.current = remoteUiCommand.id;
+    const { action, payload } = remoteUiCommand;
+
+    if (action === 'seekRelative') {
+      const delta = Number(payload?.delta) || 0;
+      if (newsController.isPlaying || isNewsView || cockpitNewsMode) {
+        newsController.seekRelative(delta);
+      } else {
+        handleSeekRelative(delta);
+      }
+      showToast(`${delta >= 0 ? '⏩' : '⏪'} Tua ${delta >= 0 ? `+${delta}` : delta} giây`);
+    } else if (action === 'toggleFullscreen') {
+      toggleFullscreen();
+    } else if (action === 'toggleVoiceAlert') {
+      telemetry.onToggleSpeedAlertSound();
+      showToast(
+        telemetry.speedAlertSound
+          ? '🔇 Đã tắt giọng đọc cảnh báo biển báo'
+          : '🔔 Đã bật giọng đọc cảnh báo biển báo'
+      );
+    } else if (action === 'cycleDockMode') {
+      const nextDock: 'right' | 'bottom' | 'top' =
+        dockMode === 'right' ? 'bottom' : dockMode === 'bottom' ? 'top' : 'right';
+      handleChangeDockMode(nextDock);
+      showToast(`◫ Đổi vị trí menu nổi: ${nextDock === 'right' ? 'Phải' : nextDock === 'bottom' ? 'Dưới' : 'Trên'}`);
+    } else if (action === 'tvZap') {
+      setIsTvSessionActive(true);
+      tvController.zapChannel(payload?.dir === 'prev' ? -1 : 1);
+    } else if (action === 'newsNav') {
+      if (payload?.dir === 'prev') {
+        newsController.playPrevArticle();
+      } else {
+        newsController.playNextArticle();
+      }
+    } else if (action === 'mapControl') {
+      if (!isCockpitView) onChangeRailSection('cockpit');
+      const mapAction = payload?.mapAction as keyof CockpitNavControls | undefined;
+      if (mapAction) {
+        window.setTimeout(() => {
+          cockpitNavControlsRef.current?.[mapAction]?.();
+        }, isCockpitView ? 0 : 120);
+      }
+    } else if (action === 'scrollPage') {
+      const deltaY = payload?.dir === 'up' ? -280 : 280;
+      const scrollables = Array.from(
+        containerRef.current?.querySelectorAll<HTMLElement>('.overflow-y-auto') || []
+      ).filter((el) => el.scrollHeight > el.clientHeight + 20 && el.offsetParent !== null);
+      if (scrollables.length > 0) {
+        scrollables[0].scrollBy({ top: deltaY, behavior: 'smooth' });
+      } else {
+        window.scrollBy({ top: deltaY, behavior: 'smooth' });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteUiCommand]);
+
+  // Đẩy trạng thái trực tiếp từ Màn Xe -> Điện thoại qua WebRTC P2P (0 request server, độ trễ < 15ms!)
+  useEffect(() => {
+    if (!remoteHost?.isP2pConnected) return;
+    const title = isTvSessionActive && tvController.activeChannel
+      ? `📺 ${tvController.activeChannel.name}`
+      : (newsController.isPlaying || newsController.isTtsSpeaking || isNewsView) &&
+        newsController.activeArticle
+      ? `📰 ${newsController.activeArticle.title}`
+      : streamData.title;
+    const subtitle = isTvSessionActive && tvController.activeChannel
+      ? tvController.activeChannel.group
+      : (newsController.isPlaying || newsController.isTtsSpeaking || isNewsView) &&
+        newsController.activeArticle
+      ? newsController.activeArticle.publisherName || 'Báo Audio'
+      : streamData.uploader;
+
+    remoteHost.broadcastStateSnapshot({
+      screen: railSection,
+      title,
+      subtitle,
+      isPlaying: isTvSessionActive
+        ? Boolean(tvController.playerStatus.isPlaying)
+        : newsController.isPlaying || newsController.isTtsSpeaking
+        ? true
+        : isPlaying,
+      isFavorite,
+      isLightTheme,
+      viewMode,
+      speedKmh: telemetry.speedKmh,
+      activeNavName: activeNavSummary?.destinationName || null,
+      ts: Date.now(),
+    });
+  }, [
+    remoteHost,
+    railSection,
+    streamData.title,
+    streamData.uploader,
+    isPlaying,
+    isFavorite,
+    isLightTheme,
+    viewMode,
+    isTvSessionActive,
+    tvController.activeChannel,
+    tvController.playerStatus.isPlaying,
+    newsController.isPlaying,
+    newsController.isTtsSpeaking,
+    newsController.activeArticle,
+    isNewsView,
+    telemetry.speedKmh,
+    activeNavSummary?.destinationName,
+  ]);
+
   // Đồng bộ trạng thái Fullscreen chuẩn khi nhấn Esc hoặc cử chỉ hệ điều hành
   useEffect(() => {
     const onFsChange = () => {
@@ -2057,6 +2179,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </aside>
       )}
 
+      {/* THẺ GHÉP NỐI 0-CHẠM CHO MÀN HÌNH KHÔNG CẢM ỨNG (?notouch=1 -> tự hiện QR+PIN, tự ẩn ngay khi điện thoại kết nối!) */}
+      <NoTouchPairingOverlay
+        enabled={Boolean(noTouchMode)}
+        isFullscreen={isFullscreen}
+        isLightTheme={isLightTheme}
+        remoteHost={remoteHost}
+      />
+
       {/* BANNER DUYỆT THIẾT BỊ ĐIỆN THOẠI MỚI 1 CHẠM (Hiển thị ngay trên Cockpit kể cả khi đã đóng bảng QR!) */}
       {!isFullscreen && remoteHost && remoteHost.pendingDevices.length > 0 && (
         <div
@@ -2347,6 +2477,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </button>
               </div>
             </div>
+            {/* Công tắc chế độ Màn hình Không Cảm Ứng (điều khiển 100% qua điện thoại + P2P 0ms) */}
+            {onToggleNoTouchMode && (
+              <div className={`rounded-2xl border p-2.5 flex items-center justify-between gap-2.5 ${theme.well}`}>
+                <div className="min-w-0">
+                  <p className={`text-xs font-black flex items-center gap-1.5 ${theme.text}`}>
+                    <Smartphone className="w-4 h-4 text-sky-400 shrink-0" />
+                    <span>Màn hình không cảm ứng (Remote toàn phần)</span>
+                  </p>
+                  <p className={`text-[0.7rem] font-semibold leading-snug mt-0.5 ${theme.textSub}`}>
+                    Tự hiện QR + PIN 4 số khi mở xe — dùng điện thoại điều khiển 100% màn hình (hoặc mở link <span className="font-mono font-bold">/?notouch=1</span>).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onToggleNoTouchMode();
+                    setShowAppLauncher(false);
+                  }}
+                  className={`min-h-[2.6rem] px-3.5 rounded-xl border text-xs font-black shrink-0 active:scale-95 transition ${
+                    noTouchMode
+                      ? 'bg-emerald-500 border-emerald-400 text-slate-950 shadow'
+                      : theme.iconBtn
+                  }`}
+                >
+                  {noTouchMode ? 'ĐANG BẬT' : 'BẬT NGAY'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -3349,6 +3507,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onOpenVf5Tools={handleOpenVf5Tools}
             onQuickPinCamera={() => handleAddCustomHazard('camera', 'Camera phạt nguội')}
             onQuickPinNoStopping={() => handleAddCustomHazard('no_stopping', 'Cấm dừng & đỗ (P.130)')}
+            externalNavControlsRef={cockpitNavControlsRef}
           />
         )}
 

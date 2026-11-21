@@ -77,6 +77,13 @@ export interface CockpitNavControls {
   cancelRoute: () => void;
   startGuidanceFollow: () => void;
   toggleVoiceNav: () => void;
+  zoomIn?: () => void;
+  zoomOut?: () => void;
+  recenter?: () => void;
+  toggleFollow?: () => void;
+  toggleExpand?: () => void;
+  toggleCameras?: () => void;
+  toggleTraffic?: () => void;
 }
 
 export type UiScale = 'compact' | 'normal' | 'large' | 'xlarge';
@@ -365,6 +372,16 @@ export interface CustomHazardPin {
   createdAt: number;
 }
 
+export type RemoteMapAction =
+  | 'zoomIn'
+  | 'zoomOut'
+  | 'recenter'
+  | 'toggleFollow'
+  | 'toggleExpand'
+  | 'toggleCameras'
+  | 'toggleTraffic'
+  | 'cancelRoute';
+
 export type RemoteCommandAction =
   | 'playTrack'
   | 'queueTrack'
@@ -373,13 +390,43 @@ export type RemoteCommandAction =
   | 'openNews'
   | 'playPause'
   | 'next'
-  | 'prev';
+  | 'prev'
+  // Full Remote Control actions (dành cho Màn hình Không Cảm Ứng & Chủ xe P2P!)
+  | 'switchScreen'
+  | 'seekRelative'
+  | 'toggleFullscreen'
+  | 'toggleTheme'
+  | 'toggleHud'
+  | 'toggleViewMode'
+  | 'toggleFavorite'
+  | 'toggleShuffle'
+  | 'toggleRepeat'
+  | 'mapControl'
+  | 'scrollPage'
+  | 'tvZap'
+  | 'newsNav'
+  | 'toggleVoiceAlert'
+  | 'cycleUiScale'
+  | 'cycleDockMode';
 
 export interface RemoteControlCommand {
   id: string;
   action: RemoteCommandAction;
   payload?: any;
   sentAt: string;
+}
+
+export interface RemoteLiveSnapshot {
+  screen: RailSection;
+  title: string;
+  subtitle: string;
+  isPlaying: boolean;
+  isFavorite?: boolean;
+  isLightTheme: boolean;
+  viewMode: ViewMode;
+  speedKmh: number | null;
+  activeNavName?: string | null;
+  ts: number;
 }
 
 export interface TripStats {

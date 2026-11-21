@@ -134,6 +134,7 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
   const [checkingHealth, setCheckingHealth] = useState<boolean>(false);
   const [qrImg, setQrImg] = useState<string>('');
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
+  const [copiedNoTouchUrl, setCopiedNoTouchUrl] = useState<boolean>(false);
   const [copyFailedMsg, setCopyFailedMsg] = useState<boolean>(false);
 
   const manuallyRevokedRef = useRef<boolean>(false);
@@ -550,18 +551,45 @@ export const Vf5ToolsModal: React.FC<Vf5ToolsModalProps> = ({
                             <span>Đồng bộ mây</span>
                           </button>
                         )}
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const noTouchLink = `${window.location.origin}/?notouch=1`;
+                            try {
+                              await navigator.clipboard.writeText(noTouchLink);
+                              setCopiedNoTouchUrl(true);
+                              window.setTimeout(() => setCopiedNoTouchUrl(false), 2400);
+                            } catch {}
+                          }}
+                          className={`min-h-[2.45rem] px-2.5 rounded-xl border text-xs font-bold flex items-center gap-1 active:scale-95 transition ${theme.iconBtn}`}
+                          title="Link mở trực tiếp bản cho màn hình xe không cảm ứng (Mazda, BMW, Mercedes, màn Android không chạm)"
+                        >
+                          {copiedNoTouchUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Zap className="w-3.5 h-3.5 text-amber-400" />}
+                          <span>{copiedNoTouchUrl ? 'Đã chép /?notouch=1' : 'Link Màn không cảm ứng'}</span>
+                        </button>
                       </div>
                     </div>
                   </div>
 
-                  {/* Danh sách điện thoại đang chờ duyệt / đang kết nối */}
+                      {/* Danh sách điện thoại đang chờ duyệt / đang kết nối */}
                   <div className={`rounded-2xl border p-3 space-y-2 ${theme.card}`}>
-                    <div className="flex items-center justify-between">
-                      <span className={`text-xs font-black uppercase tracking-wider ${theme.textSub}`}>
-                        Thiết bị kết nối trong phiên ({remoteState.devices.filter((d) => d.status !== 'blocked').length})
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className={`text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${theme.textSub}`}>
+                        <span>
+                          Thiết bị kết nối ({remoteState.devices.filter((d) => d.status !== 'blocked').length})
+                        </span>
+                        {remoteHost?.isP2pConnected && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/50 text-emerald-400 text-[10px] font-black normal-case">
+                            <Zap className="w-3 h-3" />
+                            P2P Trực tiếp 0ms ({remoteHost.p2pCount})
+                          </span>
+                        )}
                       </span>
                       <span className={`text-[11px] font-semibold ${theme.textMuted}`}>
-                        Chống spam: tối đa 10 lệnh/phút
+                        {remoteState.noTouchMode
+                          ? 'Màn không cảm ứng • Khóa chủ xe'
+                          : 'Chống spam: tối đa 10 lệnh/phút'}
                       </span>
                     </div>
                     {remoteState.devices.length === 0 ? (

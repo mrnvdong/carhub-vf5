@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { fetchWithTimeout } from '../utils/timedFetch';
+import { findLocalAreaTrafficPoints } from '../data/vietnamCameras';
 import {
   Map as MapLibreMap,
   Marker as MapLibreMarker,
@@ -997,7 +998,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoute, syncRouteDataToMap]);
 
-  // Tải lớp Camera Phạt Nguội & Biển Cấm dừng/đỗ P.130/P.131a quanh vị trí xe (bán kính 12 km, chỉ gọi lại khi di chuyển >= 3 km!)
+  // Tải lớp Camera Phạt Nguội & Biển Cấm dừng/đỗ P.130/P.131a 100% CỤC BỘ (0ms, 0 request server, chạy cả khi mất 4G!)
   useEffect(() => {
     if (!showCamerasLayer) return;
     const prev = lastCamQueryRef.current;
@@ -1006,25 +1007,8 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       const dLon = Math.abs(position.lon - prev.lon);
       if (dLat < 0.028 && dLon < 0.028) return; // < ~3km
     }
-    const queryLat = position.lat;
-    const queryLon = position.lon;
-    let cancelled = false;
-    fetchWithTimeout(
-      `/api/road?mode=cameras&lat=${queryLat.toFixed(4)}&lon=${queryLon.toFixed(4)}&radiusKm=12`,
-      {},
-      6000
-    )
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!cancelled && data?.success && Array.isArray(data.points)) {
-          lastCamQueryRef.current = { lat: queryLat, lon: queryLon };
-          setAreaTrafficPoints(data.points);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+    lastCamQueryRef.current = { lat: position.lat, lon: position.lon };
+    setAreaTrafficPoints(findLocalAreaTrafficPoints(position.lat, position.lon, 12));
   }, [position.lat, position.lon, showCamerasLayer]);
 
   const handleToggleCamerasLayer = () => {
@@ -1497,7 +1481,20 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
     }
   }, [activeRoute, nextTurn, voiceNavEnabled, gpsStatus]);
 
-  // Đồng bộ điều khiển dẫn đường (Hủy / Bắt đầu bám mũi xe / Bật tắt giọng nói) sang cột Cockpit
+  // Đồng bộ điều khiển dẫn đường & bản đồ 3D (kể cả Remote từ xa cho Màn không cảm ứng!)
+  const mapControlDepsRef = useRef({
+    handleToggleCamerasLayer,
+    handleToggleTraffic,
+    onToggleExpandMap,
+    position,
+  });
+  mapControlDepsRef.current = {
+    handleToggleCamerasLayer,
+    handleToggleTraffic,
+    onToggleExpandMap,
+    position,
+  };
+
   useEffect(() => {
     if (!navControlsRef) return;
     navControlsRef.current = {
@@ -1515,6 +1512,39 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
           );
           return next;
         });
+      },
+      zoomIn: () => {
+        const m = mapRef.current;
+        if (m) m.zoomTo(Math.min(18.5, m.getZoom() + 1.2), { duration: 300 });
+      },
+      zoomOut: () => {
+        const m = mapRef.current;
+        if (m) m.zoomTo(Math.max(10, m.getZoom() - 1.2), { duration: 300 });
+      },
+      recenter: () => {
+        setIsRouteOverview(false);
+        setIsFollowing(true);
+        const m = mapRef.current;
+        const pos = mapControlDepsRef.current.position;
+        if (m && pos) {
+          m.easeTo({ center: [pos.lon, pos.lat], zoom: 16.2, pitch: 52, duration: 450 });
+        }
+      },
+      toggleFollow: () => {
+        setIsFollowing((prev) => {
+          const next = !prev;
+          onNotifyToast?.(next ? '🧭 Đã bật bám mũi xe 3D' : '🗺️ Đã tắt bám mũi xe (xem tự do)');
+          return next;
+        });
+      },
+      toggleExpand: () => {
+        mapControlDepsRef.current.onToggleExpandMap();
+      },
+      toggleCameras: () => {
+        mapControlDepsRef.current.handleToggleCamerasLayer();
+      },
+      toggleTraffic: () => {
+        mapControlDepsRef.current.handleToggleTraffic();
       },
     };
     return () => {

@@ -160,6 +160,7 @@ interface CockpitViewProps {
   onOpenVf5Tools?: (tab?: 'qr' | 'ev' | 'eq' | 'hazards' | 'safety') => void;
   onQuickPinCamera?: () => void;
   onQuickPinNoStopping?: () => void;
+  externalNavControlsRef?: React.MutableRefObject<CockpitNavControls | null>;
 }
 
 export const CockpitView: React.FC<CockpitViewProps> = React.memo(
@@ -232,11 +233,13 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
     onOpenVf5Tools,
     onQuickPinCamera,
     onQuickPinNoStopping,
+    externalNavControlsRef,
   }) => {
     const theme = getCarTheme(isLightTheme);
     const splitContainerRef = useRef<HTMLDivElement | null>(null);
     const telemetryCardRef = useRef<HTMLDivElement | null>(null);
-    const navControlsRef = useRef<CockpitNavControls | null>(null);
+    const internalNavControlsRef = useRef<CockpitNavControls | null>(null);
+    const navControlsRef = externalNavControlsRef || internalNavControlsRef;
     const videoSlotRef = useRef<HTMLDivElement | null>(null);
     const tvSlotRef = useRef<HTMLDivElement | null>(null);
     const badgeTextRef = useRef<HTMLSpanElement | null>(null);

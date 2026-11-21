@@ -67,17 +67,33 @@ export const MOVIE_YEARS: number[] = Array.from({ length: 18 }, (_, i) => 2026 -
 
 const detailCache = new Map<string, { data: MovieDetail; ts: number }>();
 const DETAIL_CACHE_TTL_MS = 10 * 60 * 1000;
+const listCache = new Map<string, { data: MovieListResponse; ts: number }>();
+const LIST_CACHE_TTL_MS = 5 * 60 * 1000;
 const metaCache = new Map<MovieSource, MovieMetaResponse>();
+const META_LS_TTL_MS = 24 * 60 * 60 * 1000;
 
 export async function fetchMovieMeta(source: MovieSource = 'kkphim'): Promise<MovieMetaResponse> {
   const hit = metaCache.get(source);
   if (hit) return hit;
+  try {
+    const raw = localStorage.getItem(`carhub_movie_meta_${source}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.data && Date.now() - Number(parsed.ts || 0) < META_LS_TTL_MS) {
+        metaCache.set(source, parsed.data);
+        return parsed.data as MovieMetaResponse;
+      }
+    }
+  } catch {}
   const res = await fetch(`/api/movie?action=meta&source=${source}`);
   const data = (await res.json()) as MovieMetaResponse;
   if (!res.ok) {
     throw new Error('Không tải được danh mục thể loại & quốc gia');
   }
   metaCache.set(source, data);
+  try {
+    localStorage.setItem(`carhub_movie_meta_${source}`, JSON.stringify({ ts: Date.now(), data }));
+  } catch {}
   return data;
 }
 
@@ -114,11 +130,22 @@ export async function fetchMovieList(q: MovieListQuery): Promise<MovieListRespon
   if (q.sortLang) params.set('sort_lang', q.sortLang);
   if (q.sortField) params.set('sort_field', q.sortField);
 
-  const res = await fetch(`/api/movie?${params.toString()}`);
+  const qs = params.toString();
+  const cached = listCache.get(qs);
+  if (cached && Date.now() - cached.ts < LIST_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const res = await fetch(`/api/movie?${qs}`);
   const data = (await res.json()) as MovieListResponse;
   if (!res.ok) {
     throw new Error(data.error || `Không tải được phim (HTTP ${res.status})`);
   }
+  if (listCache.size >= 40) {
+    const oldest = listCache.keys().next().value;
+    if (oldest) listCache.delete(oldest);
+  }
+  listCache.set(qs, { data, ts: Date.now() });
   return data;
 }
 

@@ -169,14 +169,14 @@ export function useTvLive(
     } catch {}
   }, [activeChannel]);
 
-  const loadPlaylist = useCallback(async (urlToLoad: string) => {
+  const loadPlaylist = useCallback(async (urlToLoad: string, forceRefresh = false) => {
     playlistAbortRef.current?.abort();
     const controller = new AbortController();
     playlistAbortRef.current = controller;
 
     setIsLoadingPlaylist(true);
     setPlaylistError(null);
-    const { data, error } = await fetchTvPlaylist(urlToLoad, controller.signal);
+    const { data, error } = await fetchTvPlaylist(urlToLoad, controller.signal, forceRefresh);
     if (controller.signal.aborted || playlistAbortRef.current !== controller) return;
     if (data) {
       setPlaylist(data);
@@ -214,7 +214,7 @@ export function useTvLive(
   }, []);
 
   const reloadPlaylist = useCallback(() => {
-    loadPlaylist(playlistUrl);
+    loadPlaylist(playlistUrl, true);
   }, [loadPlaylist, playlistUrl]);
 
   const favoriteSet = useMemo(() => new Set(favoriteKeys), [favoriteKeys]);
