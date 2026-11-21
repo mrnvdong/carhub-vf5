@@ -83,7 +83,7 @@ import {
 } from '../types';
 import { MEDIA_CATEGORIES } from '../constants/categories';
 import { formatSeconds, resolveSoundCloudStream } from '../services/api';
-import { fetchSyncedLyrics, LyricsResult } from '../services/lyrics';
+import { fetchSyncedLyrics, LyricsPreferMode, LyricsResult } from '../services/lyrics';
 import { fetchSponsorSegments, getSponsorCategoryLabel } from '../services/sponsorblock';
 import { registerMediaResumeHandler } from '../services/voiceAudio';
 import { stripVietnameseTones } from '../services/voiceCommands';
@@ -955,29 +955,54 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setConfirmClearHistory(false);
   }, [railSection]);
 
-  // Tải lời bài hát đồng bộ (hỗ trợ cả YouTube lẫn SoundCloud qua LRCLIB)
-  useEffect(() => {
-    if (!streamData.id) return;
-    let cancelled = false;
-    setIsLoadingLyrics(true);
-    setLyricsData(null);
+  // Tải lời bài hát đồng bộ (ưu tiên tách CC trực tiếp từ YouTube + kết hợp LRCLIB chuẩn xác!)
+  const lyricsRequestSeqRef = useRef<number>(0);
 
-    const lyricsLookupId = isSoundCloudTrack ? '' : streamData.id;
-    fetchSyncedLyrics(lyricsLookupId, streamData.title, streamData.uploader)
-      .then((res) => {
-        if (!cancelled) {
-          setLyricsData(res);
-          setIsLoadingLyrics(false);
-        }
+  const loadLyricsForCurrentTrack = useCallback(
+    (prefer: LyricsPreferMode = 'auto', forceRefresh = false) => {
+      if (!streamData.id) return;
+      const seq = ++lyricsRequestSeqRef.current;
+      setIsLoadingLyrics(true);
+      if (prefer === 'auto' && !forceRefresh) {
+        setLyricsData(null);
+      }
+
+      const lyricsLookupId = isSoundCloudTrack ? '' : streamData.id;
+      fetchSyncedLyrics(lyricsLookupId, streamData.title, streamData.uploader, {
+        durationSec: streamData.duration || 0,
+        prefer,
+        forceRefresh,
       })
-      .catch(() => {
-        if (!cancelled) setIsLoadingLyrics(false);
-      });
+        .then((res) => {
+          if (lyricsRequestSeqRef.current !== seq) return;
+          if (res && res.lines.length > 0) {
+            setLyricsData(res);
+          } else if (prefer === 'auto' || forceRefresh) {
+            setLyricsData(res);
+          } else {
+            showToast(
+              prefer === 'youtube'
+                ? '📺 Video YouTube này chưa có phụ đề CC — bấm Video YT để xem lời trong hình'
+                : '🎵 Không tìm thấy lời chuẩn trên LRCLIB'
+            );
+          }
+          setIsLoadingLyrics(false);
+        })
+        .catch(() => {
+          if (lyricsRequestSeqRef.current === seq) {
+            setIsLoadingLyrics(false);
+          }
+        });
+    },
+    [streamData.id, streamData.title, streamData.uploader, streamData.duration, isSoundCloudTrack, showToast]
+  );
 
+  useEffect(() => {
+    loadLyricsForCurrentTrack('auto', false);
     return () => {
-      cancelled = true;
+      lyricsRequestSeqRef.current += 1;
     };
-  }, [streamData.id, streamData.title, streamData.uploader, isSoundCloudTrack]);
+  }, [loadLyricsForCurrentTrack]);
 
   // Upgrade #1: Tải phân đoạn SponsorBlock & Non-Music Intro/Outro (chỉ cho YouTube)
   useEffect(() => {
@@ -3504,13 +3529,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     </div>
                   ) : lyricsData && lyricsData.lines.length > 0 ? (
                     <>
-                      <div className={`flex items-center justify-between text-[11px] font-bold pb-1 ${theme.textMuted}`}>
+                      <div className={`flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold pb-1.5 ${theme.textMuted}`}>
                         <span>
                           {lyricsData.isSynced
                             ? 'Chạm vào câu hát bất kỳ để tua nhanh'
                             : 'Lời bài hát tiêu chuẩn'}
                         </span>
-                        <span>{lyricsData.source}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="px-2 py-0.5 rounded-full bg-white/10 border border-white/10 text-[10px] font-extrabold">
+                            {lyricsData.source}
+                          </span>
+                          {!isSoundCloudTrack && !lyricsData.source.startsWith('YouTube') && (
+                            <button
+                              type="button"
+                              onClick={() => loadLyricsForCurrentTrack('youtube', true)}
+                              className={`px-2 py-0.5 rounded-full border text-[10px] font-extrabold active:scale-95 transition ${theme.iconBtn}`}
+                            >
+                              📺 Dùng CC YouTube
+                            </button>
+                          )}
+                          {!isSoundCloudTrack && lyricsData.source.startsWith('YouTube') && (
+                            <button
+                              type="button"
+                              onClick={() => loadLyricsForCurrentTrack('lrclib', false)}
+                              className={`px-2 py-0.5 rounded-full border text-[10px] font-extrabold active:scale-95 transition ${theme.iconBtn}`}
+                            >
+                              🎵 Thử LRCLIB
+                            </button>
+                          )}
+                        </div>
                       </div>
                       {lyricsData.lines.map((line, i) => {
                         if (!lyricsData.isSynced) {
@@ -3562,19 +3609,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       <Quote className={`w-10 h-10 ${theme.textDim}`} />
                       <div>
                         <p className={`text-sm sm:text-base font-bold ${theme.text}`}>
-                          Chưa có lời cho bản thu này
+                          Chưa tách được lời văn bản cho bài này
                         </p>
-                        <p className={`text-xs mt-1 ${theme.textMuted}`}>
-                          Các bản Nonstop / Remix dài thường không kèm lời LRC.
+                        <p className={`text-xs mt-1 max-w-sm ${theme.textMuted}`}>
+                          Nếu video YouTube chạy chữ cứng trong hình (không có nút phụ đề CC), hãy chuyển sang tab Video YT để xem trực tiếp lời trong video.
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setMusicRightTab('queue')}
-                        className={`min-h-[40px] px-4 rounded-full border text-xs sm:text-sm font-bold transition active:scale-95 ${theme.iconBtn}`}
-                      >
-                        Mở danh sách phát tiếp theo ({playbackQueue.length})
-                      </button>
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        {!isSoundCloudTrack && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => loadLyricsForCurrentTrack('youtube', true)}
+                              className={`min-h-[40px] px-4 rounded-full border text-xs sm:text-sm font-extrabold transition active:scale-95 ${theme.iconBtn}`}
+                            >
+                              📺 Thử tách lại CC YouTube
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSwitchToVideoMode}
+                              className={`min-h-[40px] px-4 rounded-full text-xs sm:text-sm font-extrabold transition active:scale-95 ${
+                                isLightTheme
+                                  ? 'bg-blue-600 text-white shadow'
+                                  : 'bg-sky-400 text-slate-950 shadow'
+                              }`}
+                            >
+                              🎬 Mở Video YT xem lời
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setMusicRightTab('queue')}
+                          className={`min-h-[40px] px-4 rounded-full border text-xs sm:text-sm font-bold transition active:scale-95 ${theme.iconBtn}`}
+                        >
+                          Tiếp theo ({playbackQueue.length})
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
