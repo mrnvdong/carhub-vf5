@@ -2158,7 +2158,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
 
       {/* =====================================================================
-          1. MENU NỔI SIÊU GỌN CHUẨN CARPLAY (TOÀN MÀN HÌNH 100% — 3 NÚT LỚN: COCKPIT • MENU • QR + 1 CHẠM THU GỌN)
+          1. MENU NỔI SIÊU GỌN CHUẨN CARPLAY (TOÀN MÀN HÌNH 100% — 4 NÚT LỚN: COCKPIT • TÌM • MENU • QR + 1 CHẠM THU GỌN)
              - 'right' (mặc định): Viên thuốc dọc nổi gọn bên PHẢI giữa màn (kèm nút thu gọn sát mép khi muốn xem full 100%)
              - 'top' / 'bottom': Viên thuốc ngang nổi giữa mép TRÊN / DƯỚI
          ===================================================================== */}
@@ -2167,7 +2167,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           type="button"
           onClick={() => setIsDockCollapsed(false)}
           aria-label="Mở lại menu nổi CarHub"
-          title="Hiện menu nổi (Cockpit • Menu • QR)"
+          title="Hiện menu nổi (Cockpit • Tìm • Menu • QR)"
           className={`fixed z-40 border-2 backdrop-blur-2xl shadow-2xl flex items-center justify-center gap-1 active:scale-95 transition ${
             dockMode === 'right'
               ? 'right-0 top-1/2 -translate-y-1/2 pl-1.5 pr-1 py-3.5 rounded-l-2xl border-r-0 flex-col'
@@ -2201,8 +2201,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             dockMode === 'right'
               ? 'right-2 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 p-1.5 rounded-3xl'
               : dockMode === 'top'
-              ? 'top-2 left-1/2 -translate-x-1/2 flex flex-row items-center gap-2 px-2 py-1.5 rounded-full'
-              : 'bottom-2 left-1/2 -translate-x-1/2 flex flex-row items-center gap-2 px-2 py-1.5 rounded-full'
+              ? 'top-2 left-1/2 -translate-x-1/2 max-w-[96vw] flex flex-row items-center gap-1.5 sm:gap-2 px-2 py-1.5 rounded-full'
+              : 'bottom-2 left-1/2 -translate-x-1/2 max-w-[96vw] flex flex-row items-center gap-1.5 sm:gap-2 px-2 py-1.5 rounded-full'
           } ${
             isLightTheme
               ? 'bg-white/90 border-slate-300/95 text-slate-900'
@@ -2217,8 +2217,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             title="Màn hình Cockpit"
             className={`${
               dockMode === 'right'
-                ? 'w-[3.75rem] h-[3.4rem] short:w-[3.5rem] short:h-[3.1rem] rounded-2xl flex-col gap-1 px-1'
-                : 'h-11 short:h-10 px-4 rounded-full flex-row gap-1.5'
+                ? 'w-[3.75rem] h-[3.2rem] short:w-[3.45rem] short:h-[2.85rem] rounded-2xl flex-col gap-0.5 px-1'
+                : 'h-11 short:h-10 px-3 sm:px-3.5 rounded-full flex-row gap-1.5'
             } border flex items-center justify-center ios-spring-fast active:scale-95 transition shrink-0 ${
               railSection === 'cockpit'
                 ? theme.railCockpitActive
@@ -2230,14 +2230,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <Gauge className="w-5 h-5 shrink-0" />
             <span
               className={`${
-                dockMode === 'right' ? 'text-[0.66rem]' : 'text-xs sm:text-sm'
+                dockMode === 'right' ? 'text-[0.65rem]' : 'text-xs sm:text-sm'
               } font-black leading-none whitespace-nowrap`}
             >
               Cockpit
             </span>
           </button>
 
-          {/* Nút 2: Menu (Mở toàn bộ danh mục TV / Báo / Phim / Nhạc / Tìm kiếm / Giọng nói / VF5) */}
+          {/* Nút 2: Tìm kiếm nhanh (Nhạc / Video / Giọng nói) */}
+          <button
+            type="button"
+            onClick={() => onOpenSearchModal(false)}
+            aria-label="Tìm kiếm nhạc, video và giọng nói"
+            title="Tìm kiếm nhạc / Video / Giọng nói"
+            className={`${
+              dockMode === 'right'
+                ? 'w-[3.75rem] h-[3.2rem] short:w-[3.45rem] short:h-[2.85rem] rounded-2xl flex-col gap-0.5 px-1'
+                : 'h-11 short:h-10 px-3 sm:px-3.5 rounded-full flex-row gap-1.5'
+            } border flex items-center justify-center ios-spring-fast active:scale-95 transition shrink-0 ${
+              isLightTheme
+                ? 'bg-rose-50 hover:bg-rose-100 border-rose-300 text-rose-700 shadow-sm'
+                : 'bg-rose-500/20 hover:bg-rose-500/35 border-rose-400/45 text-rose-200 shadow-sm'
+            }`}
+          >
+            <Search className="w-5 h-5 shrink-0" />
+            <span
+              className={`${
+                dockMode === 'right' ? 'text-[0.65rem]' : 'text-xs sm:text-sm'
+              } font-black leading-none whitespace-nowrap`}
+            >
+              Tìm
+            </span>
+          </button>
+
+          {/* Nút 3: Menu (Mở toàn bộ danh mục TV / Báo / Phim / Nhạc / Video / VF5) */}
           <button
             type="button"
             onClick={() => setShowAppLauncher(true)}
@@ -2245,8 +2271,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             title="Mở Menu nhanh CarHub"
             className={`relative ${
               dockMode === 'right'
-                ? 'w-[3.75rem] h-[3.4rem] short:w-[3.5rem] short:h-[3.1rem] rounded-2xl flex-col gap-1 px-1'
-                : 'h-11 short:h-10 px-4 rounded-full flex-row gap-1.5'
+                ? 'w-[3.75rem] h-[3.2rem] short:w-[3.45rem] short:h-[2.85rem] rounded-2xl flex-col gap-0.5 px-1'
+                : 'h-11 short:h-10 px-3 sm:px-3.5 rounded-full flex-row gap-1.5'
             } border flex items-center justify-center ios-spring-fast active:scale-95 transition shrink-0 ${
               showAppLauncher || railSection !== 'cockpit'
                 ? isLightTheme
@@ -2260,7 +2286,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <LayoutGrid className="w-5 h-5 shrink-0" />
             <span
               className={`${
-                dockMode === 'right' ? 'text-[0.66rem]' : 'text-xs sm:text-sm'
+                dockMode === 'right' ? 'text-[0.65rem]' : 'text-xs sm:text-sm'
               } font-black leading-none whitespace-nowrap`}
             >
               Menu
@@ -2271,7 +2297,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
           </button>
 
-          {/* Nút 3: QR Code */}
+          {/* Nút 4: QR Code */}
           <button
             type="button"
             onClick={() => handleOpenVf5Tools('qr')}
@@ -2279,8 +2305,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             title="Quét mã QR phiên tạm thời (PIN 4 số + duyệt máy) trên điện thoại"
             className={`relative ${
               dockMode === 'right'
-                ? 'w-[3.75rem] h-[3.4rem] short:w-[3.5rem] short:h-[3.1rem] rounded-2xl flex-col gap-1 px-1'
-                : 'h-11 short:h-10 px-4 rounded-full flex-row gap-1.5'
+                ? 'w-[3.75rem] h-[3.2rem] short:w-[3.45rem] short:h-[2.85rem] rounded-2xl flex-col gap-0.5 px-1'
+                : 'h-11 short:h-10 px-3 sm:px-3.5 rounded-full flex-row gap-1.5'
             } border flex items-center justify-center ios-spring-fast active:scale-95 transition shrink-0 ${
               isLightTheme
                 ? 'bg-sky-50 hover:bg-sky-100 border-sky-300 text-sky-800 shadow-sm'
@@ -2290,7 +2316,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <QrCode className="w-5 h-5 shrink-0" />
             <span
               className={`${
-                dockMode === 'right' ? 'text-[0.66rem]' : 'text-xs sm:text-sm'
+                dockMode === 'right' ? 'text-[0.65rem]' : 'text-xs sm:text-sm'
               } font-black leading-none whitespace-nowrap`}
             >
               QR
@@ -2605,7 +2631,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Tùy chọn vị trí cụm Menu nổi (cả 3 vị trí đều nổi ẩn gọn gàng, toàn màn hình 100%!) */}
             <div className={`rounded-2xl border p-2.5 space-y-2 ${theme.well}`}>
               <p className={`text-[0.7rem] font-extrabold uppercase tracking-wider ${theme.textMuted}`}>
-                Vị trí cụm Menu nổi (Cockpit • Menu • QR)
+                Vị trí cụm Menu nổi (Cockpit • Tìm • Menu • QR)
               </p>
               <div className="grid grid-cols-3 gap-2">
                 <button
@@ -2613,7 +2639,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   onClick={() => {
                     handleChangeDockMode('right');
                     setShowAppLauncher(false);
-                    showToast('➡️ Menu nổi bên Phải (Cockpit • Menu • QR)');
+                    showToast('➡️ Menu nổi bên Phải (Cockpit • Tìm • Menu • QR)');
                   }}
                   className={`min-h-[3.25rem] px-2 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
                     dockMode === 'right' ? theme.segActive : theme.itemIdle
@@ -2628,7 +2654,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   onClick={() => {
                     handleChangeDockMode('bottom');
                     setShowAppLauncher(false);
-                    showToast('⬇️ Menu nổi dưới Đáy (Cockpit • Menu • QR)');
+                    showToast('⬇️ Menu nổi dưới Đáy (Cockpit • Tìm • Menu • QR)');
                   }}
                   className={`min-h-[3.25rem] px-2 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
                     dockMode === 'bottom' ? theme.segActive : theme.itemIdle
@@ -2643,7 +2669,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   onClick={() => {
                     handleChangeDockMode('top');
                     setShowAppLauncher(false);
-                    showToast('⬆️ Menu nổi trên Đầu (Cockpit • Menu • QR)');
+                    showToast('⬆️ Menu nổi trên Đầu (Cockpit • Tìm • Menu • QR)');
                   }}
                   className={`min-h-[3.25rem] px-2 rounded-xl border text-xs sm:text-sm font-black flex items-center justify-center gap-1.5 active:scale-95 transition ${
                     dockMode === 'top' ? theme.segActive : theme.itemIdle

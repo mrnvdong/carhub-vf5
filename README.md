@@ -56,7 +56,7 @@
 - **Ghim điểm cảnh báo cộng đồng cá nhân (Custom Hazards)**: Tự đánh dấu nhanh ổ gà, chốt bắn tốc độ, ngập nước hay camera mới trên đường quen.
 
 ### 🎛️ 1.6. Giao diện nổi tinh gọn & Trợ lý giọng nói
-- **Thanh nổi ẩn gọn gàng bên phải**: Thu gọn thành cụm nổi 3 nút **`Cockpit • Menu • QR`** giúp không che khuất bản đồ hay nội dung đang xem, hỗ trợ di chuyển vị trí thanh nổi (*Phải / Trái / Trên / Dưới*) và chỉnh 3 cỡ chữ (*Nhỏ / Vừa / Lớn*).
+- **Thanh nổi ẩn gọn gàng bên phải**: Thu gọn thành cụm nổi 4 nút **`Cockpit • Tìm • Menu • QR`** giúp mở tìm kiếm/giọng nói tức thì mà không che khuất bản đồ hay nội dung đang xem, hỗ trợ di chuyển vị trí thanh nổi (*Phải / Trên / Dưới*) và chỉnh 4 cỡ chữ.
 - **Trợ lý giọng nói tiếng Việt**: Hỗ trợ ra lệnh mở nhạc, mở kênh TV, mở phim, bật báo nói, tìm điểm đến dẫn đường rảnh tay.
 
 ---
@@ -66,9 +66,10 @@
 1. **Mở trên màn hình xe**:
    - Trên **VinFast VF5 / Apple CarPlay (APTV, asCar)** hoặc **Android Box**: mở trình duyệt và truy cập **`https://carhub-vf5.pages.dev`**.
    - Nếu muốn tải sẵn Playlist & địa chỉ Nhà/Cơ quan của bạn, thêm mã đồng bộ vào link (ví dụ: `https://carhub-vf5.pages.dev/?sync=6868`).
-2. **Thao tác bằng thanh nổi 3 nút (mặc định bên phải màn hình)**:
+2. **Thao tác bằng thanh nổi 4 nút (mặc định bên phải màn hình)**:
    - **`Cockpit`**: Quay nhanh về màn hình Bản đồ 3D + Đồng hồ tốc độ + Điều khiển nhạc mini.
-   - **`Menu`**: Mở bảng chọn nhanh tất cả tính năng (*Nhạc*, *TV Live*, *Phim*, *Báo Nói*, *Yêu thích*, *Playlist*, *Hàng đợi*, *Công cụ VF5/EV/EQ*, *HUD*, *Chế độ Sáng/Tối*, *Âm báo giọng nói*, *Vị trí thanh nổi*, *Chế độ Không cảm ứng*).
+   - **`Tìm`**: Mở ngay hộp Tìm kiếm nhạc/video (YouTube, SoundCloud) & Trợ lý giọng nói chỉ với 1 chạm.
+   - **`Menu`**: Mở bảng chọn nhanh tất cả tính năng (*Nghe nhạc*, *Video YT*, *TV Live*, *Phim*, *Báo Nói*, *Khám phá*, *Playlist*, *Lịch sử*, *Công cụ VF5/EV/EQ*, *HUD*, *Sáng/Tối*, *Cỡ chữ*, *Vị trí thanh nổi*, *Chế độ Không cảm ứng*).
    - **`QR`**: Hiện mã QR + mã PIN 4 số phiên tạm thời để người ngồi ghế phụ hoặc hàng ghế sau quét chọn nhạc/gửi điểm đến.
 3. **Bật/tắt âm thanh cảnh báo giao thông**:
    - Mặc định biển báo **Camera phạt nguội / P.130 / P.131a** chỉ hiện trực quan để không cắt ngang nhạc.
