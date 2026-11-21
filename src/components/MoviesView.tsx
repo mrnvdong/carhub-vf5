@@ -470,7 +470,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
         setDetailError(err?.message || 'Không tải được chi tiết bộ phim');
       }
     },
-    [movieSource, history, activeTab]
+    [movieSource, history, activeTab, moviePreferDub]
   );
 
   const activeServer = movieDetail?.servers?.[serverIdx] || null;

@@ -7,30 +7,44 @@ import {
   parseDuration,
   searchViaYouTubeInnerTube,
 } from '../_lib/youtubeSearch';
+import { buildTrustedJsonHeaders, isTrustedAppRequest } from '../_lib/security';
+
+export async function onRequestOptions(context: any) {
+  return new Response(null, { status: 204, headers: buildTrustedJsonHeaders(context.request) });
+}
 
 export async function onRequestGet(context: any) {
   const { request } = context;
+  const CORS_HEADERS = buildTrustedJsonHeaders(request);
+  if (!isTrustedAppRequest(request)) {
+    return new Response(JSON.stringify({ success: false, items: [] }), {
+      status: 403,
+      headers: CORS_HEADERS,
+    });
+  }
   const url = new URL(request.url);
   const id = url.searchParams.get('id') || '';
-  const title = url.searchParams.get('title') || '';
-  const artist = url.searchParams.get('artist') || '';
+  const title = (url.searchParams.get('title') || '').slice(0, 160);
+  const artist = (url.searchParams.get('artist') || '').slice(0, 100);
 
   if (!id || !/^[a-zA-Z0-9_-]{11}$/.test(id)) {
     return new Response(JSON.stringify({ success: false, items: [] }), {
       status: 400,
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: CORS_HEADERS,
     });
   }
 
   const cache = (caches as any).default;
-  const cacheKey = new Request(`${url.origin}/api/mix?id=${encodeURIComponent(id)}&v=1`);
+  const cacheKey = new Request(`https://carhub-mix.internal/v2?id=${encodeURIComponent(id)}`);
   if (cache) {
     try {
       const cached = await cache.match(cacheKey);
-      if (cached) return cached;
+      if (cached) {
+        return new Response(cached.body, {
+          status: cached.status,
+          headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=600' },
+        });
+      }
     } catch {}
   }
 
@@ -136,22 +150,26 @@ export async function onRequestGet(context: any) {
     } catch {}
   }
 
-  const resp = new Response(
-    JSON.stringify({
-      success: items.length > 0,
-      items: items.slice(0, 40),
-    }),
-    {
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': items.length > 0 ? 'public, max-age=600' : 'no-store',
-        'Access-Control-Allow-Origin': '*',
-      },
-    }
-  );
+  const serialized = JSON.stringify({
+    success: items.length > 0,
+    items: items.slice(0, 40),
+  });
+  const resp = new Response(serialized, {
+    headers: {
+      ...CORS_HEADERS,
+      'Cache-Control': items.length > 0 ? 'public, max-age=600' : 'no-store',
+    },
+  });
 
   if (cache && items.length > 0) {
-    context.waitUntil(cache.put(cacheKey, resp.clone()));
+    context.waitUntil(
+      cache.put(
+        cacheKey,
+        new Response(serialized, {
+          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=600' },
+        })
+      )
+    );
   }
 
   return resp;

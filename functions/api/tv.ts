@@ -6,21 +6,17 @@
 // - POST action=ping     : Fast parallel live-status ping for up to 14 channels at once (Same-Origin guarded)
 
 import {
+  buildTrustedJsonHeaders,
   getTrustedCorsOrigin,
+  isSafeProxyMediaContentType,
   isSafePublicHttpUrl,
   isTrustedAppRequest,
   readJsonBodyLimited,
+  readTextLimited,
   safeFetchExternal,
 } from '../_lib/security';
 
 const DEFAULT_PLAYLIST_URL = 'https://tinyurl.com/vmt47';
-
-const JSON_HEADERS = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Range',
-};
 
 const DEFAULT_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
@@ -385,12 +381,22 @@ async function pingSingleChannel(ch: {
   }
 }
 
-export async function onRequestOptions() {
-  return new Response(null, { status: 204, headers: JSON_HEADERS });
+export async function onRequestOptions(context: any) {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      ...buildTrustedJsonHeaders(context.request),
+      'Access-Control-Allow-Headers': 'Content-Type, Range',
+    },
+  });
 }
 
 export async function onRequestPost(context: any) {
   const { request } = context;
+  const JSON_HEADERS = {
+    ...buildTrustedJsonHeaders(request),
+    'Access-Control-Allow-Headers': 'Content-Type, Range',
+  };
   const reqUrl = new URL(request.url);
   const action = (reqUrl.searchParams.get('action') || 'ping').trim();
 
@@ -404,10 +410,7 @@ export async function onRequestPost(context: any) {
   if (!isTrustedAppRequest(request)) {
     return new Response(JSON.stringify({ success: false, error: 'Forbidden origin' }), {
       status: 403,
-      headers: {
-        ...JSON_HEADERS,
-        'Access-Control-Allow-Origin': getTrustedCorsOrigin(request),
-      },
+      headers: JSON_HEADERS,
     });
   }
 
@@ -415,10 +418,7 @@ export async function onRequestPost(context: any) {
   if (!parsedBody.ok) {
     return new Response(JSON.stringify({ success: false, error: parsedBody.error }), {
       status: parsedBody.status,
-      headers: {
-        ...JSON_HEADERS,
-        'Access-Control-Allow-Origin': getTrustedCorsOrigin(request),
-      },
+      headers: JSON_HEADERS,
     });
   }
 
@@ -452,7 +452,6 @@ export async function onRequestPost(context: any) {
     return new Response(JSON.stringify({ success: true, results }), {
       headers: {
         ...JSON_HEADERS,
-        'Access-Control-Allow-Origin': getTrustedCorsOrigin(request),
         'Cache-Control': 'no-store',
       },
     });
@@ -466,6 +465,10 @@ export async function onRequestPost(context: any) {
 
 export async function onRequestGet(context: any) {
   const { request } = context;
+  const JSON_HEADERS = {
+    ...buildTrustedJsonHeaders(request),
+    'Access-Control-Allow-Headers': 'Content-Type, Range',
+  };
   const reqUrl = new URL(request.url);
   const action = (reqUrl.searchParams.get('action') || 'playlist').trim();
 
@@ -473,6 +476,13 @@ export async function onRequestGet(context: any) {
   // 1. PLAYLIST: Tải & giữ NGUYÊN 100% TẤT CẢ KÊNH từ M3U/M3U8 (không ẩn kênh nào!)
   // =========================================================================
   if (action === 'playlist') {
+    if (!isTrustedAppRequest(request)) {
+      return new Response(JSON.stringify({ success: false, error: 'Forbidden origin' }), {
+        status: 403,
+        headers: JSON_HEADERS,
+      });
+    }
+
     const sourceParam = (reqUrl.searchParams.get('url') || DEFAULT_PLAYLIST_URL).trim();
     if (!isSafeExternalUrl(sourceParam)) {
       return new Response(
@@ -483,26 +493,41 @@ export async function onRequestGet(context: any) {
 
     const cache = (caches as any).default;
     const cacheKey = new Request(
-      `https://carhub-tv-playlist.internal/v2?u=${encodeURIComponent(sourceParam)}`
+      `https://carhub-tv-playlist.internal/v3?u=${encodeURIComponent(sourceParam)}`
     );
     if (cache) {
       try {
         const hit = await cache.match(cacheKey);
-        if (hit) return hit;
+        if (hit) {
+          return new Response(hit.body, {
+            status: hit.status,
+            headers: {
+              ...JSON_HEADERS,
+              'Cache-Control': 'public, max-age=300, s-maxage=300',
+              'X-Cache': 'HIT',
+            },
+          });
+        }
       } catch {}
     }
 
     try {
-      const upstream = await fetch(sourceParam, {
-        headers: {
-          'User-Agent': DEFAULT_UA,
-          Accept: '*/*',
+      const { response: upstream, finalUrl } = await safeFetchExternal(
+        sourceParam,
+        {
+          headers: {
+            'User-Agent': DEFAULT_UA,
+            Accept: '*/*',
+          },
+          signal: AbortSignal.timeout(9000),
         },
-        redirect: 'follow',
-        signal: AbortSignal.timeout(9000),
-      });
+        5
+      );
 
       if (!upstream.ok) {
+        try {
+          await upstream.body?.cancel();
+        } catch {}
         return new Response(
           JSON.stringify({
             success: false,
@@ -512,7 +537,18 @@ export async function onRequestGet(context: any) {
         );
       }
 
-      const text = await upstream.text();
+      const readRes = await readTextLimited(upstream, 2 * 1024 * 1024);
+      if (!readRes.ok) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: 'Danh sách kênh M3U vượt quá giới hạn 2 MB.',
+          }),
+          { status: readRes.status, headers: JSON_HEADERS }
+        );
+      }
+
+      const text = readRes.text;
       if (!text.includes('#EXTM3U') && !text.includes('#EXTINF')) {
         return new Response(
           JSON.stringify({
@@ -544,7 +580,7 @@ export async function onRequestGet(context: any) {
       const payload = {
         success: channels.length > 0,
         sourceUrl: sourceParam,
-        resolvedSourceUrl: upstream.url || sourceParam,
+        resolvedSourceUrl: finalUrl || sourceParam,
         epgUrl,
         totalRaw: channels.length,
         totalPlayable: channels.length,
@@ -553,16 +589,28 @@ export async function onRequestGet(context: any) {
         channels,
       };
 
-      const resp = new Response(JSON.stringify(payload), {
+      const serialized = JSON.stringify(payload);
+      if (cache && channels.length > 0) {
+        context.waitUntil(
+          cache.put(
+            cacheKey,
+            new Response(serialized, {
+              headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Cache-Control': 'public, max-age=300, s-maxage=300',
+              },
+            })
+          )
+        );
+      }
+
+      return new Response(serialized, {
         headers: {
           ...JSON_HEADERS,
           'Cache-Control': 'public, max-age=300, s-maxage=300',
+          'X-Cache': 'MISS',
         },
       });
-      if (cache && channels.length > 0) {
-        context.waitUntil(cache.put(cacheKey, resp.clone()));
-      }
-      return resp;
     } catch (err: any) {
       return new Response(
         JSON.stringify({
@@ -578,6 +626,12 @@ export async function onRequestGet(context: any) {
   // 2. RESOLVE: Theo dõi 302/307 bằng đúng User-Agent/Referer của kênh (hỗ trợ HLS, DASH MPD & Audio)
   // =========================================================================
   if (action === 'resolve') {
+    if (!isTrustedAppRequest(request)) {
+      return new Response(JSON.stringify({ success: false, error: 'Forbidden origin' }), {
+        status: 403,
+        headers: JSON_HEADERS,
+      });
+    }
     const targetUrl = (reqUrl.searchParams.get('url') || '').trim();
     const ua = (reqUrl.searchParams.get('ua') || '').trim() || undefined;
     const referer = (reqUrl.searchParams.get('ref') || '').trim() || undefined;
@@ -769,55 +823,106 @@ export async function onRequestGet(context: any) {
       const looksLikeMpd =
         contentType.includes('dash+xml') || /\.mpd(\?|$)/i.test(finalUrl);
 
+      const safeMediaHeaders = {
+        'Access-Control-Allow-Origin': corsOrigin,
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': 'sandbox',
+        Vary: 'Origin',
+      };
+
       if (looksLikeM3u8) {
-        const text = await upstream.text();
+        const readRes = await readTextLimited(upstream, 1024 * 1024);
+        if (!readRes.ok) {
+          return new Response('Manifest too large', {
+            status: readRes.status,
+            headers: safeMediaHeaders,
+          });
+        }
+        const text = readRes.text;
         if (text.trimStart().startsWith('#EXTM3U')) {
           const rewritten = rewriteHlsPlaylist(text, finalUrl, effectiveUa, referer);
           return new Response(rewritten, {
             status: 200,
             headers: {
+              ...safeMediaHeaders,
               'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
-              'Access-Control-Allow-Origin': corsOrigin,
-              Vary: 'Origin',
               'Cache-Control': 'no-store',
             },
           });
         }
-        return new Response(text, {
-          status: 200,
-          headers: {
-            'Content-Type': contentType || 'text/plain; charset=utf-8',
-            'Access-Control-Allow-Origin': corsOrigin,
-            Vary: 'Origin',
-            'Cache-Control': 'no-store',
-          },
+        return new Response('Unsupported playlist content', {
+          status: 415,
+          headers: safeMediaHeaders,
         });
       }
 
       if (looksLikeMpd) {
-        let xml = await upstream.text();
-        if (xml.includes('<MPD') && !/<BaseURL\b/i.test(xml)) {
+        const readRes = await readTextLimited(upstream, 1024 * 1024);
+        if (!readRes.ok) {
+          return new Response('Manifest too large', {
+            status: readRes.status,
+            headers: safeMediaHeaders,
+          });
+        }
+        let xml = readRes.text;
+        if (!xml.includes('<MPD')) {
+          return new Response('Unsupported MPD manifest', {
+            status: 415,
+            headers: safeMediaHeaders,
+          });
+        }
+        const escapeXml = (s: string) =>
+          s
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+        if (!/<BaseURL\b/i.test(xml)) {
           try {
             const baseDir = new URL('./', finalUrl).toString();
-            const safeBase = baseDir.replace(/&/g, '&amp;');
-            xml = xml.replace(/(<MPD\b[^>]*>)/i, `$1<BaseURL>${safeBase}</BaseURL>`);
+            xml = xml.replace(/(<MPD\b[^>]*>)/i, `$1<BaseURL>${escapeXml(baseDir)}</BaseURL>`);
           } catch {}
+        } else {
+          // Chuyển mọi <BaseURL> tương đối thành URL tuyệt đối an toàn
+          xml = xml.replace(/<BaseURL([^>]*)>([^<]+)<\/BaseURL>/gi, (m, attrs, inner) => {
+            const trimmed = inner.trim();
+            if (/^https?:\/\//i.test(trimmed)) return m;
+            try {
+              const abs = new URL(trimmed, finalUrl).toString();
+              return `<BaseURL${attrs}>${escapeXml(abs)}</BaseURL>`;
+            } catch {
+              return m;
+            }
+          });
         }
         return new Response(xml, {
           status: 200,
           headers: {
+            ...safeMediaHeaders,
             'Content-Type': 'application/dash+xml; charset=utf-8',
-            'Access-Control-Allow-Origin': corsOrigin,
-            Vary: 'Origin',
             'Cache-Control': 'no-store',
           },
         });
       }
 
+      // Chặn triệt để Same-Origin XSS: chỉ cho phép pass-through đúng Content-Type media (chặn text/html, svg, js...)
+      const rawCt = upstream.headers.get('content-type');
+      if (!isSafeProxyMediaContentType(rawCt)) {
+        try {
+          await upstream.body?.cancel();
+        } catch {}
+        return new Response('Unsupported media type', {
+          status: 415,
+          headers: safeMediaHeaders,
+        });
+      }
+
       const respHeaders = new Headers();
-      respHeaders.set('Content-Type', upstream.headers.get('content-type') || 'video/mp2t');
+      respHeaders.set('Content-Type', rawCt || 'video/mp2t');
       respHeaders.set('Access-Control-Allow-Origin', corsOrigin);
       respHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+      respHeaders.set('X-Content-Type-Options', 'nosniff');
+      respHeaders.set('Content-Security-Policy', 'sandbox');
       respHeaders.set('Vary', 'Origin');
       respHeaders.set('Cache-Control', 'public, max-age=15');
       const contentLength = upstream.headers.get('content-length');

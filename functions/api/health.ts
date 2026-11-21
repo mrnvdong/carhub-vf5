@@ -1,5 +1,5 @@
 // Cloudflare Pages Function: /api/health
-// Tổng hợp tình trạng sức khỏe hệ thống CarHub VF5 (KV, TTS, các nguồn Phim/TV/Báo/Nhạc) — Cache 60s.
+// Tổng hợp tình trạng sức khỏe hệ thống CarHub VF5 (KV, TTS, các nguồn Phim/TV/Báo) — Edge Cache 60s thực.
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -35,9 +35,28 @@ async function pingUpstream(name: string, url: string, timeoutMs = 4500) {
 export async function onRequestGet(context: any) {
   const { env } = context;
 
+  const cache = (caches as any).default;
+  const cacheKey = new Request('https://carhub-health.internal/v2');
+  if (cache) {
+    try {
+      const hit = await cache.match(cacheKey);
+      if (hit) {
+        return new Response(hit.body, {
+          status: hit.status,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=60, s-maxage=60',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Cache': 'HIT',
+          },
+        });
+      }
+    } catch {}
+  }
+
   const checks = await Promise.all([
     pingUpstream('kkphim', 'https://phimapi.com/danh-sach/phim-moi-cap-nhat-v3?page=1'),
-    pingUpstream('vsmov', 'https://vsmov.com/api/phim-moi-cap-nhat?page=1'),
+    pingUpstream('vsmov', 'https://vsmov.com/api/danh-sach/phim-moi-cap-nhat?page=1'),
     pingUpstream('cobephim', 'https://egluy2hhb21vaw5ndw9pbmhl.darkbytes.xyz/api/v1/movies/hot'),
     pingUpstream('k20', 'https://sc.k-20.xyz/manifest.json'),
     pingUpstream('baomoi', 'https://baomoi.com/'),
@@ -48,6 +67,8 @@ export async function onRequestGet(context: any) {
     ? 'azure-neural'
     : env?.FPT_TTS_API_KEY
     ? 'fpt-neural'
+    : env?.VIENEU_API_URL
+    ? 'vieneu-neural'
     : 'google-fallback';
 
   const body = {
@@ -58,11 +79,31 @@ export async function onRequestGet(context: any) {
     upstreams: checks,
   };
 
-  return new Response(JSON.stringify(body), {
-    status: body.status === 'down' ? 503 : 200,
+  const serialized = JSON.stringify(body);
+  const status = body.status === 'down' ? 503 : 200;
+
+  if (cache && status === 200) {
+    context.waitUntil(
+      cache.put(
+        cacheKey,
+        new Response(serialized, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=60, s-maxage=60',
+          },
+        })
+      )
+    );
+  }
+
+  return new Response(serialized, {
+    status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'public, max-age=60, s-maxage=60',
+      'Cache-Control': status === 200 ? 'public, max-age=60, s-maxage=60' : 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Cache': 'MISS',
     },
   });
 }

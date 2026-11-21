@@ -4,17 +4,16 @@
 // - GET action=article     : Lấy chi tiết bài báo + mảng voices (.m4a Nam/Nữ Bắc/Nam) + nội dung sạch không quảng cáo
 // - GET action=audio-proxy : Proxy dự phòng hỗ trợ HTTP Range cho file .m4a trên bmcdn.me nếu trình duyệt/WebView bị chặn redirect
 
-import { getTrustedCorsOrigin, isTrustedAppRequest } from '../_lib/security';
+import {
+  buildTrustedJsonHeaders,
+  getTrustedCorsOrigin,
+  isSafeProxyMediaContentType,
+  isTrustedAppRequest,
+  safeFetchExternal,
+} from '../_lib/security';
 
 const MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
-
-const JSON_HEADERS: Record<string, string> = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
 
 const CATEGORY_PATH_MAP: Record<string, { path: string; paginated: boolean }> = {
   hot: { path: '/', paginated: true },
@@ -194,9 +193,10 @@ function isSafeBaoMoiArticlePath(raw: string): boolean {
 function isAllowedAudioHost(rawUrl: string): boolean {
   try {
     const u = new URL(rawUrl);
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    // Chỉ cho phép HTTPS trên CDN audio chính thức bmcdn.me (chặn HTML trên baomoi.com & HTTP!)
+    if (u.protocol !== 'https:') return false;
     const h = u.hostname.toLowerCase();
-    return h.endsWith('.bmcdn.me') || h.endsWith('.baomoi.com') || h === 'baomoi.com';
+    return h.endsWith('.bmcdn.me');
   } catch {
     return false;
   }
@@ -482,6 +482,7 @@ async function synthesizeGoogleFallback(text: string): Promise<{ bytes: Uint8Arr
 
 export const onRequest: PagesFunction<NewsEnv> = async (context) => {
   const { request, env } = context;
+  const JSON_HEADERS = buildTrustedJsonHeaders(request);
 
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
@@ -490,12 +491,21 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
   const reqUrl = new URL(request.url);
   const action = (reqUrl.searchParams.get('action') || 'feed').toLowerCase();
 
+  // Chặn web ngoài dùng chùa API Báo Mới / Proxy Audio / TTS
+  const allowAppleUa = action === 'audio-proxy' || action === 'tts';
+  if (!isTrustedAppRequest(request, { allowAppleMediaUa: allowAppleUa })) {
+    return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
+      status: 403,
+      headers: JSON_HEADERS,
+    });
+  }
+
   // =========================================================================
   // 1. ACTION = FEED (Danh sách tin tức theo chuyên mục hoặc Tìm kiếm)
   // =========================================================================
   if (action === 'feed') {
     const cat = (reqUrl.searchParams.get('cat') || 'hot').toLowerCase();
-    const query = (reqUrl.searchParams.get('q') || '').trim();
+    const query = (reqUrl.searchParams.get('q') || '').trim().slice(0, 120);
     const pageRaw = parseInt(reqUrl.searchParams.get('page') || '1', 10);
     const page = Number.isFinite(pageRaw) && pageRaw >= 1 && pageRaw <= 8 ? pageRaw : 1;
 
@@ -712,9 +722,10 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
   }
 
   // =========================================================================
-  // 3. ACTION = AUDIO-PROXY (Dự phòng streaming HTTP Range cho file .m4a từ bmcdn.me)
+  // 3. ACTION = AUDIO-PROXY (Dự phòng streaming HTTP Range cho file .m4a từ bmcdn.me — SSRF + XSS hardened!)
   // =========================================================================
   if (action === 'audio-proxy') {
+    const corsOrigin = getTrustedCorsOrigin(request);
     const target = (reqUrl.searchParams.get('url') || '').trim();
     if (!isAllowedAudioHost(target)) {
       return new Response(
@@ -733,19 +744,45 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
         upstreamHeaders.Range = rangeHeader;
       }
 
-      const upstream = await fetch(target, {
-        method: 'GET',
-        redirect: 'follow',
-        headers: upstreamHeaders,
-      });
+      const { response: upstream, finalUrl } = await safeFetchExternal(
+        target,
+        {
+          method: 'GET',
+          headers: upstreamHeaders,
+          signal: AbortSignal.timeout(12000),
+        },
+        3
+      );
+
+      // Xác minh lại host đích sau khi theo dõi redirect!
+      if (!isAllowedAudioHost(finalUrl)) {
+        try {
+          await upstream.body?.cancel();
+        } catch {}
+        return new Response(
+          JSON.stringify({ error: 'Chuyển hướng nguồn audio không hợp lệ' }),
+          { status: 403, headers: JSON_HEADERS }
+        );
+      }
+
+      const rawCt = upstream.headers.get('Content-Type');
+      if (!isSafeProxyMediaContentType(rawCt)) {
+        try {
+          await upstream.body?.cancel();
+        } catch {}
+        return new Response(
+          JSON.stringify({ error: 'Định dạng luồng audio không hợp lệ' }),
+          { status: 415, headers: JSON_HEADERS }
+        );
+      }
 
       const outHeaders = new Headers();
-      outHeaders.set('Access-Control-Allow-Origin', '*');
+      outHeaders.set('Access-Control-Allow-Origin', corsOrigin);
+      outHeaders.set('Vary', 'Origin');
+      outHeaders.set('X-Content-Type-Options', 'nosniff');
+      outHeaders.set('Content-Security-Policy', 'sandbox');
       outHeaders.set('Accept-Ranges', 'bytes');
-      outHeaders.set(
-        'Content-Type',
-        upstream.headers.get('Content-Type') || 'audio/mp4'
-      );
+      outHeaders.set('Content-Type', rawCt || 'audio/mp4');
       const cl = upstream.headers.get('Content-Length');
       if (cl) outHeaders.set('Content-Length', cl);
       const cr = upstream.headers.get('Content-Range');
@@ -904,8 +941,20 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
     if (rangeHeader) {
       const m = rangeHeader.match(/bytes=(\d+)-(\d*)/i);
       if (m) {
-        const start = Math.min(parseInt(m[1], 10), Math.max(0, total - 1));
-        const end = m[2] ? Math.min(parseInt(m[2], 10), total - 1) : total - 1;
+        const start = parseInt(m[1], 10);
+        const rawEnd = m[2] ? parseInt(m[2], 10) : total - 1;
+        const end = Math.min(rawEnd, total - 1);
+        if (isNaN(start) || isNaN(end) || start >= total || start > end) {
+          return new Response(null, {
+            status: 416,
+            headers: {
+              'Content-Range': `bytes */${total}`,
+              'Access-Control-Allow-Origin': corsOrigin,
+              'X-Content-Type-Options': 'nosniff',
+              Vary: 'Origin',
+            },
+          });
+        }
         const slice = audioBytes.subarray(start, end + 1);
         return new Response(slice, {
           status: 206,
@@ -915,6 +964,8 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
             'Content-Range': `bytes ${start}-${end}/${total}`,
             'Accept-Ranges': 'bytes',
             'Access-Control-Allow-Origin': corsOrigin,
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': 'sandbox',
             Vary: 'Origin',
             'X-TTS-Provider': actualProvider,
             'X-TTS-Cache': cacheStatus,
@@ -931,6 +982,8 @@ export const onRequest: PagesFunction<NewsEnv> = async (context) => {
         'Content-Length': String(total),
         'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': corsOrigin,
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': 'sandbox',
         Vary: 'Origin',
         'X-TTS-Provider': actualProvider,
         'X-TTS-Cache': cacheStatus,

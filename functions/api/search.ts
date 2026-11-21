@@ -1,24 +1,39 @@
 // Cloudflare Pages Function: /api/search
 import { searchViaYouTubeInnerTube, formatDuration } from '../_lib/youtubeSearch';
+import { buildTrustedJsonHeaders, isTrustedAppRequest } from '../_lib/security';
+
+export async function onRequestOptions(context: any) {
+  return new Response(null, { status: 204, headers: buildTrustedJsonHeaders(context.request) });
+}
 
 export async function onRequestGet(context: any) {
   const { request } = context;
+  const CORS_HEADERS = buildTrustedJsonHeaders(request);
+  if (!isTrustedAppRequest(request)) {
+    return new Response(
+      JSON.stringify({ success: false, items: [], nextContinuation: null, error: 'Forbidden origin' }),
+      { status: 403, headers: CORS_HEADERS }
+    );
+  }
   const url = new URL(request.url);
-  const query = url.searchParams.get('q') || 'nhạc trẻ remix lái xe';
-  const continuation = url.searchParams.get('continuation') || null;
+  const query = (url.searchParams.get('q') || 'nhạc trẻ remix lái xe').trim().slice(0, 120);
+  const continuation = (url.searchParams.get('continuation') || '').slice(0, 512) || null;
 
   const cache = (caches as any).default;
   const cacheKey = new Request(
-    `${url.origin}/api/search?q=${encodeURIComponent(query)}&continuation=${encodeURIComponent(
+    `https://carhub-yt-search.internal/v3?q=${encodeURIComponent(query)}&c=${encodeURIComponent(
       continuation || ''
-    )}&v=2`
+    )}`
   );
 
   if (cache) {
     try {
       const cachedResponse = await cache.match(cacheKey);
       if (cachedResponse) {
-        return cachedResponse;
+        return new Response(cachedResponse.body, {
+          status: cachedResponse.status,
+          headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=300' },
+        });
       }
     } catch {}
   }
@@ -27,23 +42,25 @@ export async function onRequestGet(context: any) {
   try {
     const ytResult = await searchViaYouTubeInnerTube(query, continuation, true);
     if (ytResult && ytResult.items.length > 0) {
-      const resp = new Response(
-        JSON.stringify({
-          success: true,
-          source: 'edge-innertube',
-          items: ytResult.items,
-          nextContinuation: ytResult.nextContinuation,
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'Cache-Control': 'public, max-age=300',
-            'Access-Control-Allow-Origin': '*',
-          },
-        }
-      );
-      if (cache) context.waitUntil(cache.put(cacheKey, resp.clone()));
-      return resp;
+      const serialized = JSON.stringify({
+        success: true,
+        source: 'edge-innertube',
+        items: ytResult.items,
+        nextContinuation: ytResult.nextContinuation,
+      });
+      if (cache) {
+        context.waitUntil(
+          cache.put(
+            cacheKey,
+            new Response(serialized, {
+              headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
+            })
+          )
+        );
+      }
+      return new Response(serialized, {
+        headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=300' },
+      });
     }
   } catch (err) {
     console.warn('InnerTube search failed, switching to Piped fallback:', err);
@@ -98,23 +115,25 @@ export async function onRequestGet(context: any) {
           });
 
         if (items.length > 0) {
-          const resp = new Response(
-            JSON.stringify({
-              success: true,
-              source: 'piped-api',
-              items,
-              nextContinuation: data.nextpage || null,
-            }),
-            {
-              headers: {
-                'Content-Type': 'application/json; charset=utf-8',
-                'Cache-Control': 'public, max-age=300',
-                'Access-Control-Allow-Origin': '*',
-              },
-            }
-          );
-          if (cache) context.waitUntil(cache.put(cacheKey, resp.clone()));
-          return resp;
+          const serialized = JSON.stringify({
+            success: true,
+            source: 'piped-api',
+            items,
+            nextContinuation: data.nextpage || null,
+          });
+          if (cache) {
+            context.waitUntil(
+              cache.put(
+                cacheKey,
+                new Response(serialized, {
+                  headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
+                })
+              )
+            );
+          }
+          return new Response(serialized, {
+            headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=300' },
+          });
         }
       }
     } catch {
@@ -131,10 +150,7 @@ export async function onRequestGet(context: any) {
     }),
     {
       status: 502,
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: CORS_HEADERS,
     }
   );
 }

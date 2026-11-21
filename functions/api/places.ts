@@ -4,10 +4,7 @@
 // 2. Nominatim OSM for exact Vietnamese street numbers & addresses
 // 3. Overpass API for real nearby POIs (VinFast/V-Green EV chargers, parking lots, cafes, malls)
 
-const CORS_HEADERS = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Access-Control-Allow-Origin': '*',
-};
+import { buildTrustedJsonHeaders, isTrustedAppRequest } from '../_lib/security';
 
 interface PlaceCandidate {
   name: string;
@@ -245,16 +242,27 @@ async function fetchPhoton(
   }
 }
 
+export async function onRequestOptions(context: any) {
+  return new Response(null, { status: 204, headers: buildTrustedJsonHeaders(context.request) });
+}
+
 export async function onRequestGet(context: any) {
   const { request } = context;
+  const CORS_HEADERS = buildTrustedJsonHeaders(request);
+  if (!isTrustedAppRequest(request)) {
+    return new Response(JSON.stringify({ success: false, items: [], error: 'Forbidden origin' }), {
+      status: 403,
+      headers: CORS_HEADERS,
+    });
+  }
   const url = new URL(request.url);
-  const q = (url.searchParams.get('q') || '').trim();
-  const mode = (url.searchParams.get('mode') || '').trim();
+  const q = (url.searchParams.get('q') || '').trim().slice(0, 120);
+  const mode = (url.searchParams.get('mode') || '').trim().slice(0, 24);
   const lat = parseFloat(url.searchParams.get('lat') || '21.0285');
   const lon = parseFloat(url.searchParams.get('lon') || '105.8542');
 
-  const validLat = !isNaN(lat) ? lat : 21.0285;
-  const validLon = !isNaN(lon) ? lon : 105.8542;
+  const validLat = Number.isFinite(lat) && Math.abs(lat) <= 90 ? lat : 21.0285;
+  const validLon = Number.isFinite(lon) && Math.abs(lon) <= 180 ? lon : 105.8542;
 
   if (!mode && !q) {
     return new Response(JSON.stringify({ success: true, items: [] }), {
@@ -272,7 +280,12 @@ export async function onRequestGet(context: any) {
   if (cache) {
     try {
       const hit = await cache.match(cacheKey);
-      if (hit) return hit;
+      if (hit) {
+        return new Response(hit.body, {
+          status: hit.status,
+          headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=600' },
+        });
+      }
     } catch {}
   }
 
@@ -307,9 +320,13 @@ export async function onRequestGet(context: any) {
   const seen = new Set<string>();
   const deduped: PlaceCandidate[] = [];
 
-  // Sort by score (proximity + exactness) when mode is used, or relevance + proximity for free text
+  // Ưu tiên điểm VinFast/V-Green cho chế độ sạc EV, khoảng cách gần cho các mode khác, và score cho tìm tự do
   merged.sort((a, b) =>
-    mode ? a.distanceKm - b.distanceKm : b.score - a.score || a.distanceKm - b.distanceKm
+    mode === 'ev'
+      ? b.score - a.score || a.distanceKm - b.distanceKm
+      : mode
+      ? a.distanceKm - b.distanceKm
+      : b.score - a.score || a.distanceKm - b.distanceKm
   );
 
   for (const item of merged) {

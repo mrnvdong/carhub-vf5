@@ -134,11 +134,31 @@ export function splitVietnameseTtsChunks(rawText: string, maxLen = 175): string[
     .trim();
   if (!cleaned) return [];
 
-  // Tách theo ranh giới câu tự nhiên (giữ nguyên số thập phân như 19.100 hoặc 3,5)
-  const rawSentences = cleaned
-    .split(/(?<=[.!?…;])\s+(?=[^\d])|\n+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Tách theo ranh giới câu tự nhiên KHÔNG dùng RegExp lookbehind (tương thích 100% iOS Safari <= 16.3!)
+  const rawSentences: string[] = [];
+  for (const line of cleaned.split(/\n+/)) {
+    let cur = '';
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      cur += ch;
+      if (
+        (ch === '.' || ch === '!' || ch === '?' || ch === '…' || ch === ';') &&
+        i + 1 < line.length &&
+        /\s/.test(line[i + 1])
+      ) {
+        let j = i + 1;
+        while (j < line.length && /\s/.test(line[j])) j++;
+        if (j < line.length && !/\d/.test(line[j])) {
+          const trimmed = cur.trim();
+          if (trimmed) rawSentences.push(trimmed);
+          cur = '';
+          i = j - 1;
+        }
+      }
+    }
+    const tail = cur.trim();
+    if (tail) rawSentences.push(tail);
+  }
 
   const chunks: string[] = [];
 

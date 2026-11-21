@@ -1,4 +1,5 @@
 import { SponsorSegment } from '../types';
+import { fetchWithTimeout } from '../utils/timedFetch';
 
 const sponsorCache = new Map<string, SponsorSegment[]>();
 
@@ -22,9 +23,7 @@ export async function fetchSponsorSegments(videoId: string): Promise<SponsorSegm
       videoId
     )}&categories=${encodeURIComponent(JSON.stringify(CATEGORIES))}`;
 
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(3500),
-    });
+    const res = await fetchWithTimeout(url, {}, 3500);
 
     if (res.status === 404) {
       sponsorCache.set(videoId, []);

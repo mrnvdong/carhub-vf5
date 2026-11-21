@@ -273,15 +273,27 @@
 }
 
 .car-art-fit {
-  width: min(100cqi, 100cqb, 17.5rem);
-  height: min(100cqi, 100cqb, 17.5rem);
+  width: min(100%, 17.5rem);
+  max-height: 100%;
   aspect-ratio: 1 / 1;
 }
 
 .car-video-fit {
-  width: min(100cqi, calc(100cqb * 16 / 9));
-  height: min(100cqb, calc(100cqi * 9 / 16));
+  width: 100%;
+  max-height: 100%;
   aspect-ratio: 16 / 9;
+}
+
+@supports (width: 100cqi) {
+  .car-art-fit {
+    width: min(100cqi, 100cqb, 17.5rem);
+    height: min(100cqi, 100cqb, 17.5rem);
+  }
+
+  .car-video-fit {
+    width: min(100cqi, calc(100cqb * 16 / 9));
+    height: min(100cqb, calc(100cqi * 9 / 16));
+  }
 }
 
 @keyframes ambientDrift {

@@ -13,7 +13,7 @@ export type VoiceCommandIntent =
   | { type: 'open_hud' }
   | { type: 'search_music'; query: string };
 
-function normalizeVi(raw: string): string {
+export function stripVietnameseTones(raw: string): string {
   return raw
     .trim()
     .toLowerCase()
@@ -21,6 +21,10 @@ function normalizeVi(raw: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
     .replace(/\s+/g, ' ');
+}
+
+function normalizeVi(raw: string): string {
+  return stripVietnameseTones(raw);
 }
 
 export function parseVietnameseVoiceCommand(rawInput: string): VoiceCommandIntent {

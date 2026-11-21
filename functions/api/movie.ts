@@ -17,9 +17,11 @@ import {
   handleResolveK20,
 } from '../_lib/movieSources';
 import {
+  buildTrustedJsonHeaders,
   getTrustedCorsOrigin,
   isSafePublicHttpUrl,
   isTrustedAppRequest,
+  readTextLimited,
   safeFetchExternal,
 } from '../_lib/security';
 
@@ -33,13 +35,6 @@ const VSMOV_IMAGE_BASE = 'https://vsmov.com/storage/images';
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
-
-const JSON_HEADERS: Record<string, string> = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
 
 const VALID_KKPHIM_LIST_SLUGS = new Set([
   'phim-le',
@@ -177,8 +172,9 @@ async function fetchJson(url: string, timeoutMs = 10000): Promise<any> {
   }
 }
 
-function isSafeSlug(s: string): boolean {
-  return /^[a-z0-9-]+$/i.test(s) && s.length <= 160;
+function isSafeSlug(s: string, allowExtendedK20 = false): boolean {
+  if (!s || s.length > 160 || s.includes('..')) return false;
+  return allowExtendedK20 ? /^[a-z0-9._-]+$/i.test(s) : /^[a-z0-9-]+$/i.test(s);
 }
 
 function isSafeExternalHttpUrl(raw: string): boolean {
@@ -217,6 +213,8 @@ function cleanVariantPlaylist(rawM3u8: string, variantUrl: string): { text: stri
 
   const out: string[] = [];
   let pendingMeta: string[] = [];
+  let activeKeyLine: string | null = null;
+  let lastEmittedKeyLine: string | null = null;
   let strippedCount = 0;
 
   for (let i = 0; i < lines.length; i++) {
@@ -225,11 +223,16 @@ function cleanVariantPlaylist(rawM3u8: string, variantUrl: string): { text: stri
 
     if (line.startsWith('#')) {
       if (line.startsWith('#EXT-X-KEY:')) {
-        // Phân giải URI khóa mã hóa (nếu có) thành URL tuyệt đối
+        // Phân giải URI khóa mã hóa thành URL tuyệt đối và bảo toàn ngay cả khi segment quảng cáo phía sau bị cắt!
         const rewritten = line.replace(/URI="([^"]+)"/i, (_, u) => {
           return `URI="${resolveAbsoluteUrl(variantUrl, u)}"`;
         });
-        pendingMeta.push(rewritten);
+        activeKeyLine = rewritten;
+      } else if (line.startsWith('#EXT-X-MAP:')) {
+        const rewritten = line.replace(/URI="([^"]+)"/i, (_, u) => {
+          return `URI="${resolveAbsoluteUrl(variantUrl, u)}"`;
+        });
+        out.push(rewritten);
       } else if (
         line.startsWith('#EXTINF:') ||
         line.startsWith('#EXT-X-DISCONTINUITY') ||
@@ -257,6 +260,12 @@ function cleanVariantPlaylist(rawM3u8: string, variantUrl: string): { text: stri
       continue;
     }
 
+    // Phát lại #EXT-X-KEY hiện hành trước segment thật nếu chưa phát (tránh vỡ giải mã AES-128!)
+    if (activeKeyLine && activeKeyLine !== lastEmittedKeyLine) {
+      out.push(activeKeyLine);
+      lastEmittedKeyLine = activeKeyLine;
+    }
+
     // Giữ lại segment thật: loại bỏ #EXT-X-DISCONTINUITY dư thừa dính sát ngay sau quảng cáo vừa cắt
     for (const meta of pendingMeta) {
       if (shouldStripAds && meta === '#EXT-X-DISCONTINUITY') continue;
@@ -271,6 +280,7 @@ function cleanVariantPlaylist(rawM3u8: string, variantUrl: string): { text: stri
 
 export const onRequest: PagesFunction = async (context) => {
   const { request } = context;
+  const JSON_HEADERS = buildTrustedJsonHeaders(request);
 
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
@@ -278,6 +288,13 @@ export const onRequest: PagesFunction = async (context) => {
 
   const reqUrl = new URL(request.url);
   const action = (reqUrl.searchParams.get('action') || 'list').toLowerCase();
+  const allowAppleUa = action === 'clean-m3u8';
+  if (!isTrustedAppRequest(request, { allowAppleMediaUa: allowAppleUa })) {
+    return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
+      status: 403,
+      headers: JSON_HEADERS,
+    });
+  }
   const rawSource = (reqUrl.searchParams.get('source') || 'kkphim').toLowerCase();
   const source: MovieSource =
     rawSource === 'vsmov'
@@ -709,7 +726,7 @@ export const onRequest: PagesFunction = async (context) => {
   // =========================================================================
   if (action === 'detail') {
     const slug = (reqUrl.searchParams.get('slug') || '').trim().toLowerCase();
-    if (!slug || !isSafeSlug(slug)) {
+    if (!slug || !isSafeSlug(slug, source === 'k20')) {
       return new Response(JSON.stringify({ error: 'Slug phim không hợp lệ' }), {
         status: 400,
         headers: JSON_HEADERS,
@@ -830,7 +847,7 @@ export const onRequest: PagesFunction = async (context) => {
     }
 
     try {
-      const MAX_M3U8_BYTES = 2 * 1024 * 1024;
+      const MAX_M3U8_BYTES = 1024 * 1024;
       const fetchM3u8 = async (u: string): Promise<{ text: string; finalUrl: string }> => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 9000);
@@ -841,14 +858,11 @@ export const onRequest: PagesFunction = async (context) => {
             headers: { 'User-Agent': UA },
           });
           if (!r.ok) throw new Error(`M3U8 HTTP ${r.status}`);
-          const cl = Number(r.headers.get('Content-Length') || '0');
-          if (Number.isFinite(cl) && cl > MAX_M3U8_BYTES) {
+          const readRes = await readTextLimited(r, MAX_M3U8_BYTES);
+          if (!readRes.ok) {
             throw new Error('Playlist quá lớn');
           }
-          const text = await r.text();
-          if (text.length > MAX_M3U8_BYTES) {
-            throw new Error('Playlist quá lớn');
-          }
+          const text = readRes.text;
           if (!text.trimStart().startsWith('#EXTM3U')) {
             throw new Error('Không phải luồng HLS M3U8 hợp lệ');
           }
@@ -939,19 +953,24 @@ export const onRequest: PagesFunction = async (context) => {
       let html = '';
       let finalUrl = embedUrl;
       try {
-        const res = await fetch(embedUrl, {
-          method: 'GET',
-          redirect: 'follow',
-          signal: controller.signal,
-          headers: {
-            'User-Agent': UA,
-            Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
-            Referer: 'https://vsmov.com/',
+        const { response: res, finalUrl: resolvedFinalUrl } = await safeFetchExternal(
+          embedUrl,
+          {
+            method: 'GET',
+            signal: controller.signal,
+            headers: {
+              'User-Agent': UA,
+              Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+              Referer: 'https://vsmov.com/',
+            },
           },
-        });
+          3
+        );
         if (!res.ok) throw new Error(`VSMov Embed HTTP ${res.status}`);
-        finalUrl = res.url || embedUrl;
-        html = await res.text();
+        finalUrl = resolvedFinalUrl || embedUrl;
+        const readRes = await readTextLimited(res, 1024 * 1024);
+        if (!readRes.ok) throw new Error('Trang embed VSMov quá lớn');
+        html = readRes.text;
       } finally {
         clearTimeout(timer);
       }

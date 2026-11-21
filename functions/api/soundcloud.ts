@@ -5,10 +5,7 @@
 // - action=stream: Resolves verified progressive MP3 or AAC fMP4 HLS stream URL (CORS-enabled!)
 // - action=related: Fetches related tracks for endless Auto-Mix Radio
 
-const CORS_HEADERS = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Access-Control-Allow-Origin': '*',
-};
+import { buildTrustedJsonHeaders, isTrustedAppRequest } from '../_lib/security';
 
 const BROWSER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -140,32 +137,55 @@ async function fetchSoundCloudJson(
   pathAndQuery: string,
   context: any
 ): Promise<{ ok: boolean; data: any; clientId: string } | null> {
-  let clientId = await getClientId(context, false);
-  if (!clientId) return null;
-
-  const sep = pathAndQuery.includes('?') ? '&' : '?';
-  let res = await fetch(`https://api-v2.soundcloud.com${pathAndQuery}${sep}client_id=${clientId}`, {
-    headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
-    signal: AbortSignal.timeout(5500),
-  });
-
-  // Auto-refresh client_id once if SoundCloud rotated keys
-  if (res.status === 401 || res.status === 403) {
-    clientId = await getClientId(context, true);
+  try {
+    let clientId = await getClientId(context, false);
     if (!clientId) return null;
-    res = await fetch(`https://api-v2.soundcloud.com${pathAndQuery}${sep}client_id=${clientId}`, {
+
+    const sep = pathAndQuery.includes('?') ? '&' : '?';
+    let res = await fetch(`https://api-v2.soundcloud.com${pathAndQuery}${sep}client_id=${clientId}`, {
       headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
       signal: AbortSignal.timeout(5500),
     });
-  }
 
-  if (!res.ok) return { ok: false, data: null, clientId };
-  const data = await res.json();
-  return { ok: true, data, clientId };
+    // Auto-refresh client_id once if SoundCloud rotated keys
+    if (res.status === 401 || res.status === 403) {
+      try {
+        await res.body?.cancel();
+      } catch {}
+      clientId = await getClientId(context, true);
+      if (!clientId) return null;
+      res = await fetch(`https://api-v2.soundcloud.com${pathAndQuery}${sep}client_id=${clientId}`, {
+        headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
+        signal: AbortSignal.timeout(5500),
+      });
+    }
+
+    if (!res.ok) {
+      try {
+        await res.body?.cancel();
+      } catch {}
+      return { ok: false, data: null, clientId };
+    }
+    const data = await res.json();
+    return { ok: true, data, clientId };
+  } catch {
+    return null;
+  }
+}
+
+export async function onRequestOptions(context: any) {
+  return new Response(null, { status: 204, headers: buildTrustedJsonHeaders(context.request) });
 }
 
 export async function onRequestGet(context: any) {
   const { request } = context;
+  const CORS_HEADERS = buildTrustedJsonHeaders(request);
+  if (!isTrustedAppRequest(request)) {
+    return new Response(JSON.stringify({ success: false, error: 'Forbidden origin' }), {
+      status: 403,
+      headers: CORS_HEADERS,
+    });
+  }
   const url = new URL(request.url);
   const action = (url.searchParams.get('action') || 'search').trim();
 
@@ -215,12 +235,18 @@ export async function onRequestGet(context: any) {
     for (const tc of ranked) {
       if (!tc?.url) continue;
       try {
-        const resolveUrl = `${tc.url}?client_id=${trackResp.clientId}${authParam}`;
+        const joiner = String(tc.url).includes('?') ? '&' : '?';
+        const resolveUrl = `${tc.url}${joiner}client_id=${trackResp.clientId}${authParam}`;
         const r = await fetch(resolveUrl, {
           headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
           signal: AbortSignal.timeout(4500),
         });
-        if (!r.ok) continue;
+        if (!r.ok) {
+          try {
+            await r.body?.cancel();
+          } catch {}
+          continue;
+        }
         const j: any = await r.json();
         if (j?.url && typeof j.url === 'string') {
           return new Response(
@@ -270,7 +296,12 @@ export async function onRequestGet(context: any) {
     if (cache) {
       try {
         const hit = await cache.match(cacheKey);
-        if (hit) return hit;
+        if (hit) {
+          return new Response(hit.body, {
+            status: hit.status,
+            headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=600' },
+          });
+        }
       } catch {}
     }
 
@@ -294,7 +325,7 @@ export async function onRequestGet(context: any) {
   // =========================================================================
   // 3. SEARCH FULL-LENGTH TRACKS ON SOUNDCLOUD (có phân trang & bỏ qua trang toàn SNIP)
   // =========================================================================
-  const query = (url.searchParams.get('q') || 'vinahouse nonstop remix').trim();
+  const query = (url.searchParams.get('q') || 'vinahouse nonstop remix').trim().slice(0, 120);
   const initialOffset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
 
   const cache = (caches as any).default;
@@ -304,7 +335,12 @@ export async function onRequestGet(context: any) {
   if (cache) {
     try {
       const hit = await cache.match(cacheKey);
-      if (hit) return hit;
+      if (hit) {
+        return new Response(hit.body, {
+          status: hit.status,
+          headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=300' },
+        });
+      }
     } catch {}
   }
 

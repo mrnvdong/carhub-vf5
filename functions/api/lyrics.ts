@@ -3,6 +3,8 @@
 // 1. LRCLIB (studio time-synced LRC lyrics with smart YouTube title splitting)
 // 2. YouTube TimedText / Captions API (json3 time-synced lyrics/subtitles for Remixes, Nonstops, Live MVs)
 
+import { buildTrustedJsonHeaders, isTrustedAppRequest } from '../_lib/security';
+
 interface LyricLine {
   time: number;
   text: string;
@@ -226,38 +228,53 @@ async function queryYouTubeCaptions(videoId: string) {
   }
 }
 
+export async function onRequestOptions(context: any) {
+  return new Response(null, { status: 204, headers: buildTrustedJsonHeaders(context.request) });
+}
+
 export async function onRequestGet(context: any) {
   const { request } = context;
+  const CORS_HEADERS = buildTrustedJsonHeaders(request);
+  if (!isTrustedAppRequest(request)) {
+    return new Response(JSON.stringify({ lines: [], isSynced: false, source: 'none' }), {
+      status: 403,
+      headers: CORS_HEADERS,
+    });
+  }
   const url = new URL(request.url);
-  const id = url.searchParams.get('id') || '';
-  const title = url.searchParams.get('title') || '';
-  const artist = url.searchParams.get('artist') || '';
+  const id = (url.searchParams.get('id') || '').trim().slice(0, 32);
+  const title = (url.searchParams.get('title') || '').trim().slice(0, 200);
+  const artist = (url.searchParams.get('artist') || '').trim().slice(0, 120);
 
   if (!id && !title) {
     return new Response(JSON.stringify({ lines: [], isSynced: false, source: 'none' }), {
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: CORS_HEADERS,
     });
   }
 
   const cache = (caches as any).default;
   const cacheKey = new Request(
-    `${url.origin}/api/lyrics?id=${encodeURIComponent(id)}&t=${encodeURIComponent(
+    `https://carhub-lyrics.internal/v4?id=${encodeURIComponent(id)}&t=${encodeURIComponent(
       title
-    )}&a=${encodeURIComponent(artist)}&v=3`
+    )}&a=${encodeURIComponent(artist)}`
   );
   if (cache) {
     try {
       const cached = await cache.match(cacheKey);
-      if (cached) return cached;
+      if (cached) {
+        return new Response(cached.body, {
+          status: cached.status,
+          headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=3600' },
+        });
+      }
     } catch {}
   }
 
+  // Chỉ gọi YouTube Captions nếu đúng YouTube 11-ký-tự ID (bỏ qua bài SoundCloud sc_*)
+  const isYoutubeId = /^[a-zA-Z0-9_-]{11}$/.test(id);
   const [lrcResult, ytResult] = await Promise.all([
     title ? queryLrcLib(title, artist) : Promise.resolve(null),
-    id ? queryYouTubeCaptions(id) : Promise.resolve(null),
+    isYoutubeId ? queryYouTubeCaptions(id) : Promise.resolve(null),
   ]);
 
   let finalResult = null;
@@ -270,16 +287,23 @@ export async function onRequestGet(context: any) {
   }
 
   const payload = finalResult || { lines: [], isSynced: false, source: 'none' };
-  const resp = new Response(JSON.stringify(payload), {
+  const serialized = JSON.stringify(payload);
+  const resp = new Response(serialized, {
     headers: {
-      'Content-Type': 'application/json; charset=utf-8',
+      ...CORS_HEADERS,
       'Cache-Control': finalResult ? 'public, max-age=3600' : 'public, max-age=120',
-      'Access-Control-Allow-Origin': '*',
     },
   });
 
   if (cache && finalResult) {
-    context.waitUntil(cache.put(cacheKey, resp.clone()));
+    context.waitUntil(
+      cache.put(
+        cacheKey,
+        new Response(serialized, {
+          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' },
+        })
+      )
+    );
   }
 
   return resp;

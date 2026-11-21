@@ -3,7 +3,8 @@
 // - 5 băng tần: 60Hz (Sub/Bass), 230Hz (Mid-Bass), 910Hz (Vocal), 3.6kHz (Presence), 14kHz (Treble)
 // - Preset tinh chỉnh sẵn cho khoang cabin VF5
 // - Speed-Sensitive Volume: tự động tăng nhẹ gain +0% -> +18% khi xe chạy 40 -> 100 km/h để lấn tiếng ồn lốp!
-// - An toàn tuyệt đối: chỉ gắn Web Audio vào media hỗ trợ CORS hoặc khi người dùng chọn preset khác Flat; lỗi tự rơi mượt không làm mất tiếng!
+// - An toàn tuyệt đối trên iOS Safari / CarPlay WKWebView: CHỈ gắn createMediaElementSource khi
+//   AudioContext đã 'running' (tuyệt đối KHÔNG bao giờ nhốt âm thanh vào AudioContext 'suspended' gây im tiếng!).
 
 import { EqPresetId, EqSettings } from '../types';
 
@@ -81,6 +82,10 @@ export function saveEqSettings(settings: EqSettings): void {
   } catch {}
 }
 
+export function isEqProcessingActive(settings: EqSettings = currentSettings): boolean {
+  return settings.gains.some((g) => g !== 0) || Boolean(settings.speedVolumeEnabled);
+}
+
 interface AttachedGraph {
   ctx: AudioContext;
   filters: BiquadFilterNode[];
@@ -90,6 +95,28 @@ interface AttachedGraph {
 const attachedNodes = new WeakMap<HTMLMediaElement, AttachedGraph>();
 let currentSettings: EqSettings = loadEqSettings();
 let currentSpeedKmh = 0;
+let sharedEqCtx: AudioContext | null = null;
+
+function getOrCreateSharedEqContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  if (sharedEqCtx && sharedEqCtx.state !== 'closed') return sharedEqCtx;
+  try {
+    const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return null;
+    sharedEqCtx = new AudioCtx();
+    return sharedEqCtx;
+  } catch {
+    return null;
+  }
+}
+
+export function unlockEqAudioContext(): void {
+  if (!isEqProcessingActive(currentSettings)) return;
+  const ctx = getOrCreateSharedEqContext();
+  if (ctx && ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
+  }
+}
 
 function computeSpeedGain(speedKmh: number, enabled: boolean): number {
   if (!enabled || !Number.isFinite(speedKmh) || speedKmh < 40) return 1.0;
@@ -110,7 +137,8 @@ function applyToGraph(graph: AttachedGraph): void {
 
 /**
  * Gắn EQ vào thẻ <audio> hoặc <video> đã bật crossOrigin="anonymous".
- * An toàn với iOS Safari: tự resume AudioContext khi có tương tác.
+ * An toàn tuyệt đối trên iOS Safari: CHỈ capture media khi AudioContext đã ở trạng thái 'running'
+ * để không bao giờ gây im tiếng trên iPhone / CarPlay!
  */
 export function attachAudioEq(el: HTMLMediaElement | null): void {
   if (!el || typeof window === 'undefined') return;
@@ -124,41 +152,52 @@ export function attachAudioEq(el: HTMLMediaElement | null): void {
   }
 
   // Chỉ khởi tạo Web Audio graph khi người dùng thực sự bật EQ hoặc Speed-Volume
-  const isFlat =
-    currentSettings.gains.every((g) => g === 0) && !currentSettings.speedVolumeEnabled;
-  if (isFlat) return;
+  if (!isEqProcessingActive(currentSettings)) return;
+  if (el.crossOrigin !== 'anonymous') return;
 
-  try {
-    const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx: AudioContext = new AudioCtx();
-    const source = ctx.createMediaElementSource(el);
-    const filters: BiquadFilterNode[] = EQ_FREQUENCIES.map((freq, idx) => {
-      const f = ctx.createBiquadFilter();
-      f.type = idx === 0 ? 'lowshelf' : idx === EQ_FREQUENCIES.length - 1 ? 'highshelf' : 'peaking';
-      f.frequency.value = freq;
-      f.Q.value = 1.1;
-      f.gain.value = currentSettings.gains[idx] || 0;
-      return f;
-    });
-    const gainNode = ctx.createGain();
-    gainNode.gain.value = computeSpeedGain(currentSpeedKmh, currentSettings.speedVolumeEnabled);
+  const ctx = getOrCreateSharedEqContext();
+  if (!ctx) return;
 
-    let chain: AudioNode = source;
-    for (const f of filters) {
-      chain.connect(f);
-      chain = f;
+  const wireIfRunning = () => {
+    if (attachedNodes.has(el) || ctx.state !== 'running') return;
+    try {
+      const source = ctx.createMediaElementSource(el);
+      const filters: BiquadFilterNode[] = EQ_FREQUENCIES.map((freq, idx) => {
+        const f = ctx.createBiquadFilter();
+        f.type = idx === 0 ? 'lowshelf' : idx === EQ_FREQUENCIES.length - 1 ? 'highshelf' : 'peaking';
+        f.frequency.value = freq;
+        f.Q.value = 1.1;
+        f.gain.value = currentSettings.gains[idx] || 0;
+        return f;
+      });
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = computeSpeedGain(currentSpeedKmh, currentSettings.speedVolumeEnabled);
+
+      let chain: AudioNode = source;
+      for (const f of filters) {
+        chain.connect(f);
+        chain = f;
+      }
+      chain.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      attachedNodes.set(el, { ctx, filters, gainNode });
+    } catch {
+      // Bỏ qua lặng lẽ nếu trình duyệt/luồng không cho phép Web Audio capture
     }
-    chain.connect(gainNode);
-    gainNode.connect(ctx.destination);
+  };
 
-    const graph: AttachedGraph = { ctx, filters, gainNode };
-    attachedNodes.set(el, graph);
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
-  } catch {
-    // Bỏ qua lặng lẽ nếu trình duyệt/luồng không cho phép Web Audio capture
+  if (ctx.state === 'running') {
+    wireIfRunning();
+  } else {
+    ctx
+      .resume()
+      .then(() => {
+        if (ctx.state === 'running') wireIfRunning();
+      })
+      .catch(() => {
+        // Không resume được (không có cử chỉ người dùng trên iOS) -> để <audio> phát tự nhiên không mất tiếng!
+      });
   }
 }
 
@@ -168,6 +207,9 @@ export function updateGlobalEqSettings(
 ): void {
   currentSettings = next;
   saveEqSettings(next);
+  if (isEqProcessingActive(next)) {
+    unlockEqAudioContext();
+  }
   for (const el of activeElements) {
     if (!el) continue;
     const g = attachedNodes.get(el);

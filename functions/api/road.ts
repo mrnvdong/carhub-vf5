@@ -4,11 +4,7 @@
 // road name, lane count, and nearby camera/sign overlay via OpenStreetMap + Vietnam Camera DB.
 
 import { VIETNAM_TRAFFIC_POINTS, VietnamTrafficPoint } from '../_lib/vietnamCameras';
-
-const CORS_HEADERS = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Access-Control-Allow-Origin': '*',
-};
+import { buildTrustedJsonHeaders, isTrustedAppRequest } from '../_lib/security';
 
 const DRIVABLE_HIGHWAYS = new Set([
   'motorway',
@@ -117,8 +113,11 @@ function parseMaxspeed(tags: Record<string, string>, isReverseOnTwoWay: boolean)
     ? tags['maxspeed:backward'] || tags.maxspeed
     : tags['maxspeed:forward'] || tags.maxspeed;
   if (!raw) return null;
-  const num = parseInt(raw.replace(/[^\d]/g, ''), 10);
-  if (!isNaN(num) && num >= 15 && num <= 130) {
+  // Tách chữ số đầu tiên thay vì gộp chuỗi (tránh "50;60" -> 5060!)
+  const match = raw.match(/\b(\d{2,3})\b/);
+  if (!match) return null;
+  const num = parseInt(match[1], 10);
+  if (Number.isFinite(num) && num >= 15 && num <= 130) {
     return raw.toLowerCase().includes('mph') ? Math.round(num * 1.609) : num;
   }
   return null;
@@ -307,8 +306,19 @@ function classifyOsmNodeHazard(t: Record<string, string>): {
   return null;
 }
 
+export async function onRequestOptions(context: any) {
+  return new Response(null, { status: 204, headers: buildTrustedJsonHeaders(context.request) });
+}
+
 export async function onRequestGet(context: any) {
   const { request } = context;
+  const CORS_HEADERS = buildTrustedJsonHeaders(request);
+  if (!isTrustedAppRequest(request)) {
+    return new Response(JSON.stringify({ success: false, error: 'Forbidden origin' }), {
+      status: 403,
+      headers: CORS_HEADERS,
+    });
+  }
   const url = new URL(request.url);
   const mode = (url.searchParams.get('mode') || '').trim().toLowerCase();
   const lat = parseFloat(url.searchParams.get('lat') || '');
@@ -564,14 +574,17 @@ export async function onRequestGet(context: any) {
         lon: pt.lon,
       });
       if (distM <= 240) {
-        nearbyZoneParkingRestriction = {
-          type: pt.kind,
-          signCode,
-          label: pt.kind === 'no_stopping' ? 'Cấm dừng & Cấm đỗ' : 'Cấm đỗ xe',
-          reason: pt.note || `${pt.name} (${pt.road})`,
-          isVerified: true,
-          hasCamera: Boolean(pt.hasCamera),
-        };
+        // Không để biển P.131a (nhẹ hơn) ghi đè biển P.130 (cấm dừng & đỗ — nghiêm trọng hơn)
+        if (!nearbyZoneParkingRestriction || pt.kind === 'no_stopping') {
+          nearbyZoneParkingRestriction = {
+            type: pt.kind,
+            signCode,
+            label: pt.kind === 'no_stopping' ? 'Cấm dừng & Cấm đỗ' : 'Cấm đỗ xe',
+            reason: pt.note || `${pt.name} (${pt.road})`,
+            isVerified: true,
+            hasCamera: Boolean(pt.hasCamera),
+          };
+        }
       }
     } else {
       const camLabel =

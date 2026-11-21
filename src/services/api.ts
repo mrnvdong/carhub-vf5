@@ -1,4 +1,5 @@
 import { MusicSource, VideoItem } from '../types';
+import { createTimedSignal, fetchWithTimeout } from '../utils/timedFetch';
 
 const PIPED_FALLBACK_INSTANCES = [
   'https://api.piped.private.coffee',
@@ -28,31 +29,7 @@ function dedupeVideos(items: VideoItem[]): VideoItem[] {
   return out;
 }
 
-// Kết hợp AbortSignal bên ngoài + timeout tương thích 100% iOS Safari 16/17 WKWebView
-function createTimedSignal(timeoutMs: number, externalSignal?: AbortSignal): {
-  signal: AbortSignal;
-  cleanup: () => void;
-} {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-  const onExternalAbort = () => controller.abort();
-
-  if (externalSignal) {
-    if (externalSignal.aborted) {
-      controller.abort();
-    } else {
-      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-    }
-  }
-
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      window.clearTimeout(timer);
-      externalSignal?.removeEventListener('abort', onExternalAbort);
-    },
-  };
-}
+// (createTimedSignal imported from ../utils/timedFetch)
 
 export async function searchSoundCloud(
   query: string,
@@ -239,9 +216,10 @@ export async function fetchRadioMix(
 
   if (isSc) {
     try {
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `/api/soundcloud?action=related&id=${encodeURIComponent(videoId)}`,
-        { signal: AbortSignal.timeout(6500) }
+        {},
+        6500
       );
       const ct = res.headers.get('content-type') || '';
       if (res.ok && ct.includes('application/json')) {
@@ -257,11 +235,12 @@ export async function fetchRadioMix(
   }
 
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `/api/mix?id=${encodeURIComponent(videoId)}&title=${encodeURIComponent(
         title
       )}&artist=${encodeURIComponent(artist)}`,
-      { signal: AbortSignal.timeout(6500) }
+      {},
+      6500
     );
     const contentType = res.headers.get('content-type') || '';
     if (res.ok && contentType.includes('application/json')) {

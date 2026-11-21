@@ -8,6 +8,7 @@ import {
   UserPlaylist,
   VideoItem,
 } from '../types';
+import { fetchWithTimeout } from '../utils/timedFetch';
 
 export interface SyncPayload {
   updatedAt: string;
@@ -57,21 +58,24 @@ export async function pushSyncData(
   }
 
   try {
-    const res = await fetch('/api/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'full',
-        code,
-        favorites,
-        playlists,
-        savedPlaces,
-        ...(extras?.movieFavorites ? { movieFavorites: extras.movieFavorites } : {}),
-        ...(extras?.movieHistory ? { movieHistory: extras.movieHistory } : {}),
-        ...(extras?.customHazards ? { customHazards: extras.customHazards } : {}),
-      }),
-      signal: AbortSignal.timeout(7000),
-    });
+    const res = await fetchWithTimeout(
+      '/api/sync',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'full',
+          code,
+          favorites,
+          playlists,
+          savedPlaces,
+          ...(extras?.movieFavorites ? { movieFavorites: extras.movieFavorites } : {}),
+          ...(extras?.movieHistory ? { movieHistory: extras.movieHistory } : {}),
+          ...(extras?.customHazards ? { customHazards: extras.customHazards } : {}),
+        }),
+      },
+      7000
+    );
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
       return {
@@ -105,12 +109,15 @@ export async function pushExtrasSyncData(
   const code = normalizeSyncCode(rawCode);
   if (code.length < 4) return { success: false };
   try {
-    const res = await fetch('/api/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'syncExtras', code, ...extras }),
-      signal: AbortSignal.timeout(6500),
-    });
+    const res = await fetchWithTimeout(
+      '/api/sync',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'syncExtras', code, ...extras }),
+      },
+      6500
+    );
     const ct = res.headers.get('content-type') || '';
     if (!res.ok || !ct.includes('application/json')) return { success: false };
     const json = await res.json();
@@ -127,10 +134,11 @@ export async function pullSyncData(rawCode: string): Promise<SyncResponse> {
   }
 
   try {
-    const res = await fetch(`/api/sync?code=${encodeURIComponent(code)}`, {
-      cache: 'no-store',
-      signal: AbortSignal.timeout(7000),
-    });
+    const res = await fetchWithTimeout(
+      `/api/sync?code=${encodeURIComponent(code)}`,
+      { cache: 'no-store' },
+      7000
+    );
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
       return {
@@ -180,12 +188,15 @@ export async function sendNavToCar(
   } catch {}
 
   try {
-    const res = await fetch('/api/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'sendNav', code, pendingNav }),
-      signal: AbortSignal.timeout(6500),
-    });
+    const res = await fetchWithTimeout(
+      '/api/sync',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'sendNav', code, pendingNav }),
+      },
+      6500
+    );
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
       return { success: false, error: 'Máy chủ đồng bộ chưa phản hồi.' };
@@ -223,12 +234,15 @@ export async function sendRemoteCommand(
   } catch {}
 
   try {
-    const res = await fetch('/api/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'sendCmd', code, remoteCmd }),
-      signal: AbortSignal.timeout(6500),
-    });
+    const res = await fetchWithTimeout(
+      '/api/sync',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'sendCmd', code, remoteCmd }),
+      },
+      6500
+    );
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('application/json')) {
       return { success: false, error: 'Máy chủ đồng bộ chưa phản hồi.' };
@@ -251,10 +265,11 @@ export async function pollCarRemoteState(rawCode: string): Promise<{
   if (code.length < 4) return { pendingNav: null, remoteCmd: null };
 
   try {
-    const res = await fetch(`/api/sync?code=${encodeURIComponent(code)}&navOnly=1`, {
-      cache: 'no-store',
-      signal: AbortSignal.timeout(4500),
-    });
+    const res = await fetchWithTimeout(
+      `/api/sync?code=${encodeURIComponent(code)}&navOnly=1`,
+      { cache: 'no-store' },
+      4500
+    );
     const ct = res.headers.get('content-type') || '';
     if (!res.ok || !ct.includes('application/json')) {
       return { pendingNav: null, remoteCmd: null };
@@ -278,12 +293,15 @@ export async function clearPendingNav(rawCode: string): Promise<void> {
   const code = normalizeSyncCode(rawCode);
   if (code.length < 4) return;
   try {
-    await fetch('/api/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'clearNav', code }),
-      signal: AbortSignal.timeout(4000),
-    });
+    await fetchWithTimeout(
+      '/api/sync',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clearNav', code }),
+      },
+      4000
+    );
   } catch {}
 }
 
@@ -291,11 +309,14 @@ export async function clearRemoteCommand(rawCode: string): Promise<void> {
   const code = normalizeSyncCode(rawCode);
   if (code.length < 4) return;
   try {
-    await fetch('/api/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'clearCmd', code }),
-      signal: AbortSignal.timeout(4000),
-    });
+    await fetchWithTimeout(
+      '/api/sync',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clearCmd', code }),
+      },
+      4000
+    );
   } catch {}
 }

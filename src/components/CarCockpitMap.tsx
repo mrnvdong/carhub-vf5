@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { fetchWithTimeout } from '../utils/timedFetch';
 import {
   Map as MapLibreMap,
   Marker as MapLibreMarker,
@@ -1005,16 +1006,18 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       const dLon = Math.abs(position.lon - prev.lon);
       if (dLat < 0.028 && dLon < 0.028) return; // < ~3km
     }
-    lastCamQueryRef.current = { lat: position.lat, lon: position.lon };
+    const queryLat = position.lat;
+    const queryLon = position.lon;
     let cancelled = false;
-    fetch(
-      `/api/road?mode=cameras&lat=${position.lat.toFixed(4)}&lon=${position.lon.toFixed(
-        4
-      )}&radiusKm=12`
+    fetchWithTimeout(
+      `/api/road?mode=cameras&lat=${queryLat.toFixed(4)}&lon=${queryLon.toFixed(4)}&radiusKm=12`,
+      {},
+      6000
     )
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (!cancelled && data?.success && Array.isArray(data.points)) {
+          lastCamQueryRef.current = { lat: queryLat, lon: queryLon };
           setAreaTrafficPoints(data.points);
         }
       })
@@ -1223,8 +1226,12 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
     onChangeMapTheme(next);
   };
 
+  const placeSearchSeqRef = useRef<number>(0);
+  const routeReqSeqRef = useRef<number>(0);
+
   const runPlaceSearch = useCallback(
     async (queryText: string, mode = '') => {
+      const seq = ++placeSearchSeqRef.current;
       setIsSearchingPlaces(true);
       setRouteError(null);
       setActivePlaceMode(mode);
@@ -1232,18 +1239,23 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
         const url = `/api/places?lat=${position.lat.toFixed(4)}&lon=${position.lon.toFixed(4)}${
           mode ? `&mode=${encodeURIComponent(mode)}` : `&q=${encodeURIComponent(queryText)}`
         }`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(6500) });
+        const res = await fetchWithTimeout(url, {}, 6500);
+        if (seq !== placeSearchSeqRef.current) return;
         const ct = res.headers.get('content-type') || '';
         if (res.ok && ct.includes('application/json')) {
           const data = await res.json();
+          if (seq !== placeSearchSeqRef.current) return;
           setPlaceResults(Array.isArray(data.items) ? data.items : []);
         } else {
           setPlaceResults([]);
         }
       } catch {
+        if (seq !== placeSearchSeqRef.current) return;
         setPlaceResults([]);
       } finally {
-        setIsSearchingPlaces(false);
+        if (seq === placeSearchSeqRef.current) {
+          setIsSearchingPlaces(false);
+        }
       }
     },
     [position.lat, position.lon]
@@ -1266,6 +1278,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
       place: { name: string; lat: number; lon: number },
       options?: { isReroute?: boolean; fromPhone?: boolean }
     ) => {
+      const seq = ++routeReqSeqRef.current;
       unlockCarAudio();
       const isReroute = Boolean(options?.isReroute);
       if (isReroute) {
@@ -1284,11 +1297,13 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
           5
         )}&toLat=${place.lat.toFixed(5)}&toLon=${place.lon.toFixed(5)}`;
 
-        const res = await fetch(apiUrl, { signal: AbortSignal.timeout(8500) });
+        const res = await fetchWithTimeout(apiUrl, {}, 8500);
+        if (seq !== routeReqSeqRef.current) return;
         const ct = res.headers.get('content-type') || '';
 
         if (res.ok && ct.includes('application/json')) {
           const data = await res.json();
+          if (seq !== routeReqSeqRef.current) return;
           if (data?.success && data?.geometry) {
             spokenMarksRef.current = new Set();
             lastRerouteAtRef.current = Date.now();
@@ -1329,20 +1344,29 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
             return;
           }
           if (!isReroute) {
-            setRouteError(data?.error || 'Không tính được đường đi tới địa điểm này.');
+            const msg = data?.error || 'Không tính được đường đi tới địa điểm này.';
+            setRouteError(msg);
+            if (options?.fromPhone) onNotifyToast?.(`⚠️ ${msg}`);
           }
         } else if (!isReroute) {
-          setRouteError('Máy chủ dẫn đường đang bận, vui lòng thử lại sau giây lát.');
+          const msg = 'Máy chủ dẫn đường đang bận, vui lòng thử lại sau giây lát.';
+          setRouteError(msg);
+          if (options?.fromPhone) onNotifyToast?.(`⚠️ ${msg}`);
         }
       } catch {
+        if (seq !== routeReqSeqRef.current) return;
         if (!isReroute) {
-          setRouteError('Lỗi kết nối mạng khi tính lộ trình.');
+          const msg = 'Lỗi kết nối mạng khi tính lộ trình.';
+          setRouteError(msg);
+          if (options?.fromPhone) onNotifyToast?.(`⚠️ ${msg}`);
         }
       }
-      setIsRouting(false);
-      setIsRerouting(false);
+      if (seq === routeReqSeqRef.current) {
+        setIsRouting(false);
+        setIsRerouting(false);
+      }
     },
-    [gpsStatus, position.lat, position.lon, requestGps, voiceNavEnabled]
+    [gpsStatus, onNotifyToast, position.lat, position.lon, requestGps, voiceNavEnabled]
   );
 
   // Send-to-Car: Tự nhận điểm đến từ điện thoại qua Mã Xe VF5-XXXX
@@ -1912,7 +1936,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
          ===================================================================== */}
       {layoutMenuOpen && (
         <div
-          className={`absolute right-2 top-[3.25rem] z-30 w-[20rem] max-w-[calc(100%-16px)] max-h-[calc(100%-4rem)] overflow-y-auto no-scrollbar backdrop-blur-2xl border rounded-2xl p-3 space-y-3 shadow-2xl animate-ios-sheet-in ${
+          className={`absolute right-2 top-[3.25rem] z-50 w-[20rem] max-w-[calc(100%-16px)] max-h-[calc(100%-4rem)] overflow-y-auto no-scrollbar backdrop-blur-2xl border rounded-2xl p-3 space-y-3 shadow-2xl animate-ios-sheet-in ${
             isLightMap
               ? 'bg-white/98 border-slate-300 text-slate-900'
               : 'bg-[#0b1220]/98 border-slate-600 text-white'
@@ -2296,7 +2320,7 @@ const CarCockpitMapInner: React.FC<CarCockpitMapProps> = ({
         <div
           className={`absolute inset-x-2 top-[3.25rem] ${
             isMapExpanded ? 'bottom-14' : 'bottom-2'
-          } z-30 backdrop-blur-2xl border rounded-2xl p-3 flex flex-col gap-2 animate-ios-sheet-in ${
+          } z-50 backdrop-blur-2xl border rounded-2xl p-3 flex flex-col gap-2 animate-ios-sheet-in ${
             isLightMap
               ? 'bg-white/98 border-slate-300 text-slate-950 shadow-[0_16px_44px_rgba(15,23,42,0.3)]'
               : 'bg-[#0b1220]/98 border-slate-600 text-white shadow-[0_16px_44px_rgba(0,0,0,0.88)]'

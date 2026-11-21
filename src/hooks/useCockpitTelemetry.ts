@@ -6,6 +6,7 @@ import {
   speakVietnamese,
   unlockCarAudio,
 } from '../services/voiceAudio';
+import { fetchWithTimeout } from '../utils/timedFetch';
 
 export interface WeatherInfo {
   temperature: number;
@@ -399,9 +400,10 @@ export function useCockpitTelemetry(
       try {
         const headingPart =
           liveGpsFix.heading !== null ? `&heading=${Math.round(liveGpsFix.heading)}` : '';
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `/api/road?lat=${liveGpsFix.lat.toFixed(5)}&lon=${liveGpsFix.lon.toFixed(5)}${headingPart}`,
-          { signal: AbortSignal.timeout(5500) }
+          {},
+          5500
         );
         const contentType = res.headers.get('content-type') || '';
         if (!res.ok || !contentType.includes('application/json')) return;
@@ -512,13 +514,14 @@ export function useCockpitTelemetry(
     let cancelled = false;
     const fetchWeather = async () => {
       try {
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `https://api.open-meteo.com/v1/forecast?latitude=${weatherCoords.lat.toFixed(
             4
           )}&longitude=${weatherCoords.lon.toFixed(
             4
           )}&current=temperature_2m,weather_code,is_day&timezone=auto`,
-          { signal: AbortSignal.timeout(5000) }
+          {},
+          5000
         );
         if (!res.ok) return;
         const data = await res.json();
@@ -546,8 +549,9 @@ export function useCockpitTelemetry(
     };
   }, [weatherCoords.lat, weatherCoords.lon]);
 
-  // Cập nhật Đồng Hồ Hành Trình (mỗi 5s) + nhắc nghỉ ngơi nếu lái liên tục >= 120 phút
+  // Cập nhật Đồng Hồ Hành Trình (mỗi 5s CHỈ khi active) + nhắc nghỉ ngơi nếu lái liên tục >= 120 phút
   useEffect(() => {
+    if (!active) return;
     const id = window.setInterval(() => {
       const elapsedSec = Math.max(1, Math.floor((Date.now() - tripStartedAtRef.current) / 1000));
       const distanceKm = Math.round((tripDistanceMRef.current / 1000) * 100) / 100;
@@ -576,7 +580,7 @@ export function useCockpitTelemetry(
       }
     }, 5000);
     return () => window.clearInterval(id);
-  }, [speedAlertSound]);
+  }, [active, speedAlertSound]);
 
   const fatigueWarning = tripStats.elapsedSec >= 7200 && tripStats.distanceKm >= 20;
 

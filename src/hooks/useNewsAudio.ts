@@ -333,6 +333,9 @@ export function useNewsAudio(
       const chunks = ttsChunksRef.current;
       if (!chunks.length || startIdx >= chunks.length) return;
 
+      // Dừng ngay Nhạc & TV trước khi đọc Web Speech dự phòng (tránh chồng tiếng!)
+      onBeforePlayRef.current?.();
+
       const sessionId = ++speechSessionRef.current;
       speechFallbackActiveRef.current = true;
       setAudioError(null);

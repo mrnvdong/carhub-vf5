@@ -2,10 +2,7 @@
 // High-reliability car routing for Vietnam combining FOSSGIS OSRM (routing.openstreetmap.de)
 // and project-osrm fallback, returning GeoJSON polyline + Vietnamese turn-by-turn steps.
 
-const CORS_HEADERS = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Access-Control-Allow-Origin': '*',
-};
+import { buildTrustedJsonHeaders, isTrustedAppRequest } from '../_lib/security';
 
 interface TurnStep {
   lat: number;
@@ -58,15 +55,32 @@ function translateManeuver(step: any): { instruction: string; arrow: string } {
   };
 }
 
+export async function onRequestOptions(context: any) {
+  return new Response(null, { status: 204, headers: buildTrustedJsonHeaders(context.request) });
+}
+
 export async function onRequestGet(context: any) {
   const { request } = context;
+  const CORS_HEADERS = buildTrustedJsonHeaders(request);
+  if (!isTrustedAppRequest(request)) {
+    return new Response(JSON.stringify({ success: false, error: 'Forbidden origin' }), {
+      status: 403,
+      headers: CORS_HEADERS,
+    });
+  }
   const url = new URL(request.url);
   const fromLat = parseFloat(url.searchParams.get('fromLat') || '');
   const fromLon = parseFloat(url.searchParams.get('fromLon') || '');
   const toLat = parseFloat(url.searchParams.get('toLat') || '');
   const toLon = parseFloat(url.searchParams.get('toLon') || '');
 
-  if ([fromLat, fromLon, toLat, toLon].some((n) => isNaN(n))) {
+  if (
+    [fromLat, fromLon, toLat, toLon].some((n) => !Number.isFinite(n)) ||
+    Math.abs(fromLat) > 90 ||
+    Math.abs(toLat) > 90 ||
+    Math.abs(fromLon) > 180 ||
+    Math.abs(toLon) > 180
+  ) {
     return new Response(JSON.stringify({ success: false, error: 'Tọa độ không hợp lệ.' }), {
       status: 400,
       headers: CORS_HEADERS,

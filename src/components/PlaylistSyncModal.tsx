@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import QRCode from 'qrcode';
 import {
   X,
   CloudUpload,
@@ -13,7 +12,7 @@ import {
   Delete,
   Sparkles,
   Trash2,
-  Smartphone,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   CustomHazardPin,
@@ -42,7 +41,7 @@ interface PlaylistSyncModalProps {
   onDeletePlaylist: (playlistId: string) => void;
   savedPlaces: SavedPlace[];
   syncCode: string;
-  onSaveSyncCode: (code: string) => void;
+  onSaveSyncCode: (code: string, skipAutoPush?: boolean) => void;
   onApplyPulledData: (
     favorites: VideoItem[],
     playlists: UserPlaylist[],
@@ -87,8 +86,6 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
-  const [copiedCoPilot, setCopiedCoPilot] = useState<boolean>(false);
-  const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [confirmEmptyPush, setConfirmEmptyPush] = useState<boolean>(false);
 
   const [newPlName, setNewPlName] = useState<string>('');
@@ -99,34 +96,9 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
       setCodeDigits(syncCode || '');
       setStatusMsg(null);
       setCopiedLink(false);
-      setCopiedCoPilot(false);
       setConfirmEmptyPush(false);
     }
   }, [isOpen, syncCode]);
-
-  const cleanCodeForQr = normalizeSyncCode(codeDigits);
-  useEffect(() => {
-    if (!isOpen || cleanCodeForQr.length < 4 || typeof window === 'undefined') {
-      setQrDataUrl('');
-      return;
-    }
-    let cancelled = false;
-    const copilotUrl = `${window.location.origin}/?copilot=${encodeURIComponent(cleanCodeForQr)}`;
-    QRCode.toDataURL(copilotUrl, {
-      width: 148,
-      margin: 1,
-      color: { dark: '#0f172a', light: '#ffffff' },
-    })
-      .then((url) => {
-        if (!cancelled) setQrDataUrl(url);
-      })
-      .catch(() => {
-        if (!cancelled) setQrDataUrl('');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, cleanCodeForQr]);
 
   if (!isOpen) return null;
 
@@ -173,7 +145,7 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
     setIsSyncing(false);
 
     if (res.success) {
-      onSaveSyncCode(cleanCode);
+      onSaveSyncCode(cleanCode, true);
       setStatusMsg({
         type: 'ok',
         text: `Đã lưu thành công lên mã VF5-${cleanCode} (Nhạc, Phim xem dở, Điểm ghim & Camera)!`,
@@ -217,16 +189,6 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
     } else {
       setStatusMsg({ type: 'err', text: res.error || 'Không tìm thấy mã xe này.' });
     }
-  };
-
-  const handleCopyCoPilotUrl = async () => {
-    if (cleanCode.length < 4 || typeof window === 'undefined') return;
-    try {
-      const u = `${window.location.origin}/?copilot=${encodeURIComponent(cleanCode)}`;
-      await navigator.clipboard.writeText(u);
-      setCopiedCoPilot(true);
-      window.setTimeout(() => setCopiedCoPilot(false), 2500);
-    } catch {}
   };
 
   const handleCopyAutoSyncUrl = async () => {
@@ -439,49 +401,28 @@ export const PlaylistSyncModal: React.FC<PlaylistSyncModalProps> = ({
                 </div>
 
                 {cleanCode.length >= 4 && (
-                  <div className={`rounded-2xl border p-3 flex items-center gap-3 ${theme.card}`}>
-                    {qrDataUrl && (
-                      <img
-                        src={qrDataUrl}
-                        alt={`QR Co-Pilot VF5-${cleanCode}`}
-                        className="w-24 h-24 rounded-xl bg-white p-1 shrink-0 shadow"
-                      />
-                    )}
-                    <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className={`rounded-2xl border p-3 flex items-center justify-between gap-3 ${theme.card}`}>
+                    <div className="min-w-0 flex-1 space-y-1">
                       <p className={`text-xs font-black flex items-center gap-1.5 ${theme.text}`}>
-                        <Smartphone className="w-4 h-4 text-sky-400 shrink-0" />
-                        <span>Co-Pilot Hàng Ghế Sau (Quét QR)</span>
+                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Mã Đồng Bộ Cá Nhân (Tách biệt với QR Điều Khiển)</span>
                       </p>
                       <p className={`text-[11px] font-semibold leading-snug ${theme.textSub}`}>
-                        Người ngồi sau quét mã QR này để chọn nhạc, mở phim &amp; gửi dẫn đường trực tiếp lên màn VF5!
+                        Mã này chỉ dùng sao lưu Playlist &amp; Điểm ghim riêng của bạn. Để người ngồi trên xe quét QR chọn nhạc, hãy bấm nút <strong>QR</strong> bên phải màn hình (có mã hóa 144-bit + PIN 4 số tự hủy sau 3 giờ).
                       </p>
-                      <div className="flex flex-wrap gap-1.5 pt-0.5">
-                        <button
-                          type="button"
-                          onClick={handleCopyCoPilotUrl}
-                          className={`min-h-[32px] px-2.5 rounded-lg border text-[11px] font-extrabold flex items-center gap-1 active:scale-95 ${theme.iconBtn}`}
-                        >
-                          {copiedCoPilot ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          ) : (
-                            <Smartphone className="w-3.5 h-3.5 text-sky-400" />
-                          )}
-                          <span>{copiedCoPilot ? 'Đã chép link Co-Pilot' : 'Link Co-Pilot'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleCopyAutoSyncUrl}
-                          className={`min-h-[32px] px-2.5 rounded-lg border text-[11px] font-extrabold flex items-center gap-1 active:scale-95 ${theme.iconBtn}`}
-                        >
-                          {copiedLink ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          ) : (
-                            <Link2 className="w-3.5 h-3.5 text-violet-400" />
-                          )}
-                          <span>{copiedLink ? 'Đã chép ?sync' : 'Link ?sync APTV'}</span>
-                        </button>
-                      </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={handleCopyAutoSyncUrl}
+                      className={`min-h-[36px] px-3 rounded-xl border text-[11px] font-extrabold flex items-center gap-1 shrink-0 active:scale-95 ${theme.iconBtn}`}
+                    >
+                      {copiedLink ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Link2 className="w-3.5 h-3.5 text-violet-400" />
+                      )}
+                      <span>{copiedLink ? 'Đã chép ?sync' : 'Link ?sync'}</span>
+                    </button>
                   </div>
                 )}
 

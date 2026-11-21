@@ -110,7 +110,8 @@ export function useTvLive(
   const [favoriteKeys, setFavoriteKeys] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('carhub_tv_favorites');
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -122,6 +123,7 @@ export function useTvLive(
 
   const [isPinging, setIsPinging] = useState<boolean>(false);
   const pingAbortRef = useRef<AbortController | null>(null);
+  const playlistAbortRef = useRef<AbortController | null>(null);
   const onNotifyToastRef = useRef(onNotifyToast);
   onNotifyToastRef.current = onNotifyToast;
 
@@ -168,10 +170,14 @@ export function useTvLive(
   }, [activeChannel]);
 
   const loadPlaylist = useCallback(async (urlToLoad: string) => {
+    playlistAbortRef.current?.abort();
+    const controller = new AbortController();
+    playlistAbortRef.current = controller;
+
     setIsLoadingPlaylist(true);
     setPlaylistError(null);
-    const controller = new AbortController();
     const { data, error } = await fetchTvPlaylist(urlToLoad, controller.signal);
+    if (controller.signal.aborted || playlistAbortRef.current !== controller) return;
     if (data) {
       setPlaylist(data);
       setPlaylistError(null);

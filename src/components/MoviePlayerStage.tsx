@@ -191,6 +191,8 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
   onNextEpisodeRef.current = onNextEpisode;
   const onNotifyToastRef = useRef(onNotifyToast);
   onNotifyToastRef.current = onNotifyToast;
+  const resolvedEmbedOverrideRef = useRef<string>(resolvedEmbedOverride);
+  resolvedEmbedOverrideRef.current = resolvedEmbedOverride;
 
   // Reset chế độ & trạng thái mỗi khi đổi tập hoặc đổi server
   useEffect(() => {
@@ -200,6 +202,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     setCurrentTime(0);
     setDuration(0);
     setResolvedEmbedOverride('');
+    resolvedEmbedOverrideRef.current = '';
     setK20Options([]);
     setK20OptionIdx(0);
     if (
@@ -255,6 +258,9 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
 
     const video = videoRef.current;
     if (!video) return;
+
+    // Bắt cứng callback lưu tiến độ của ĐÚNG tập hiện tại (tránh ghi đè timestamp tập cũ sang tập mới khi cleanup!)
+    const saveProgressForBoundEpisode = onProgressSave;
 
     let cancelled = false;
     let activeBlobUrl: string | null = null;
@@ -323,7 +329,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
     };
 
     const canFallbackToEmbed = () => {
-      const emb = resolvedEmbedOverride || episode.linkEmbed;
+      const emb = resolvedEmbedOverrideRef.current || episode.linkEmbed;
       return Boolean(emb && !isCobephimEpRef(emb));
     };
 
@@ -362,12 +368,17 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
           }
           if (cb.linkM3u8) {
             resolvedMediaUrl = cb.linkM3u8;
-            if (cb.linkEmbed) setResolvedEmbedOverride(cb.linkEmbed);
+            if (cb.linkEmbed) {
+              resolvedEmbedOverrideRef.current = cb.linkEmbed;
+              setResolvedEmbedOverride(cb.linkEmbed);
+            }
           } else if (isVsmovEmbedUrl(cb.linkEmbed)) {
             vsmovTargetEmbed = cb.linkEmbed;
             needsPngStrip = true;
+            resolvedEmbedOverrideRef.current = cb.linkEmbed;
             setResolvedEmbedOverride(cb.linkEmbed);
           } else if (cb.linkEmbed) {
+            resolvedEmbedOverrideRef.current = cb.linkEmbed;
             setResolvedEmbedOverride(cb.linkEmbed);
             setPlayerMode('embed');
             return;
@@ -569,7 +580,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
       cleanupHls();
       if (video) {
         if (video.currentTime > 5 && Number.isFinite(video.duration) && video.duration > 30) {
-          onProgressSaveRef.current(video.currentTime, video.duration);
+          saveProgressForBoundEpisode(video.currentTime, video.duration);
         }
         try {
           video.pause();
@@ -856,6 +867,8 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
               }
             }}
             onError={() => {
+              // Nếu hls.js đang điều khiển -> nhường cho hls.js tự khôi phục, tránh xung đột!
+              if (hlsRef.current) return;
               if (
                 playerMode === 'clean' &&
                 !isVsmovEmbedUrl(episode.linkEmbed) &&
@@ -952,7 +965,7 @@ export const MoviePlayerStage: React.FC<MoviePlayerStageProps> = ({
                   <RefreshCw className="w-4 h-4" />
                   <span>Thử lại</span>
                 </button>
-                {episode.linkEmbed && (
+                {safeEmbedUrl && (
                   <button
                     type="button"
                     onClick={() => setPlayerMode('embed')}

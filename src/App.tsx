@@ -32,7 +32,6 @@ import {
   normalizeSyncCode,
   pollCarRemoteState,
   clearPendingNav,
-  clearRemoteCommand,
 } from './services/sync';
 import {
   loadMovieFavorites,
@@ -43,6 +42,7 @@ import {
 import { loadCustomHazards, saveCustomHazards } from './services/vf5Tools';
 import { VoiceCommandIntent } from './services/voiceCommands';
 import { useCarHardwareControls } from './hooks/useCarHardwareControls';
+import { useRemoteHostSession } from './hooks/useRemoteHostSession';
 
 const DEFAULT_PLAYLISTS: UserPlaylist[] = [
   { id: 'pl-highway', name: 'Đi Cao Tốc', icon: '🚗', items: [] },
@@ -104,18 +104,18 @@ export const App: React.FC = () => {
   });
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Co-Pilot Remote mode (?copilot=CODE cho hành khách ngồi ghế sau quét QR!)
+  // Co-Pilot Remote mode (?copilot=s_<144bit-token> cho hành khách quét QR phiên tạm thời!)
   const [copilotCode, setCopilotCode] = useState<string>(() => {
     try {
       if (typeof window !== 'undefined') {
-        const c = normalizeSyncCode(new URLSearchParams(window.location.search).get('copilot') || '');
-        if (c.length >= 4) return c;
+        const raw = (new URLSearchParams(window.location.search).get('copilot') || '').trim();
+        if (raw.length >= 4) return raw;
       }
     } catch {}
     return '';
   });
 
-  // Lệnh điều phối toàn app từ Trợ lý giọng nói & Co-Pilot ghế sau
+  // Lệnh điều phối toàn app từ Trợ lý giọng nói & Phiên QR Bảo Mật 4 lớp
   const [syncPullNonce, setSyncPullNonce] = useState<number>(0);
   const [movieCommand, setMovieCommand] = useState<MovieExternalCommand | null>(null);
   const [tvChannelCommand, setTvChannelCommand] = useState<{ nonce: number; query: string } | null>(null);
@@ -123,7 +123,6 @@ export const App: React.FC = () => {
   const [hudOpenNonce, setHudOpenNonce] = useState<number>(0);
   const [remoteTogglePlayNonce, setRemoteTogglePlayNonce] = useState<number>(0);
   const [remoteBoostUntil, setRemoteBoostUntil] = useState<number>(0);
-  const lastSeenCmdIdRef = useRef<string>('');
   const handleBoostRemotePolling = useCallback(() => {
     setRemoteBoostUntil(Date.now() + 10 * 60 * 1000);
   }, []);
@@ -254,7 +253,8 @@ export const App: React.FC = () => {
   const [history, setHistory] = useState<VideoItem[]>(() => {
     try {
       const saved = localStorage.getItem('carhub_history');
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -263,7 +263,8 @@ export const App: React.FC = () => {
   const [favorites, setFavorites] = useState<VideoItem[]>(() => {
     try {
       const saved = localStorage.getItem('carhub_favorites');
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -312,7 +313,8 @@ export const App: React.FC = () => {
   const [videos, setVideos] = useState<VideoItem[]>(() => {
     try {
       const cached = localStorage.getItem('carhub_cached_videos');
-      return cached ? JSON.parse(cached) : [];
+      const parsed = cached ? JSON.parse(cached) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -323,6 +325,12 @@ export const App: React.FC = () => {
   // Upgrade #5: Auto-Mix Queue state
   const [mixVideos, setMixVideos] = useState<VideoItem[]>([]);
   const [isLoadingMix, setIsLoadingMix] = useState<boolean>(false);
+  const lastAutoMixAttemptRef = useRef<string>('');
+  const [forceMusicFocusNonce, setForceMusicFocusNonce] = useState<number>(0);
+  const [externalNotice, setExternalNotice] = useState<{ id: number; text: string } | null>(null);
+  const notifyApp = useCallback((text: string) => {
+    setExternalNotice({ id: Date.now() + Math.random(), text });
+  }, []);
 
   const [currentVideo, setCurrentVideo] = useState<VideoItem | null>(() => {
     try {
@@ -344,13 +352,13 @@ export const App: React.FC = () => {
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
 
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    const fallback = ['Nhạc trẻ remix bass căng', 'Vinahouse nonstop', 'Bolero hải ngoại'];
     try {
       const saved = localStorage.getItem('carhub_recent_searches');
-      return saved
-        ? JSON.parse(saved)
-        : ['Nhạc trẻ remix bass căng', 'Vinahouse nonstop', 'Bolero hải ngoại'];
+      const parsed = saved ? JSON.parse(saved) : fallback;
+      return Array.isArray(parsed) ? parsed : fallback;
     } catch {
-      return ['Nhạc trẻ remix bass căng', 'Vinahouse nonstop', 'Bolero hải ngoại'];
+      return fallback;
     }
   });
 
@@ -632,9 +640,54 @@ export const App: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [favorites, playlists, savedPlaces, syncCode, copilotCode]);
 
-  // Send-to-Car & Co-Pilot Polling thông minh:
-  // - Khi vừa mở mã QR hoặc vừa nhận lệnh Co-Pilot (trong 10 phút): poll nhanh 4 giây/lần để bấm trên điện thoại là xe phản hồi gần như ngay lập tức!
-  // - Khi rảnh: tự hạ về 25 giây/lần để tiết kiệm tối đa Cloudflare KV reads!
+  // Phiên QR Bảo Mật 4 lớp (/api/remote — 144-bit token tự hủy 3h + PIN 4 số + duyệt máy + Khóa Remote + Chỉ xếp hàng đợi)
+  const remoteHost = useRemoteHostSession({
+    disabled: Boolean(copilotCode),
+    onRemoteCmd: (remoteCmd) => {
+      if (remoteCmd.action === 'playTrack' && remoteCmd.payload?.id) {
+        const tr = remoteCmd.payload as VideoItem;
+        setVideos((prev) => mergeUniqueTracks([tr], prev));
+        setRailSection((prev) => (prev === 'movies' ? 'cockpit' : prev));
+        playVideoRef.current?.(tr, 'explore');
+        setForceMusicFocusNonce((n) => n + 1);
+      } else if (remoteCmd.action === 'queueTrack' && remoteCmd.payload?.id) {
+        const tr = remoteCmd.payload as VideoItem;
+        setVideos((prev) => {
+          if (prev.some((x) => x.id === tr.id)) return prev;
+          return [...prev, tr];
+        });
+        notifyApp(`➕ Hàng ghế sau vừa xếp hàng đợi: ${tr.title}`);
+      } else if (remoteCmd.action === 'openMovie' && remoteCmd.payload?.slug) {
+        setRailSection('movies');
+        setMovieCommand({
+          nonce: Date.now(),
+          open: {
+            slug: remoteCmd.payload.slug,
+            source: remoteCmd.payload.source || 'kkphim',
+          },
+        });
+      } else if (remoteCmd.action === 'openTv' && remoteCmd.payload?.query) {
+        setRailSection('tv');
+        setTvChannelCommand({ nonce: Date.now(), query: remoteCmd.payload.query });
+      } else if (remoteCmd.action === 'openNews') {
+        setRailSection('news');
+        setNewsAutoPlayNonce((n) => n + 1);
+      } else if (remoteCmd.action === 'playPause') {
+        setRemoteTogglePlayNonce((n) => n + 1);
+      } else if (remoteCmd.action === 'next') {
+        setRailSection((prev) => (prev === 'movies' ? 'cockpit' : prev));
+        handleNextRef.current?.();
+      } else if (remoteCmd.action === 'prev') {
+        setRailSection((prev) => (prev === 'movies' ? 'cockpit' : prev));
+        handlePrevRef.current?.();
+      }
+    },
+    onRemoteNav: (nav) => {
+      setIncomingNavTarget(nav);
+    },
+  });
+
+  // Send-to-Car cá nhân qua Mã Đồng Bộ (chỉ đọc pendingNav cá nhân, KHÔNG nhận lệnh điều khiển giải trí ẩn danh!)
   useEffect(() => {
     if (syncCode.length < 4 || copilotCode) return;
     let cancelled = false;
@@ -642,7 +695,7 @@ export const App: React.FC = () => {
 
     const checkRemote = async () => {
       if (cancelled || document.visibilityState !== 'visible') return;
-      const { pendingNav, remoteCmd } = await pollCarRemoteState(syncCode);
+      const { pendingNav } = await pollCarRemoteState(syncCode);
       if (cancelled) return;
 
       if (pendingNav && pendingNav.id && lastSeenNavIdRef.current !== pendingNav.id) {
@@ -656,52 +709,6 @@ export const App: React.FC = () => {
           lastSeenNavIdRef.current = pendingNav.id;
           setIncomingNavTarget(pendingNav);
           setRemoteBoostUntil(Date.now() + 10 * 60 * 1000);
-        }
-      }
-
-      if (remoteCmd && remoteCmd.id && lastSeenCmdIdRef.current !== remoteCmd.id) {
-        let isSelfCmd = false;
-        try {
-          isSelfCmd = sessionStorage.getItem('carhub_self_sent_cmd_id') === remoteCmd.id;
-        } catch {}
-        const cmdMs = Date.parse(remoteCmd.sentAt || '');
-        const isFreshCmd = isNaN(cmdMs) || Date.now() - cmdMs < 5 * 60 * 1000;
-        if (!isSelfCmd && isFreshCmd) {
-          lastSeenCmdIdRef.current = remoteCmd.id;
-          setRemoteBoostUntil(Date.now() + 10 * 60 * 1000);
-          clearRemoteCommand(syncCode).catch(() => {});
-          if (remoteCmd.action === 'playTrack' && remoteCmd.payload?.id) {
-            const tr = remoteCmd.payload as VideoItem;
-            setVideos((prev) => mergeUniqueTracks([tr], prev));
-            playVideoRef.current?.(tr, 'explore');
-          } else if (remoteCmd.action === 'queueTrack' && remoteCmd.payload?.id) {
-            const tr = remoteCmd.payload as VideoItem;
-            setVideos((prev) => {
-              if (prev.some((x) => x.id === tr.id)) return prev;
-              return [...prev, tr];
-            });
-          } else if (remoteCmd.action === 'openMovie' && remoteCmd.payload?.slug) {
-            setRailSection('movies');
-            setMovieCommand({
-              nonce: Date.now(),
-              open: {
-                slug: remoteCmd.payload.slug,
-                source: remoteCmd.payload.source || 'kkphim',
-              },
-            });
-          } else if (remoteCmd.action === 'openTv' && remoteCmd.payload?.query) {
-            setRailSection('tv');
-            setTvChannelCommand({ nonce: Date.now(), query: remoteCmd.payload.query });
-          } else if (remoteCmd.action === 'openNews') {
-            setRailSection('news');
-            setNewsAutoPlayNonce((n) => n + 1);
-          } else if (remoteCmd.action === 'playPause') {
-            setRemoteTogglePlayNonce((n) => n + 1);
-          } else if (remoteCmd.action === 'next') {
-            handleNextRef.current?.();
-          } else if (remoteCmd.action === 'prev') {
-            handlePrevRef.current?.();
-          }
         }
       }
     };
@@ -822,10 +829,15 @@ export const App: React.FC = () => {
   );
 
   useEffect(() => {
+    // Không nạp nhạc nền / ghi đè carhub_last_video khi đang mở chế độ Co-Pilot trên điện thoại hành khách!
+    if (copilotCode) {
+      setIsLoadingVideos(false);
+      return;
+    }
     const startCat = selectedCategory || 'remix';
     loadCategory(startCat, getCategoryQuery(startCat), true, musicSourceRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [copilotCode]);
 
   useEffect(() => {
     const onOnline = () => {
@@ -1007,11 +1019,17 @@ export const App: React.FC = () => {
     } else if (
       queueSource === 'mix' &&
       currentVideo &&
+      currentVideo.id !== 'offline_standby' &&
       mixVideos.length > 0 &&
+      mixVideos.length < 120 &&
       currentIndex >= mixVideos.length - 2 &&
       !isLoadingMix
     ) {
-      // Nối tiếp vô tận Đài phát Auto-Mix dựa trên bài cuối cùng!
+      // Chống vòng lặp vô hạn khi mất mạng hoặc danh sách Mix đã đạt đỉnh trùng lặp
+      const attemptKey = `${currentVideo.id}:${mixVideos.length}`;
+      if (lastAutoMixAttemptRef.current === attemptKey) return;
+      lastAutoMixAttemptRef.current = attemptKey;
+
       setIsLoadingMix(true);
       fetchRadioMix(
         currentVideo.id,
@@ -1024,6 +1042,7 @@ export const App: React.FC = () => {
             setMixVideos((prev) => mergeUniqueTracks(prev, more).slice(0, 120));
           }
         })
+        .catch(() => {})
         .finally(() => setIsLoadingMix(false));
     }
   }, [
@@ -1223,6 +1242,8 @@ export const App: React.FC = () => {
             lon: home.lon,
             sentAt: new Date().toISOString(),
           });
+        } else {
+          notifyApp('🏠 Bạn chưa ghim địa chỉ Nhà riêng — mở Tìm điểm trên Bản đồ để ghim.');
         }
         return true;
       }
@@ -1239,6 +1260,8 @@ export const App: React.FC = () => {
             lon: work.lon,
             sentAt: new Date().toISOString(),
           });
+        } else {
+          notifyApp('🏢 Bạn chưa ghim địa chỉ Cơ quan — mở Tìm điểm trên Bản đồ để ghim.');
         }
         return true;
       }
@@ -1247,7 +1270,7 @@ export const App: React.FC = () => {
         setRailSection('cockpit');
         const c = getLastCoords();
         fetch(`/api/places?mode=ev&lat=${c.lat.toFixed(4)}&lon=${c.lon.toFixed(4)}`)
-          .then((r) => r.json())
+          .then((r) => (r.ok ? r.json() : null))
           .then((d) => {
             const first = Array.isArray(d?.items) ? d.items[0] : null;
             if (first) {
@@ -1259,9 +1282,13 @@ export const App: React.FC = () => {
                 lon: first.lon,
                 sentAt: new Date().toISOString(),
               });
+            } else {
+              notifyApp('⚡ Không tìm thấy trạm sạc gần vị trí hiện tại.');
             }
           })
-          .catch(() => {});
+          .catch(() => {
+            notifyApp('⚠️ Mất kết nối mạng khi tìm trạm sạc gần nhất.');
+          });
         return true;
       }
 
@@ -1271,7 +1298,7 @@ export const App: React.FC = () => {
         fetch(
           `/api/places?q=${encodeURIComponent(intent.query)}&lat=${c.lat.toFixed(4)}&lon=${c.lon.toFixed(4)}`
         )
-          .then((r) => r.json())
+          .then((r) => (r.ok ? r.json() : null))
           .then((d) => {
             const first = Array.isArray(d?.items) ? d.items[0] : null;
             if (first) {
@@ -1283,9 +1310,13 @@ export const App: React.FC = () => {
                 lon: first.lon,
                 sentAt: new Date().toISOString(),
               });
+            } else {
+              notifyApp(`📍 Không tìm thấy địa điểm "${intent.query}".`);
             }
           })
-          .catch(() => {});
+          .catch(() => {
+            notifyApp('⚠️ Mất kết nối mạng khi tìm địa điểm dẫn đường.');
+          });
         return true;
       }
 
@@ -1323,7 +1354,7 @@ export const App: React.FC = () => {
 
       return false;
     },
-    [savedPlaces]
+    [savedPlaces, notifyApp]
   );
 
   // Chế độ Co-Pilot Hàng Ghế Sau (mở khi hành khách quét mã QR ?copilot=CODE)
@@ -1422,7 +1453,10 @@ export const App: React.FC = () => {
             newsAutoPlayNonce={newsAutoPlayNonce}
             hudOpenNonce={hudOpenNonce}
             remoteTogglePlayNonce={remoteTogglePlayNonce}
+            forceMusicFocusNonce={forceMusicFocusNonce}
+            externalNotice={externalNotice}
             onStartRouteToTarget={setIncomingNavTarget}
+            remoteHost={remoteHost}
           />
         ) : isLoadingVideos ? (
           <div
@@ -1470,6 +1504,33 @@ export const App: React.FC = () => {
               >
                 <Search className="w-4 h-4" />
                 <span>Tìm kiếm</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const standby: VideoItem = {
+                    id: 'offline_standby',
+                    source: 'youtube',
+                    title: 'Chế độ lái xe Ngoại tuyến (GPS & Bản đồ VF5)',
+                    uploaderName: 'CarHub VF5',
+                    thumbnail: '',
+                    duration: 0,
+                    durationText: '',
+                  };
+                  setCurrentVideo(standby);
+                  setStreamData(buildEmbedStreamData(standby));
+                  setRailSection('cockpit');
+                }}
+                className="min-h-[46px] px-5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-sm flex items-center gap-2 shadow-lg active:scale-95 transition"
+              >
+                <span>🗺️ Vào Cockpit Ngoại tuyến</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenSyncModal('sync')}
+                className={`min-h-[46px] px-4 rounded-full border font-extrabold text-sm flex items-center gap-2 active:scale-95 transition ${theme.iconBtn}`}
+              >
+                <span>☁️ Đồng bộ Mã Xe</span>
               </button>
               <button
                 type="button"
@@ -1524,7 +1585,10 @@ export const App: React.FC = () => {
         onDeletePlaylist={handleDeletePlaylist}
         savedPlaces={savedPlaces}
         syncCode={syncCode}
-        onSaveSyncCode={setSyncCode}
+        onSaveSyncCode={(code, skipAutoPush) => {
+          if (skipAutoPush) suppressNextAutoPushRef.current = true;
+          setSyncCode(code);
+        }}
         onApplyPulledData={applyPulledSync}
         isLightTheme={isLightTheme}
       />

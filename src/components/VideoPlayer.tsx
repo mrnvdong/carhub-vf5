@@ -30,6 +30,9 @@ import {
   History,
   Bookmark,
   ChevronDown,
+  ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Search,
   Mic,
   Quote,
@@ -80,10 +83,12 @@ import { formatSeconds, resolveSoundCloudStream } from '../services/api';
 import { fetchSyncedLyrics, LyricsResult } from '../services/lyrics';
 import { fetchSponsorSegments, getSponsorCategoryLabel } from '../services/sponsorblock';
 import { registerMediaResumeHandler } from '../services/voiceAudio';
+import { stripVietnameseTones } from '../services/voiceCommands';
 import { useCarHardwareControls } from '../hooks/useCarHardwareControls';
 import { useCockpitTelemetry } from '../hooks/useCockpitTelemetry';
 import { useTvLive } from '../hooks/useTvLive';
 import { useNewsAudio, NewsAudioController } from '../hooks/useNewsAudio';
+import { RemoteHostController } from '../hooks/useRemoteHostSession';
 import { CockpitView, VideoSlotRect } from './CockpitView';
 import { TvPlayerStage } from './TvPlayerStage';
 import { Vf5ToolsModal, Vf5ToolsTab } from './Vf5ToolsModal';
@@ -105,6 +110,7 @@ import {
 } from '../services/vf5Tools';
 import {
   attachAudioEq,
+  isEqProcessingActive,
   loadEqSettings,
   updateGlobalEqSettings,
   updateGlobalEqSpeed,
@@ -195,7 +201,10 @@ interface VideoPlayerProps {
   newsAutoPlayNonce?: number;
   hudOpenNonce?: number;
   remoteTogglePlayNonce?: number;
+  forceMusicFocusNonce?: number;
+  externalNotice?: { id: number; text: string } | null;
   onStartRouteToTarget?: (target: PendingNavTarget) => void;
+  remoteHost?: RemoteHostController;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -266,7 +275,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   newsAutoPlayNonce = 0,
   hudOpenNonce = 0,
   remoteTogglePlayNonce = 0,
+  forceMusicFocusNonce = 0,
+  externalNotice = null,
   onStartRouteToTarget,
+  remoteHost,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeWrapperRef = useRef<HTMLDivElement>(null);
@@ -280,20 +292,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const tvPageRectRef = useRef<VideoSlotRect | null>(null);
   const cockpitTvRectRef = useRef<VideoSlotRect | null>(null);
 
+  const isOfflineStandby = streamData.id === 'offline_standby';
   const isSoundCloudTrack =
-    streamData.source === 'soundcloud' || streamData.id.startsWith('sc_');
+    !isOfflineStandby && (streamData.source === 'soundcloud' || streamData.id.startsWith('sc_'));
   const isSoundCloudTrackRef = useRef<boolean>(isSoundCloudTrack);
   isSoundCloudTrackRef.current = isSoundCloudTrack;
 
   const [ytBootVideoId, setYtBootVideoId] = useState<string | null>(() =>
-    isSoundCloudTrack ? null : streamData.id
+    isSoundCloudTrack || isOfflineStandby ? null : streamData.id
   );
-  const loadedVideoIdRef = useRef<string>(isSoundCloudTrack ? '' : streamData.id);
-  const latestVideoIdRef = useRef<string>(isSoundCloudTrack ? '' : streamData.id);
+  const loadedVideoIdRef = useRef<string>(
+    isSoundCloudTrack || isOfflineStandby ? '' : streamData.id
+  );
+  const latestVideoIdRef = useRef<string>(
+    isSoundCloudTrack || isOfflineStandby ? '' : streamData.id
+  );
   const iframeReadyRef = useRef<boolean>(false);
   const consecutiveErrorsRef = useRef<number>(0);
   const errorSkipTimerRef = useRef<number | null>(null);
   const lastManualSeekAtRef = useRef<number>(0);
+  const failSoundCloudRef = useRef<((msg: string) => void) | null>(null);
 
   // SponsorBlock state & anti-loop tracking
   const [sponsorSegments, setSponsorSegments] = useState<SponsorSegment[]>([]);
@@ -309,9 +327,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const onNextRef = useRef(onNext);
   const repeatModeRef = useRef(repeatMode);
+  const hasNextRef = useRef(hasNext);
   useEffect(() => {
     onNextRef.current = onNext;
     repeatModeRef.current = repeatMode;
+    hasNextRef.current = hasNext;
   });
 
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -350,6 +370,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [confirmClearHistory, setConfirmClearHistory] = useState<boolean>(false);
   const [showScalePopover, setShowScalePopover] = useState<boolean>(false);
   const [showAppLauncher, setShowAppLauncher] = useState<boolean>(false);
+  const [isDockCollapsed, setIsDockCollapsed] = useState<boolean>(false);
   // Vị trí thanh điều hướng (KHÔNG đè nội dung & né 100% menu trái cố định của CarPlay!):
   // - 'right' (Mặc định): Thanh mini gọn bên PHẢI chỉ 3 nút lớn [Cockpit • Menu • QR] — giữ 100% chiều cao, 0% đè nội dung!
   // - 'bottom': Thanh ngang dưới đáy
@@ -879,12 +900,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   const initialEmbedUrl = useMemo(() => {
-    if (!ytBootVideoId) return '';
+    if (!ytBootVideoId || ytBootVideoId === 'offline_standby') return '';
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const shouldSuppressAutoplay =
+      isTvViewRef.current || cockpitTvModeRef.current || railSection === 'news' || railSection === 'movies';
     const params = new URLSearchParams({
       enablejsapi: '1',
       widgetid: '1',
-      autoplay: '1',
+      autoplay: shouldSuppressAutoplay ? '0' : '1',
       playsinline: '1',
       modestbranding: '1',
       rel: '0',
@@ -896,6 +919,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       params.set('widget_referrer', origin);
     }
     return `https://www.youtube.com/embed/${ytBootVideoId}?${params.toString()}`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ytBootVideoId]);
 
   // Helper dừng sạch SoundCloud <audio> + Hls.js khi chuyển sang YouTube hoặc đổi bài
@@ -922,12 +946,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setDragTime(null);
     setDuration(streamData.duration || 0);
     setEmbedError(null);
-    setIsBuffering(true);
 
     if (errorSkipTimerRef.current) {
       window.clearTimeout(errorSkipTimerRef.current);
       errorSkipTimerRef.current = null;
     }
+
+    if (isOfflineStandby) {
+      teardownSoundCloudAudio();
+      postEmbedCommand('pauseVideo');
+      setIsPlaying(false);
+      setIsBuffering(false);
+      return;
+    }
+
+    setIsBuffering(true);
 
     // 1. NGUỒN SOUNDCLOUD (Native <audio> MP3 / iOS Native HLS / Lazy hls.js trên Chrome)
     if (isSoundCloudTrack) {
@@ -940,7 +973,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         consecutiveErrorsRef.current += 1;
         setIsPlaying(false);
         setIsBuffering(false);
-        if (consecutiveErrorsRef.current <= 4 && hasNext) {
+        if (consecutiveErrorsRef.current <= 4 && hasNextRef.current) {
           setEmbedError(`${msg} — Tự chuyển bài tiếp theo...`);
           errorSkipTimerRef.current = window.setTimeout(() => {
             onNextRef.current();
@@ -949,6 +982,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setEmbedError(`${msg}. Hãy chọn bài khác.`);
         }
       };
+      failSoundCloudRef.current = failSoundCloud;
 
       (async () => {
         const info = await resolveSoundCloudStream(streamData.id, controller.signal);
@@ -980,10 +1014,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 setIsBuffering(false);
               }
             })
-            .catch(() => {
-              if (!controller.signal.aborted) {
+            .catch((err: any) => {
+              if (controller.signal.aborted) return;
+              if (err?.name === 'NotAllowedError' || err?.name === 'AbortError') {
                 setIsPlaying(false);
                 setIsBuffering(false);
+              } else {
+                failSoundCloud('Không phát được luồng nhạc SoundCloud');
               }
             });
         } else {
@@ -1026,10 +1063,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       return () => {
         controller.abort();
+        failSoundCloudRef.current = null;
       };
     }
 
     // 2. NGUỒN YOUTUBE (0ms qua loadVideoById)
+    failSoundCloudRef.current = null;
     teardownSoundCloudAudio();
     latestVideoIdRef.current = streamData.id;
 
@@ -1052,9 +1091,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [
     streamData.id,
     streamData.duration,
+    isOfflineStandby,
     isSoundCloudTrack,
     ytBootVideoId,
-    hasNext,
     postEmbedCommand,
     sendWidgetHandshake,
     teardownSoundCloudAudio,
@@ -1063,6 +1102,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     return () => {
       teardownSoundCloudAudio();
+      if (singleTapTimerRef.current) window.clearTimeout(singleTapTimerRef.current);
+      if (errorSkipTimerRef.current) window.clearTimeout(errorSkipTimerRef.current);
     };
   }, [teardownSoundCloudAudio]);
 
@@ -1144,6 +1185,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         setEmbedError(null);
         setIsPlaying(true);
         setIsBuffering(false);
+        // Chống chồng tiếng: nếu người dùng bấm Play trực tiếp trong iframe YouTube -> dừng TV & Báo Audio!
+        setIsTvSessionActive(false);
+        setCockpitTvMode(false);
+        setCockpitNewsMode(false);
+        newsControllerRef.current?.pauseNews();
       } else if (state === 2) {
         setIsPlaying(false);
         setIsBuffering(false);
@@ -1328,6 +1374,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const tvVid = tvController.videoRef.current;
       if (tvVid && !tvVid.paused) {
         return () => {
+          if (lastManualPauseAtRef.current >= capturedAt) return;
           if (tvVid.paused) {
             tvVid.play().catch(() => {});
           }
@@ -1337,6 +1384,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const newsAudio = newsControllerRef.current?.audioRef.current;
       if (newsAudio && !newsAudio.paused) {
         return () => {
+          if (lastManualPauseAtRef.current >= capturedAt) return;
           if (newsAudio.paused) {
             newsAudio.play().catch(() => {});
           }
@@ -1348,6 +1396,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       );
       if (activeMovieVideo) {
         return () => {
+          if (lastManualPauseAtRef.current >= capturedAt) return;
           if (activeMovieVideo.paused) {
             activeMovieVideo.play().catch(() => {});
           }
@@ -1487,45 +1536,113 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [hasNext, hasPrev, onNext, onPrev, showToast, togglePlay, triggerDoubleTapHeart]
   );
 
-  // Nhận lệnh từ Trợ lý giọng nói: mở kênh TV / VOV Giao thông tương ứng
+  // Nhận lệnh từ Trợ lý giọng nói / Co-Pilot: mở kênh TV / VOV Giao thông tương ứng (so khớp không dấu tiếng Việt!)
   const handledTvCmdRef = useRef<number>(0);
   useEffect(() => {
     if (!tvChannelCommand || tvChannelCommand.nonce === handledTvCmdRef.current) return;
     const channels = tvController.playlist?.channels || [];
     if (channels.length === 0) return;
     handledTvCmdRef.current = tvChannelCommand.nonce;
-    const q = (tvChannelCommand.query || '').toLowerCase().trim();
+    const q = stripVietnameseTones((tvChannelCommand.query || '').toLowerCase().trim());
     if (!q) return;
-    const matched = channels.find((c) => c.name.toLowerCase().includes(q));
+    const matched = channels.find((c) => stripVietnameseTones(c.name.toLowerCase()).includes(q));
     if (matched) {
       pauseAllMusicForTv();
       setIsTvSessionActive(true);
       tvController.setActiveChannel(matched);
       showToast(`📺 Đang mở kênh: ${matched.name}`);
+    } else {
+      showToast(`📺 Không tìm thấy kênh "${tvChannelCommand.query}" trong danh sách M3U`);
     }
   }, [tvChannelCommand, tvController, pauseAllMusicForTv, showToast]);
 
-  // Nhận lệnh từ Trợ lý giọng nói: mở & phát bản tin Báo Audio mới nhất
+  // Nhận lệnh từ Trợ lý giọng nói / Co-Pilot: mở & phát bản tin Báo Audio mới nhất
   const handledNewsAutoRef = useRef<number>(0);
   useEffect(() => {
     if (newsAutoPlayNonce <= 0 || newsAutoPlayNonce === handledNewsAutoRef.current) return;
     if (!newsController.items || newsController.items.length === 0) return;
     handledNewsAutoRef.current = newsAutoPlayNonce;
-    newsController.selectArticle(newsController.items[0], true);
+    newsController.playLatestAudioBulletin();
   }, [newsAutoPlayNonce, newsController]);
 
-  // Nhận lệnh Co-Pilot ghế sau: Play / Pause nhạc trên màn xe
+  // Nhận lệnh Co-Pilot ghế sau: Play / Pause thông minh theo nguồn media đang hoạt động (không bật đè nhạc lên TV/Báo/Phim!)
   const handledRemoteToggleRef = useRef<number>(0);
   useEffect(() => {
     if (remoteTogglePlayNonce <= 0 || remoteTogglePlayNonce === handledRemoteToggleRef.current) return;
     handledRemoteToggleRef.current = remoteTogglePlayNonce;
-    togglePlay();
-  }, [remoteTogglePlayNonce, togglePlay]);
+    if (isTvSessionActive) {
+      const tvVid = tvController.videoRef.current;
+      if (tvVid) {
+        if (tvVid.paused) {
+          pauseAllMusicForTv();
+          tvVid.play().catch(() => {});
+        } else {
+          lastManualPauseAtRef.current = Date.now();
+          tvVid.pause();
+        }
+      }
+      return;
+    }
+    if (newsController.isPlaying || newsController.isTtsSpeaking || isNewsView || cockpitNewsMode) {
+      newsController.togglePlay();
+      return;
+    }
+    if (!isMoviesView) {
+      togglePlay();
+    }
+  }, [
+    remoteTogglePlayNonce,
+    isTvSessionActive,
+    tvController.videoRef,
+    pauseAllMusicForTv,
+    newsController,
+    isNewsView,
+    cockpitNewsMode,
+    isMoviesView,
+    togglePlay,
+  ]);
+
+  // Khi Co-Pilot ghế sau gửi lệnh phát bài nhạc (kể cả trùng bài hiện tại đang tạm dừng) -> tắt TV/Báo và phát nhạc ngay!
+  const handledForceMusicRef = useRef<number>(0);
+  useEffect(() => {
+    if (forceMusicFocusNonce <= 0 || forceMusicFocusNonce === handledForceMusicRef.current) return;
+    handledForceMusicRef.current = forceMusicFocusNonce;
+    setIsTvSessionActive(false);
+    setCockpitTvMode(false);
+    setCockpitNewsMode(false);
+    newsControllerRef.current?.pauseNews();
+    handlePlayExplicit();
+  }, [forceMusicFocusNonce, handlePlayExplicit]);
+
+  // Hiển thị thông báo từ App.tsx (VD: phản hồi trợ lý giọng nói hoặc xếp hàng đợi từ hàng ghế sau)
+  const handledExtNoticeRef = useRef<number>(0);
+  useEffect(() => {
+    if (!externalNotice || externalNotice.id === handledExtNoticeRef.current) return;
+    handledExtNoticeRef.current = externalNotice.id;
+    showToast(externalNotice.text);
+  }, [externalNotice, showToast]);
+
+  // Đồng bộ trạng thái Fullscreen chuẩn khi nhấn Esc hoặc cử chỉ hệ điều hành
+  useEffect(() => {
+    const onFsChange = () => {
+      if (!document.fullscreenElement) {
+        setIsFullscreen(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
 
   // Điều khiển phím cứng vô lăng VF5 & Apple CarPlay MediaSession
-  // (VÁ LỖI: nhường quyền hoàn toàn khi đang nghe Báo Audio, xem Phim hoặc xem TV Live để bấm vô lăng không bật đè nhạc!)
+  // (Nhường quyền hoàn toàn khi đang nghe/mở Báo Audio, xem Phim hoặc xem TV Live để bấm vô lăng không bật đè nhạc!)
   useCarHardwareControls({
-    enabled: !newsController.isPlaying && !isMoviesView && !isTvSessionActive,
+    enabled:
+      !newsController.isPlaying &&
+      !newsController.isTtsSpeaking &&
+      !isNewsView &&
+      !cockpitNewsMode &&
+      !isMoviesView &&
+      !isTvSessionActive,
     streamData,
     isPlaying,
     currentTime,
@@ -1622,10 +1739,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* AUDIO NATIVE DUY NHẤT CHO BÁO AUDIO BÁO MỚI (0ms reload khi chuyển giữa Báo Audio <-> Cockpit!) */}
       <audio ref={newsController.audioRef} playsInline preload="auto" className="hidden" />
 
-      {/* AUDIO NATIVE DUY NHẤT CHO SOUNDCLOUD (MP3 Progressive + iOS Native HLS + Lazy hls.js + DSP Equalizer) */}
+      {/* AUDIO NATIVE DUY NHẤT CHO SOUNDCLOUD (MP3 Progressive + iOS Native HLS + Lazy hls.js + DSP Equalizer an toàn iOS) */}
       <audio
         ref={audioRef}
-        crossOrigin="anonymous"
+        crossOrigin={isEqProcessingActive(eqSettings) ? 'anonymous' : undefined}
         playsInline
         preload="auto"
         className="hidden"
@@ -1646,6 +1763,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onWaiting={() => {
           if (!isSoundCloudTrackRef.current) return;
           setIsBuffering(true);
+        }}
+        onError={() => {
+          if (!isSoundCloudTrackRef.current || hlsRef.current) return;
+          failSoundCloudRef.current?.('Luồng nhạc SoundCloud gặp lỗi phát');
         }}
         onTimeUpdate={() => {
           if (!isSoundCloudTrackRef.current) return;
@@ -1739,14 +1860,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* MINI SPEED & TURN PILL: Khi đang mở tab Nhạc/Khám phá/TV mà vẫn đang dẫn đường -> 1 chạm quay về Cockpit! */}
+      {/* MINI SPEED & TURN PILL: Căn giữa mép trên để KHÔNG đè nút góc phải trên các màn TV / Phim / Khám phá */}
       {!isCockpitView && !isFullscreen && activeNavSummary && (
         <button
           type="button"
           onClick={() => onChangeRailSection('cockpit')}
           className={`fixed ${
-            dockMode === 'top' ? 'top-[4.5rem] short:top-[4.1rem]' : 'top-2'
-          } right-2.5 z-40 max-w-[min(360px,calc(100vw-6rem))] px-3 py-1.5 rounded-full border backdrop-blur-2xl shadow-2xl flex items-center gap-2 active:scale-95 transition ${
+            dockMode === 'top' && !isDockCollapsed ? 'top-[4.5rem] short:top-[4.1rem]' : 'top-2'
+          } left-1/2 -translate-x-1/2 z-40 max-w-[min(360px,calc(100vw-6rem))] px-3 py-1.5 rounded-full border backdrop-blur-2xl shadow-2xl flex items-center gap-2 active:scale-95 transition ${
             telemetry.roadInfo?.speedLimit &&
             telemetry.speedKmh !== null &&
             telemetry.speedKmh >= telemetry.roadInfo.speedLimit + 5
@@ -1769,12 +1890,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
 
       {/* =====================================================================
-          1. MENU NỔI SIÊU GỌN CHUẨN CARPLAY (TOÀN MÀN HÌNH 100% — CHỈ 3 NÚT LỚN: COCKPIT • MENU • QR)
-             - 'right' (mặc định): Viên thuốc dọc nổi gọn bên PHẢI giữa màn (né CarPlay bên trái, không che tốc độ/nút Play!)
-             - 'top': Viên thuốc ngang nổi giữa mép TRÊN
-             - 'bottom': Viên thuốc ngang nổi giữa mép DƯỚI
+          1. MENU NỔI SIÊU GỌN CHUẨN CARPLAY (TOÀN MÀN HÌNH 100% — 3 NÚT LỚN: COCKPIT • MENU • QR + 1 CHẠM THU GỌN)
+             - 'right' (mặc định): Viên thuốc dọc nổi gọn bên PHẢI giữa màn (kèm nút thu gọn sát mép khi muốn xem full 100%)
+             - 'top' / 'bottom': Viên thuốc ngang nổi giữa mép TRÊN / DƯỚI
          ===================================================================== */}
-      {!isFullscreen && (
+      {!isFullscreen && isDockCollapsed && (
+        <button
+          type="button"
+          onClick={() => setIsDockCollapsed(false)}
+          aria-label="Mở lại menu nổi CarHub"
+          title="Hiện menu nổi (Cockpit • Menu • QR)"
+          className={`fixed z-40 border-2 backdrop-blur-2xl shadow-2xl flex items-center justify-center gap-1 active:scale-95 transition ${
+            dockMode === 'right'
+              ? 'right-0 top-1/2 -translate-y-1/2 pl-1.5 pr-1 py-3.5 rounded-l-2xl border-r-0 flex-col'
+              : dockMode === 'top'
+              ? 'top-0 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-b-2xl border-t-0 flex-row'
+              : 'bottom-0 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-t-2xl border-b-0 flex-row'
+          } ${
+            isLightTheme
+              ? 'bg-white/92 border-slate-300 text-slate-900'
+              : 'bg-[#0b101d]/88 border-white/25 text-white'
+          }`}
+        >
+          {dockMode === 'right' ? (
+            <ChevronLeft className="w-4 h-4 shrink-0" />
+          ) : dockMode === 'top' ? (
+            <ChevronDown className="w-4 h-4 shrink-0" />
+          ) : (
+            <ChevronUp className="w-4 h-4 shrink-0" />
+          )}
+          <span className="text-[10px] font-black leading-none">Menu</span>
+          {remoteHost && remoteHost.pendingDevices.length > 0 && (
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+          )}
+        </button>
+      )}
+
+      {!isFullscreen && !isDockCollapsed && (
         <aside
           aria-label="Menu nổi nhanh CarHub"
           className={`fixed z-40 border-2 backdrop-blur-2xl shadow-2xl transition-all ${
@@ -1855,9 +2007,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <button
             type="button"
             onClick={() => handleOpenVf5Tools('qr')}
-            aria-label="Mở mã QR quét bằng điện thoại"
-            title="Quét mã QR trên điện thoại để chọn phát lên xe"
-            className={`${
+            aria-label="Mở mã QR bảo mật quét bằng điện thoại"
+            title="Quét mã QR phiên tạm thời (PIN 4 số + duyệt máy) trên điện thoại"
+            className={`relative ${
               dockMode === 'right'
                 ? 'w-[3.75rem] h-[3.4rem] short:w-[3.5rem] short:h-[3.1rem] rounded-2xl flex-col gap-1 px-1'
                 : 'h-11 short:h-10 px-4 rounded-full flex-row gap-1.5'
@@ -1875,8 +2027,86 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             >
               QR
             </span>
+            {remoteHost && remoteHost.pendingDevices.length > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black flex items-center justify-center animate-bounce shadow">
+                {remoteHost.pendingDevices.length}
+              </span>
+            )}
+          </button>
+
+          {/* Nút thu gọn sát mép màn hình (1 chạm giải phóng 100% tầm nhìn khi xem phim/bản đồ/TV) */}
+          <button
+            type="button"
+            onClick={() => setIsDockCollapsed(true)}
+            aria-label="Thu gọn menu nổi sát mép"
+            title="Ẩn gọn sát mép"
+            className={`${
+              dockMode === 'right' ? 'w-full h-6 rounded-xl' : 'w-8 h-9 rounded-full'
+            } flex items-center justify-center opacity-70 hover:opacity-100 active:scale-90 transition ${
+              isLightTheme ? 'hover:bg-slate-200/80 text-slate-600' : 'hover:bg-white/15 text-white/75'
+            }`}
+          >
+            {dockMode === 'right' ? (
+              <ChevronRight className="w-4 h-4" />
+            ) : dockMode === 'top' ? (
+              <ChevronUp className="w-4 h-4" />
+            ) : (
+              <ChevronDown className="w-4 h-4" />
+            )}
           </button>
         </aside>
+      )}
+
+      {/* BANNER DUYỆT THIẾT BỊ ĐIỆN THOẠI MỚI 1 CHẠM (Hiển thị ngay trên Cockpit kể cả khi đã đóng bảng QR!) */}
+      {!isFullscreen && remoteHost && remoteHost.pendingDevices.length > 0 && (
+        <div
+          className={`fixed ${
+            dockMode === 'top' && !isDockCollapsed ? 'top-[4.5rem]' : 'top-2.5'
+          } left-1/2 -translate-x-1/2 z-[110] w-[min(94vw,30rem)] rounded-2xl border-2 border-amber-400/70 bg-slate-950/95 text-white backdrop-blur-2xl shadow-2xl px-3.5 py-2.5 flex items-center justify-between gap-2.5 animate-ios-sheet-in`}
+        >
+          <div className="min-w-0 flex-1">
+            <p className="text-xs sm:text-sm font-black text-amber-300 truncate">
+              📱 {remoteHost.pendingDevices[0].label} xin điều khiển xe
+            </p>
+            <p className="text-[11px] font-semibold text-slate-300 truncate">
+              Chỉ bấm Cho phép nếu đúng người ngồi trên xe bạn
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={async () => {
+                const dev = remoteHost.pendingDevices[0];
+                if (!dev) return;
+                const ok = await remoteHost.approveDevice(dev.id);
+                showToast(
+                  ok
+                    ? `✅ Đã cho phép "${dev.label}" điều khiển trong chuyến này`
+                    : `⚠️ Lỗi mạng — chưa duyệt được "${dev.label}", thử lại`
+                );
+              }}
+              className="h-10 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black active:scale-95 transition"
+            >
+              Cho phép
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                const dev = remoteHost.pendingDevices[0];
+                if (!dev) return;
+                const ok = await remoteHost.blockDevice(dev.id);
+                showToast(
+                  ok
+                    ? `🚫 Đã chặn thiết bị "${dev.label}"`
+                    : `⚠️ Lỗi mạng — chưa chặn được "${dev.label}", thử lại`
+                );
+              }}
+              className="h-10 px-3 rounded-xl bg-rose-600/30 hover:bg-rose-600/50 border border-rose-400/50 text-rose-200 text-xs font-black active:scale-95 transition"
+            >
+              Chặn
+            </button>
+          </div>
+        </div>
       )}
 
       {/* BẢNG MENU NHANH CARHUB (APP LAUNCHER + TÙY CHỈNH VỊ TRÍ THANH MENU CHO CARPLAY) */}
@@ -2196,11 +2426,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
 
       {/* =====================================================================
-          2. KHÔNG GIAN HIỂN THỊ CHÍNH
+          2. KHÔNG GIAN HIỂN THỊ CHÍNH (Tự chừa vùng an toàn trong suốt cho menu nổi ở các trang danh sách để không bao giờ che nút!)
          ===================================================================== */}
       <div
         className={`relative z-10 flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden ${
-          isFullscreen ? 'p-0' : 'p-2.5 sm:p-3.5 md:p-4 short:p-2 vshort:p-1.5'
+          isFullscreen
+            ? 'p-0'
+            : `p-2.5 sm:p-3.5 md:p-4 short:p-2 vshort:p-1.5 ${
+                !isDockCollapsed && !isCockpitView
+                  ? dockMode === 'right'
+                    ? 'sm:pr-[5.1rem]'
+                    : dockMode === 'bottom'
+                    ? 'pb-[4.6rem]'
+                    : 'pt-[4.6rem]'
+                  : ''
+              }`
         }`}
       >
         {/* -------------------------------------------------------------------
@@ -3646,6 +3886,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         syncCode={syncCode}
         onSaveSyncCode={onSaveSyncCode}
         onOpenSyncSettings={() => onOpenSyncModal('sync')}
+        remoteHost={remoteHost}
         telemetry={telemetry}
         activeNavSummary={activeNavSummary}
         batterySoc={batterySoc}

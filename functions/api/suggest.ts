@@ -1,22 +1,32 @@
 // Cloudflare Pages Function: /api/suggest
+import { buildTrustedJsonHeaders, isTrustedAppRequest } from '../_lib/security';
+
+export async function onRequestOptions(context: any) {
+  return new Response(null, { status: 204, headers: buildTrustedJsonHeaders(context.request) });
+}
+
 export async function onRequestGet(context: any) {
   const { request } = context;
-  const url = new URL(request.url);
-  const q = url.searchParams.get('q');
-
-  if (!q || !q.trim()) {
+  const CORS_HEADERS = buildTrustedJsonHeaders(request);
+  if (!isTrustedAppRequest(request)) {
     return new Response(JSON.stringify({ suggestions: [] }), {
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-      },
+      status: 403,
+      headers: CORS_HEADERS,
+    });
+  }
+  const url = new URL(request.url);
+  const q = (url.searchParams.get('q') || '').trim().slice(0, 100);
+
+  if (!q) {
+    return new Response(JSON.stringify({ suggestions: [] }), {
+      headers: CORS_HEADERS,
     });
   }
 
   try {
     // client=firefox&ds=yt returns clean UTF-8 JSON array ["query", ["sug1", "sug2", ...]]
     const suggestUrl = `https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&hl=vi&gl=VN&q=${encodeURIComponent(
-      q.trim()
+      q
     )}`;
     const res = await fetch(suggestUrl, {
       headers: {
@@ -36,8 +46,7 @@ export async function onRequestGet(context: any) {
 
       return new Response(JSON.stringify({ suggestions }), {
         headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Access-Control-Allow-Origin': '*',
+          ...CORS_HEADERS,
           'Cache-Control': 'public, max-age=600',
         },
       });
@@ -47,9 +56,6 @@ export async function onRequestGet(context: any) {
   }
 
   return new Response(JSON.stringify({ suggestions: [] }), {
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
-    },
+    headers: CORS_HEADERS,
   });
 }

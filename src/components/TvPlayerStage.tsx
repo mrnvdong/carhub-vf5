@@ -239,6 +239,7 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
       if (!video) return;
 
       await cleanupEngines();
+      if (activeChannelIdRef.current !== ch.id) return;
       activeStreamInfoRef.current = streamInfo;
       netRetryCountRef.current = 0;
       mediaRetryCountRef.current = 0;
@@ -253,6 +254,7 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
       if (streamInfo.streamType === 'mpd' || ch.manifestType === 'mpd') {
         try {
           const shakaMod: any = await import('shaka-player');
+          if (activeChannelIdRef.current !== ch.id) return;
           const shaka = shakaMod.default || shakaMod;
           if (shaka?.polyfill?.installAll) shaka.polyfill.installAll();
 
@@ -267,6 +269,12 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
 
           const player = new shaka.Player();
           await player.attach(video);
+          if (activeChannelIdRef.current !== ch.id) {
+            try {
+              await player.destroy();
+            } catch {}
+            return;
+          }
           shakaRef.current = player;
 
           const clearKeys = parseClearKeyMap(ch.clearKey);
@@ -344,6 +352,7 @@ export const TvPlayerStage: React.FC<TvPlayerStageProps> = ({
 
       try {
         const HlsModule = await import('hls.js');
+        if (activeChannelIdRef.current !== ch.id) return;
         const Hls = HlsModule.default;
         if (!Hls || !Hls.isSupported()) {
           video.src = playUrl;

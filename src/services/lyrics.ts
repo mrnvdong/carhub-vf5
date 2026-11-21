@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from '../utils/timedFetch';
+
 export interface LyricLine {
   time: number;
   text: string;
@@ -87,11 +89,12 @@ export async function fetchSyncedLyrics(
 
   // 1. Primary: Cloudflare Edge /api/lyrics (combines LRCLIB + YouTube TimedText Captions)
   try {
-    const apiRes = await fetch(
+    const apiRes = await fetchWithTimeout(
       `/api/lyrics?id=${encodeURIComponent(videoId)}&title=${encodeURIComponent(
         title
       )}&artist=${encodeURIComponent(artist)}`,
-      { signal: AbortSignal.timeout(6000) }
+      {},
+      6000
     );
     const contentType = apiRes.headers.get('content-type') || '';
     if (apiRes.ok && contentType.includes('application/json')) {
@@ -114,9 +117,11 @@ export async function fetchSyncedLyrics(
   const queries = buildSearchCandidates(title, artist);
   for (const q of queries) {
     try {
-      const res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
-        signal: AbortSignal.timeout(3500),
-      });
+      const res = await fetchWithTimeout(
+        `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`,
+        {},
+        3500
+      );
       if (!res.ok) continue;
       const items = await res.json();
       if (!Array.isArray(items) || items.length === 0) continue;
