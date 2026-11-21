@@ -1127,11 +1127,15 @@ export const CoPilotRemoteView: React.FC<CoPilotRemoteViewProps> = ({
               <button
                 type="button"
                 disabled={locked}
-                onClick={() => dispatchCommand('toggleViewMode', null, '🎬 Đổi Nhạc / Video')}
-                className="h-11 rounded-xl bg-slate-950 border border-white/10 text-xs font-extrabold flex items-center justify-center gap-1.5 active:scale-95"
+                onClick={() => dispatchCommand('toggleViewMode', null, '🎬 Đổi Nhạc / Video YouTube')}
+                className={`h-11 rounded-xl border text-xs font-extrabold flex items-center justify-center gap-1.5 active:scale-95 ${
+                  liveSnapshot?.viewMode === 'classic'
+                    ? 'bg-sky-500/25 border-sky-400/60 text-sky-200'
+                    : 'bg-slate-950 border-white/10 text-slate-100'
+                }`}
               >
-                <Tv className="w-4 h-4 text-violet-300" />
-                <span>Nhạc/Vid</span>
+                <Tv className="w-4 h-4 text-sky-300" />
+                <span>{liveSnapshot?.viewMode === 'classic' ? 'Đang Video' : 'Đang Nhạc'}</span>
               </button>
               <button
                 type="button"

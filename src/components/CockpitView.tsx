@@ -1760,16 +1760,16 @@ export const CockpitView: React.FC<CockpitViewProps> = React.memo(
                       <button
                         type="button"
                         onClick={onOpenFullVideo}
-                        aria-label="Mở Video YouTube toàn màn hình"
-                        title="Phóng to Video toàn màn hình"
-                        className={`h-9 px-2.5 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 whitespace-nowrap shrink-0 active:scale-95 transition ${
+                        aria-label="Mở Video YouTube toàn màn hình nguyên màn"
+                        title="Phóng to Video tràn kín 100% toàn màn hình"
+                        className={`h-9 px-3 rounded-xl border text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 active:scale-95 transition shadow-sm ${
                           isLightTheme
-                            ? 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700'
-                            : 'bg-white/10 hover:bg-white/20 border-white/15 text-sky-300'
+                            ? 'bg-blue-600 hover:bg-blue-700 border-blue-600 text-white'
+                            : 'bg-sky-400 hover:bg-sky-300 border-sky-300 text-slate-950'
                         }`}
                       >
                         <Maximize2 className="w-3.5 h-3.5 shrink-0" />
-                        <span>Toàn màn</span>
+                        <span>Toàn màn hình</span>
                       </button>
                     ) : (
                       <button

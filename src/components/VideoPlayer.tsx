@@ -17,6 +17,7 @@ import {
   Maximize2,
   Minimize2,
   Headphones,
+  Film,
   Tv,
   ShieldCheck,
   Loader2,
@@ -375,7 +376,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [duration, setDuration] = useState<number>(streamData.duration || 0);
 
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [showCinemaBar, setShowCinemaBar] = useState<boolean>(true);
+  const [showCinemaBar, setShowCinemaBar] = useState<boolean>(false);
+  const [fsCornerExpanded, setFsCornerExpanded] = useState<boolean>(false);
+  const fullscreenReturnSectionRef = useRef<RailSection | null>(null);
+  const fsCornerTimerRef = useRef<number | null>(null);
+  const fsCinemaTimerRef = useRef<number | null>(null);
   const [hardwareNotice, setHardwareNotice] = useState<string | null>(null);
   const [confirmClearHistory, setConfirmClearHistory] = useState<boolean>(false);
   const [showScalePopover, setShowScalePopover] = useState<boolean>(false);
@@ -496,12 +501,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onChangeRailSection('news');
   }, [onChangeRailSection]);
 
-  const handleOpenFullVideo = useCallback(() => {
-    setCockpitTvMode(false);
-    setCockpitNewsMode(false);
-    onChangeRailSection('nowPlaying');
-  }, [onChangeRailSection]);
-
   const handleOpenCockpitWithNews = useCallback(() => {
     setCockpitNewsMode(true);
     setCockpitTvMode(false);
@@ -572,13 +571,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     applyTvStageWrapperPosition(activeRect);
   }, [showTvInPage, showTvInCockpit, isFullscreen, isTvSessionActive, applyTvStageWrapperPosition]);
 
+  const showVideoInCockpitRef = useRef<boolean>(showVideoInCockpit);
+  showVideoInCockpitRef.current = showVideoInCockpit;
+
   // Đồng bộ trực tiếp tọa độ <iframe> duy nhất vào khung Video 16:9 trong Cockpit (0 re-render khi kéo chia tỉ lệ!)
   const handleCockpitVideoSlotRectChange = useCallback((rect: VideoSlotRect | null) => {
     cockpitVideoRectRef.current = rect;
     const wrapper = iframeWrapperRef.current;
 
     if (rect && rect.width > 40 && rect.height > 40) {
-      if (wrapper) {
+      if (wrapper && showVideoInCockpitRef.current) {
         wrapper.style.top = `${rect.top}px`;
         wrapper.style.left = `${rect.left}px`;
         wrapper.style.bottom = 'auto';
@@ -588,7 +590,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
       setHasCockpitVideoSlot((prev) => (prev ? prev : true));
     } else {
-      if (wrapper) {
+      if (wrapper && showVideoInCockpitRef.current) {
         wrapper.style.top = '';
         wrapper.style.left = '';
         wrapper.style.bottom = '';
@@ -771,6 +773,161 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setHardwareNotice((prev) => (prev === label ? null : prev));
     }, 2200);
   }, []);
+
+  const clearFullscreenTimers = useCallback(() => {
+    if (fsCornerTimerRef.current) {
+      window.clearTimeout(fsCornerTimerRef.current);
+      fsCornerTimerRef.current = null;
+    }
+    if (fsCinemaTimerRef.current) {
+      window.clearTimeout(fsCinemaTimerRef.current);
+      fsCinemaTimerRef.current = null;
+    }
+  }, []);
+
+  const armFsCornerAutoDim = useCallback(() => {
+    setFsCornerExpanded(true);
+    if (fsCornerTimerRef.current) window.clearTimeout(fsCornerTimerRef.current);
+    fsCornerTimerRef.current = window.setTimeout(() => {
+      fsCornerTimerRef.current = null;
+      setFsCornerExpanded(false);
+    }, 3000);
+  }, []);
+
+  const armCinemaBarAutoHide = useCallback(() => {
+    if (fsCinemaTimerRef.current) window.clearTimeout(fsCinemaTimerRef.current);
+    fsCinemaTimerRef.current = window.setTimeout(() => {
+      fsCinemaTimerRef.current = null;
+      setShowCinemaBar(false);
+      setFsCornerExpanded(false);
+    }, 6500);
+  }, []);
+
+  const exitPureVideoFullscreen = useCallback(() => {
+    clearFullscreenTimers();
+    setShowCinemaBar(false);
+    setFsCornerExpanded(false);
+    setIsFullscreen(false);
+    try {
+      if (document.fullscreenElement && typeof document.exitFullscreen === 'function') {
+        document.exitFullscreen().catch(() => {});
+      }
+    } catch {}
+    const returnTo = fullscreenReturnSectionRef.current;
+    fullscreenReturnSectionRef.current = null;
+    if (returnTo === 'cockpit') {
+      onChangeRailSection('cockpit');
+    }
+  }, [clearFullscreenTimers, onChangeRailSection]);
+
+  const handleSwitchToMusicMode = useCallback(() => {
+    if (isFullscreen) {
+      clearFullscreenTimers();
+      setShowCinemaBar(false);
+      setFsCornerExpanded(false);
+      setIsFullscreen(false);
+      fullscreenReturnSectionRef.current = null;
+      try {
+        if (document.fullscreenElement && typeof document.exitFullscreen === 'function') {
+          document.exitFullscreen().catch(() => {});
+        }
+      } catch {}
+    }
+    setIsTvSessionActive(false);
+    setCockpitTvMode(false);
+    setCockpitNewsMode(false);
+    newsControllerRef.current?.pauseNews();
+    if (isVideoMode) {
+      onViewModeChange('ytmusic');
+    }
+  }, [isFullscreen, clearFullscreenTimers, isVideoMode, onViewModeChange]);
+
+  const handleSwitchToVideoMode = useCallback(() => {
+    setIsTvSessionActive(false);
+    setCockpitTvMode(false);
+    setCockpitNewsMode(false);
+    newsControllerRef.current?.pauseNews();
+    if (isSoundCloudTrack) {
+      if (musicSource === 'soundcloud') {
+        onChangeMusicSource('youtube');
+        onViewModeChange('classic');
+        showToast('🎬 Đã chuyển sang chế độ Video YouTube');
+      } else {
+        onViewModeChange('classic');
+        showToast('☁️ Bài đang phát từ SoundCloud (chỉ âm thanh) — hãy chọn bài YouTube để xem Video');
+      }
+      return;
+    }
+    if (!isVideoMode) {
+      onViewModeChange('classic');
+    }
+  }, [isSoundCloudTrack, musicSource, onChangeMusicSource, onViewModeChange, isVideoMode, showToast]);
+
+  const enterPureVideoFullscreen = useCallback(
+    (returnSection?: RailSection) => {
+      if (isSoundCloudTrack && musicSource !== 'soundcloud') {
+        showToast('☁️ Bài hiện tại là SoundCloud (chỉ âm thanh) — hãy chọn bài YouTube để xem toàn màn hình');
+        return;
+      }
+      if (isSoundCloudTrack && musicSource === 'soundcloud') {
+        onChangeMusicSource('youtube');
+      }
+      fullscreenReturnSectionRef.current = returnSection ?? railSection;
+      setIsTvSessionActive(false);
+      setCockpitTvMode(false);
+      setCockpitNewsMode(false);
+      newsControllerRef.current?.pauseNews();
+      if (!isVideoMode) {
+        onViewModeChange('classic');
+      }
+      if (railSection !== 'nowPlaying') {
+        onChangeRailSection('nowPlaying');
+      }
+      setShowCinemaBar(false);
+      setIsFullscreen(true);
+      armFsCornerAutoDim();
+      try {
+        if (
+          containerRef.current &&
+          typeof containerRef.current.requestFullscreen === 'function'
+        ) {
+          containerRef.current.requestFullscreen().catch(() => {});
+        }
+      } catch {}
+    },
+    [
+      isSoundCloudTrack,
+      musicSource,
+      onChangeMusicSource,
+      railSection,
+      isVideoMode,
+      onViewModeChange,
+      onChangeRailSection,
+      armFsCornerAutoDim,
+      showToast,
+    ]
+  );
+
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      exitPureVideoFullscreen();
+    } else {
+      enterPureVideoFullscreen(railSection);
+    }
+  }, [isFullscreen, exitPureVideoFullscreen, enterPureVideoFullscreen, railSection]);
+
+  const handleOpenFullVideo = useCallback(() => {
+    enterPureVideoFullscreen('cockpit');
+  }, [enterPureVideoFullscreen]);
+
+  // Nếu đang Fullscreen Video mà chuyển sang bài SoundCloud -> tự thoát Fullscreen gọn gàng
+  useEffect(() => {
+    if (isFullscreen && isSoundCloudTrack) {
+      exitPureVideoFullscreen();
+    }
+  }, [isFullscreen, isSoundCloudTrack, exitPureVideoFullscreen]);
+
+  useEffect(() => clearFullscreenTimers, [clearFullscreenTimers]);
 
   // Kho TV Live & Ping dùng chung cho cả Cockpit TV lẫn trang TV Live đầy đủ (chỉ nạp khi bật TV!)
   const tvController = useTvLive(isTvSessionActive || isTvView, showToast);
@@ -1747,13 +1904,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Đồng bộ trạng thái Fullscreen chuẩn khi nhấn Esc hoặc cử chỉ hệ điều hành
   useEffect(() => {
     const onFsChange = () => {
-      if (!document.fullscreenElement) {
-        setIsFullscreen(false);
+      if (!document.fullscreenElement && isFullscreen) {
+        exitPureVideoFullscreen();
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFullscreen) {
+        exitPureVideoFullscreen();
       }
     };
     document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
-  }, []);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isFullscreen, exitPureVideoFullscreen]);
 
   // Điều khiển phím cứng vô lăng VF5 & Apple CarPlay MediaSession
   // (Nhường quyền hoàn toàn khi đang nghe/mở Báo Audio, xem Phim hoặc xem TV Live để bấm vô lăng không bật đè nhạc!)
@@ -1778,28 +1944,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onSeekTo: handleSeekTo,
     onHardwareAction: showToast,
   });
-
-  const toggleFullscreen = () => {
-    const nextFs = !isFullscreen;
-    setIsFullscreen(nextFs);
-    setShowCinemaBar(true);
-
-    try {
-      if (
-        nextFs &&
-        containerRef.current &&
-        typeof containerRef.current.requestFullscreen === 'function'
-      ) {
-        containerRef.current.requestFullscreen().catch(() => {});
-      } else if (
-        !nextFs &&
-        document.fullscreenElement &&
-        typeof document.exitFullscreen === 'function'
-      ) {
-        document.exitFullscreen().catch(() => {});
-      }
-    } catch {}
-  };
 
   const scaleLabel =
     uiScale === 'compact'
@@ -1854,9 +1998,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`relative w-full h-full overflow-hidden select-none flex flex-col transition-colors duration-300 ${
-        isFullscreen ? 'fixed inset-0 z-50 bg-black text-white' : theme.shell
-      }`}
+      className={`${
+        isFullscreen
+          ? 'fixed inset-0 z-[200] w-screen h-[100dvh] bg-black text-white'
+          : `relative w-full h-full ${theme.shell}`
+      } overflow-hidden select-none flex flex-col transition-colors duration-300`}
     >
       {/* AUDIO NATIVE DUY NHẤT CHO BÁO AUDIO BÁO MỚI (0ms reload khi chuyển giữa Báo Audio <-> Cockpit!) */}
       <audio ref={newsController.audioRef} playsInline preload="auto" className="hidden" />
@@ -1974,8 +2120,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {hardwareNotice && (
         <div
           className={`fixed ${
-            dockMode === 'top' ? 'top-[4.5rem] short:top-[4.1rem]' : 'top-3'
-          } left-1/2 -translate-x-1/2 z-50 backdrop-blur-xl px-4 py-2 rounded-full text-xs sm:text-sm font-bold flex items-center gap-2 shadow-2xl border pointer-events-none max-w-[90vw] ${theme.toast}`}
+            dockMode === 'top' && !isFullscreen ? 'top-[4.5rem] short:top-[4.1rem]' : 'top-3'
+          } left-1/2 -translate-x-1/2 z-[230] backdrop-blur-xl px-4 py-2 rounded-full text-xs sm:text-sm font-bold flex items-center gap-2 shadow-2xl border pointer-events-none max-w-[90vw] ${theme.toast}`}
         >
           <ShieldCheck className="w-4 h-4 text-rose-400 shrink-0" />
           <span className="truncate">{hardwareNotice}</span>
@@ -2268,70 +2414,101 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </button>
             </div>
 
-            {/* Lưới 9 ứng dụng cốt lõi */}
+            {/* Lưới 10 ứng dụng cốt lõi (2 hàng 5 cột cân đối — tách rõ Nghe nhạc & Video YT!) */}
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
               {[
                 {
-                  id: 'cockpit' as RailSection,
+                  key: 'cockpit',
                   label: 'Cockpit',
                   icon: Gauge,
+                  active: railSection === 'cockpit',
                   activeClass: theme.railCockpitActive,
+                  onClick: () => onChangeRailSection('cockpit'),
                 },
                 {
-                  id: 'tv' as RailSection,
+                  key: 'music',
+                  label: 'Nghe nhạc',
+                  icon: Headphones,
+                  active: railSection === 'nowPlaying' && !effectiveVideoMode,
+                  activeClass: theme.railNavActive,
+                  onClick: () => {
+                    handleSwitchToMusicMode();
+                    onChangeRailSection('nowPlaying');
+                  },
+                },
+                {
+                  key: 'video',
+                  label: 'Video YT',
+                  icon: Film,
+                  active: railSection === 'nowPlaying' && effectiveVideoMode,
+                  activeClass: isLightTheme
+                    ? 'bg-blue-600 border-blue-600 text-white shadow'
+                    : 'bg-sky-400 border-sky-300 text-slate-950 shadow',
+                  onClick: () => {
+                    handleSwitchToVideoMode();
+                    onChangeRailSection('nowPlaying');
+                  },
+                },
+                {
+                  key: 'tv',
                   label: 'TV Live',
                   icon: Tv,
+                  active: railSection === 'tv',
                   activeClass: theme.railTvActive,
+                  onClick: () => onChangeRailSection('tv'),
                 },
                 {
-                  id: 'news' as RailSection,
+                  key: 'news',
                   label: 'Báo Audio',
                   icon: Newspaper,
+                  active: railSection === 'news',
                   activeClass: theme.railNewsActive,
+                  onClick: () => onChangeRailSection('news'),
                 },
                 {
-                  id: 'movies' as RailSection,
+                  key: 'movies',
                   label: 'Phim',
                   icon: Clapperboard,
+                  active: railSection === 'movies',
                   activeClass: theme.railMovieActive,
+                  onClick: () => onChangeRailSection('movies'),
                 },
                 {
-                  id: 'nowPlaying' as RailSection,
-                  label: 'Đang phát',
-                  icon: effectiveVideoMode ? Tv : Headphones,
-                  activeClass: theme.railNavActive,
-                },
-                {
-                  id: 'browse' as RailSection,
+                  key: 'browse',
                   label: 'Khám phá',
                   icon: Compass,
+                  active: railSection === 'browse',
                   activeClass: theme.railNavActive,
+                  onClick: () => onChangeRailSection('browse'),
                 },
                 {
-                  id: 'favorites' as RailSection,
+                  key: 'favorites',
                   label: `Playlist${favoritesCount > 0 ? ` (${favoritesCount})` : ''}`,
                   icon: Bookmark,
+                  active: railSection === 'favorites',
                   activeClass: theme.railNavActive,
+                  onClick: () => onChangeRailSection('favorites'),
                 },
                 {
-                  id: 'history' as RailSection,
+                  key: 'history',
                   label: 'Lịch sử',
                   icon: History,
+                  active: railSection === 'history',
                   activeClass: theme.railNavActive,
+                  onClick: () => onChangeRailSection('history'),
                 },
               ].map((app) => {
                 const Icon = app.icon;
-                const active = railSection === app.id;
                 return (
                   <button
-                    key={app.id}
+                    key={app.key}
                     type="button"
                     onClick={() => {
-                      onChangeRailSection(app.id);
+                      app.onClick();
                       setShowAppLauncher(false);
                     }}
                     className={`min-h-[4.75rem] rounded-2xl border px-2 py-2.5 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition ${
-                      active ? app.activeClass : theme.itemIdle
+                      app.active ? app.activeClass : theme.itemIdle
                     }`}
                   >
                     <Icon className="w-6 h-6 shrink-0" />
@@ -2618,7 +2795,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             className={
               isNowPlayingView
                 ? isFullscreen
-                  ? 'relative w-full h-full flex flex-col bg-black'
+                  ? 'fixed inset-0 z-10 w-screen h-[100dvh] bg-black overflow-hidden'
                   : `flex flex-col justify-between min-h-0 h-full w-full mx-auto gap-2 short:gap-1.5 vshort:gap-1 ${
                       effectiveVideoMode
                         ? 'car:col-span-7 lg:col-span-8'
@@ -2627,12 +2804,71 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 : 'w-0 h-0 overflow-visible'
             }
           >
+            {/* THANH CHUYỂN NHANH 1 CHẠM: 🎧 NHẠC ↔ 🎬 VIDEO YOUTUBE + ⛶ TOÀN MÀN HÌNH */}
+            {isNowPlayingView && !isFullscreen && (
+              <div className="shrink-0 w-full flex items-center justify-between gap-2">
+                <div
+                  role="tablist"
+                  aria-label="Chuyển chế độ Nghe nhạc hoặc Xem Video YouTube"
+                  className={`flex-1 grid grid-cols-2 p-1 rounded-2xl border ${theme.segTrack}`}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={!effectiveVideoMode}
+                    onClick={handleSwitchToMusicMode}
+                    className={`min-h-[2.4rem] short:min-h-[2.1rem] px-3 rounded-xl text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 ios-spring-fast active:scale-95 ${
+                      !effectiveVideoMode ? theme.segActive : theme.segIdle
+                    }`}
+                  >
+                    <Headphones className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Nghe nhạc</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={effectiveVideoMode}
+                    onClick={handleSwitchToVideoMode}
+                    className={`min-h-[2.4rem] short:min-h-[2.1rem] px-3 rounded-xl text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 ios-spring-fast active:scale-95 ${
+                      effectiveVideoMode
+                        ? isLightTheme
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'bg-sky-400 text-slate-950 shadow'
+                        : theme.segIdle
+                    }`}
+                  >
+                    <Film className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Video YT</span>
+                  </button>
+                </div>
+
+                {!isSoundCloudTrack && (
+                  <button
+                    type="button"
+                    onClick={() => enterPureVideoFullscreen('nowPlaying')}
+                    aria-label="Xem Video YouTube toàn màn hình nguyên màn"
+                    title="Phóng to Video YouTube tràn kín 100% màn hình"
+                    className={`min-h-[2.65rem] short:min-h-[2.35rem] px-3.5 rounded-2xl border text-xs sm:text-sm font-black flex items-center gap-1.5 shrink-0 ios-spring-fast active:scale-95 ${
+                      effectiveVideoMode
+                        ? isLightTheme
+                          ? 'bg-blue-600 hover:bg-blue-700 border-blue-600 text-white shadow-md'
+                          : 'bg-sky-400 hover:bg-sky-300 border-sky-300 text-slate-950 shadow-md'
+                        : theme.iconBtn
+                    }`}
+                  >
+                    <Maximize2 className="w-4 h-4 shrink-0" />
+                    <span className="hidden xs:inline">Toàn màn</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* SÂN KHẤU MEDIA (container-type: size) */}
             <div
               className={
                 isNowPlayingView
                   ? isFullscreen
-                    ? 'relative flex-1 min-h-0 w-full h-full flex items-center justify-center bg-black'
+                    ? 'fixed inset-0 w-screen h-[100dvh] bg-black overflow-hidden'
                     : 'media-stage relative h-48 xs:h-56 car:h-auto car:flex-1 car:min-h-0 w-full flex items-center justify-center'
                   : 'w-0 h-0 overflow-visible'
               }
@@ -2721,7 +2957,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 className={
                   showVideoInViewport
                     ? isFullscreen
-                      ? 'relative w-full h-full bg-black overflow-hidden'
+                      ? 'fixed inset-0 z-10 w-screen h-[100dvh] bg-black overflow-hidden'
                       : 'car-video-fit relative overflow-hidden rounded-2xl sm:rounded-3xl bg-black border border-white/15 shadow-[0_18px_50px_rgba(0,0,0,0.75)] animate-artwork-enter'
                     : showVideoInCockpit
                     ? `fixed z-20 overflow-hidden rounded-2xl bg-black border border-white/15 shadow-xl ${
@@ -2738,7 +2974,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     src={initialEmbedUrl}
                     title={streamData.title || 'CarHub Player'}
                     referrerPolicy="strict-origin-when-cross-origin"
-                    className="w-full h-full border-0"
+                    className="w-full h-full border-0 block"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                     onLoad={handleIframeLoad}
                   />
@@ -2783,35 +3019,66 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
 
               {isNowPlayingView && isFullscreen && (
-                <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+                <div
+                  className={`fixed top-2.5 right-2.5 z-[220] flex items-center gap-1.5 transition-opacity duration-500 ${
+                    fsCornerExpanded || showCinemaBar
+                      ? 'opacity-100'
+                      : 'opacity-25 hover:opacity-100 focus-within:opacity-100'
+                  }`}
+                >
                   <button
                     type="button"
-                    onClick={() => setShowCinemaBar((v) => !v)}
-                    aria-label="Ẩn hoặc hiện thanh điều khiển"
-                    className="min-h-[44px] px-3.5 rounded-full bg-black/70 hover:bg-black/85 backdrop-blur-xl border border-white/25 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xl active:scale-95"
+                    onClick={() => {
+                      setShowCinemaBar((prev) => {
+                        const next = !prev;
+                        if (next) {
+                          setFsCornerExpanded(true);
+                          armCinemaBarAutoHide();
+                        } else {
+                          armFsCornerAutoDim();
+                        }
+                        return next;
+                      });
+                    }}
+                    aria-label={showCinemaBar ? 'Ẩn thanh điều khiển' : 'Hiện thanh điều khiển'}
+                    title={showCinemaBar ? 'Ẩn điều khiển' : 'Hiện thanh tua & chuyển bài'}
+                    className={`${
+                      fsCornerExpanded || showCinemaBar
+                        ? 'min-h-[38px] px-3 rounded-full gap-1.5'
+                        : 'w-9 h-9 rounded-full justify-center'
+                    } bg-black/65 hover:bg-black/85 backdrop-blur-md border border-white/25 text-white text-xs font-extrabold flex items-center shadow-xl active:scale-95 transition-all`}
                   >
-                    <SlidersHorizontal className="w-4 h-4" />
-                    <span>{showCinemaBar ? 'Ẩn thanh tua' : 'Điều khiển'}</span>
+                    <SlidersHorizontal className="w-4 h-4 shrink-0" />
+                    {(fsCornerExpanded || showCinemaBar) && (
+                      <span>{showCinemaBar ? 'Ẩn' : 'Điều khiển'}</span>
+                    )}
                   </button>
                   <button
                     type="button"
-                    onClick={toggleFullscreen}
-                    aria-label="Thoát toàn màn hình"
-                    className="min-h-[44px] px-4 rounded-full bg-rose-600/90 hover:bg-rose-500 backdrop-blur-xl border border-rose-300/40 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xl active:scale-95"
+                    onClick={exitPureVideoFullscreen}
+                    aria-label="Thoát toàn màn hình Video"
+                    title="Thoát toàn màn hình (Esc)"
+                    className={`${
+                      fsCornerExpanded || showCinemaBar
+                        ? 'min-h-[38px] px-3.5 rounded-full gap-1.5 bg-rose-600/90 hover:bg-rose-500 border-rose-300/40'
+                        : 'w-9 h-9 rounded-full justify-center bg-black/65 hover:bg-rose-600 border-white/25'
+                    } backdrop-blur-md border text-white text-xs font-extrabold flex items-center shadow-xl active:scale-95 transition-all`}
                   >
-                    <Minimize2 className="w-4 h-4" />
-                    <span>Thu nhỏ</span>
+                    <Minimize2 className="w-4 h-4 shrink-0" />
+                    {(fsCornerExpanded || showCinemaBar) && <span>Thoát</span>}
                   </button>
                 </div>
               )}
             </div>
 
-            {/* BẢNG ĐIỀU KHIỂN CỐ ĐỊNH PHÍA DƯỚI (shrink-0) */}
+            {/* BẢNG ĐIỀU KHIỂN PHÍA DƯỚI (Khi Toàn màn hình -> NỔI TRONG SUỐT ĐÈ NHẸ ĐÁY, KHÔNG THU NHỎ VIDEO!) */}
             {isNowPlayingView && (!isFullscreen || showCinemaBar) && (
               <div
+                onPointerDown={isFullscreen ? armCinemaBarAutoHide : undefined}
+                onTouchStart={isFullscreen ? armCinemaBarAutoHide : undefined}
                 className={
                   isFullscreen
-                    ? 'shrink-0 w-full bg-black/85 backdrop-blur-2xl border-t border-white/15 px-4 py-2.5 flex flex-col gap-1'
+                    ? 'fixed bottom-0 inset-x-0 z-[220] bg-gradient-to-t from-black/95 via-black/82 to-transparent pt-7 pb-3 px-4 flex flex-col gap-1 animate-ios-mini-up'
                     : 'shrink-0 w-full flex flex-col gap-1 short:gap-0.5'
                 }
               >
@@ -2916,11 +3183,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       />
                     </button>
 
-                    {isVideoMode && (
+                    {!isSoundCloudTrack && isFullscreen && (
+                      <button
+                        type="button"
+                        onClick={handleSwitchToMusicMode}
+                        aria-label="Chuyển về chế độ nghe nhạc"
+                        title="Về chế độ Nghe nhạc & Lời bài hát"
+                        className="h-9 short:h-8 px-2.5 rounded-full border border-white/20 bg-white/15 hover:bg-white/25 text-white text-[11px] font-extrabold flex items-center gap-1 ios-spring-fast active:scale-90"
+                      >
+                        <Headphones className="w-3.5 h-3.5" />
+                        <span className="hidden xs:inline">Nhạc</span>
+                      </button>
+                    )}
+
+                    {!isSoundCloudTrack && (
                       <button
                         type="button"
                         onClick={toggleFullscreen}
-                        aria-label={isFullscreen ? 'Thu nhỏ khung hình' : 'Xem toàn màn hình xe'}
+                        aria-label={isFullscreen ? 'Thu nhỏ khung hình' : 'Xem Video toàn màn hình nguyên màn'}
+                        title={isFullscreen ? 'Thoát toàn màn hình' : 'Xem Video tràn kín toàn màn hình'}
                         className={`w-9 h-9 short:w-8 short:h-8 rounded-full flex items-center justify-center border ios-spring-fast active:scale-90 ${npTheme.iconBtn}`}
                       >
                         {isFullscreen ? (
@@ -3605,30 +3886,61 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </h2>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                 {railSection === 'browse' && (
-                  <div className={`inline-flex items-center p-0.5 rounded-full border ${theme.segTrack}`}>
-                    <button
-                      type="button"
-                      onClick={() => onChangeMusicSource('youtube')}
-                      className={`min-h-[2.35rem] px-3 rounded-full text-xs font-extrabold transition ${
-                        musicSource === 'youtube' ? 'bg-rose-600 text-white shadow' : theme.segIdle
-                      }`}
-                    >
-                      ▶ YouTube
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onChangeMusicSource('soundcloud')}
-                      className={`min-h-[2.35rem] px-3 rounded-full text-xs font-extrabold transition ${
-                        musicSource === 'soundcloud'
-                          ? 'bg-[#ff5500] text-white shadow'
-                          : theme.segIdle
-                      }`}
-                    >
-                      ☁️ SoundCloud
-                    </button>
-                  </div>
+                  <>
+                    <div className={`inline-flex items-center p-0.5 rounded-full border ${theme.segTrack}`}>
+                      <button
+                        type="button"
+                        onClick={() => onChangeMusicSource('youtube')}
+                        className={`min-h-[2.35rem] px-3 rounded-full text-xs font-extrabold transition ${
+                          musicSource === 'youtube' ? 'bg-rose-600 text-white shadow' : theme.segIdle
+                        }`}
+                      >
+                        ▶ YouTube
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onChangeMusicSource('soundcloud')}
+                        className={`min-h-[2.35rem] px-3 rounded-full text-xs font-extrabold transition ${
+                          musicSource === 'soundcloud'
+                            ? 'bg-[#ff5500] text-white shadow'
+                            : theme.segIdle
+                        }`}
+                      >
+                        ☁️ SoundCloud
+                      </button>
+                    </div>
+
+                    {musicSource === 'youtube' && (
+                      <div className={`inline-flex items-center p-0.5 rounded-full border ${theme.segTrack}`}>
+                        <button
+                          type="button"
+                          onClick={handleSwitchToMusicMode}
+                          className={`min-h-[2.35rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 transition ${
+                            !isVideoMode ? theme.segActive : theme.segIdle
+                          }`}
+                        >
+                          <Headphones className="w-3.5 h-3.5" />
+                          <span>Nhạc</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSwitchToVideoMode}
+                          className={`min-h-[2.35rem] px-2.5 rounded-full text-xs font-extrabold flex items-center gap-1 transition ${
+                            isVideoMode
+                              ? isLightTheme
+                                ? 'bg-blue-600 text-white shadow'
+                                : 'bg-sky-400 text-slate-950 shadow'
+                              : theme.segIdle
+                          }`}
+                        >
+                          <Film className="w-3.5 h-3.5" />
+                          <span>Video</span>
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {railSection === 'favorites' && (
